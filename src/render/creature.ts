@@ -64,27 +64,62 @@ export function paletteFor(ph: Pheno): Palette {
 const f = (v: number) => (Math.round(v * 10) / 10).toString();
 const TAU = Math.PI * 2;
 
+/** Draw order of the layers. Within a layer every outline is drawn first and every fill after, so shapes that
+ * overlap inside one layer merge into one silhouette with no seam where they join. Parts that sit in front of the
+ * body (a near arm, a near wing) go in a later layer, so they keep a line where they cross it. */
+const LAYERS = ['aura', 'back', 'body', 'front', 'face', 'fx'] as const;
+type Layer = (typeof LAYERS)[number];
+/** Outline width. Only the outer half shows, because the fill covers the inner half. */
+const OW = 2.4;
+
+interface Item { g: Layer; out?: Shape; fill: Shape }
+
 class Pen {
-  s: Shape[] = [];
+  items: Item[] = [];
+  g: Layer = 'body';
   constructor(public pal: Palette) {}
+  private add(fill: Shape, out?: Shape) { this.items.push({ g: this.g, fill, out }); }
   ell(cx: number, cy: number, rx: number, ry: number, fill: string, o: { rot?: number; op?: number; line?: boolean } = {}) {
-    this.s.push({ t: 'ellipse', cx, cy, rx: Math.max(0.1, rx), ry: Math.max(0.1, ry), fill, stroke: o.line === false ? undefined : this.pal.out, sw: o.line === false ? undefined : 1.3, rot: o.rot, op: o.op });
+    const base = { t: 'ellipse' as const, cx, cy, rx: Math.max(0.1, rx), ry: Math.max(0.1, ry), rot: o.rot, op: o.op };
+    if (o.line === false) return this.add({ ...base, fill });
+    // See-through parts can't hide an outline under their fill, so they keep a plain stroke.
+    if (o.op != null && o.op < 1) return this.add({ ...base, fill, stroke: this.pal.out, sw: 1.2 });
+    this.add({ ...base, fill }, { ...base, op: undefined, fill: this.pal.out, stroke: this.pal.out, sw: OW });
   }
   dot(cx: number, cy: number, r: number, fill: string, op?: number) {
-    this.s.push({ t: 'circle', cx, cy, r: Math.max(0.1, r), fill, op });
+    this.add({ t: 'circle', cx, cy, r: Math.max(0.1, r), fill, op });
   }
+  /** A filled shape gets a merged outline; an unfilled path is a line drawn on top (a stripe, a mouth). */
   path(d: string, fill: string | undefined, o: { stroke?: string; sw?: number; op?: number; line?: boolean } = {}) {
-    const line = o.line !== false && fill !== undefined && fill !== 'none';
-    this.s.push({ t: 'path', d, fill: fill ?? 'none', stroke: o.stroke ?? (line ? this.pal.out : undefined), sw: o.sw ?? (line ? 1.3 : undefined), op: o.op });
+    const filled = fill !== undefined && fill !== 'none';
+    if (!filled || o.line === false || o.stroke) return this.add({ t: 'path', d, fill: fill ?? 'none', stroke: o.stroke, sw: o.sw, op: o.op });
+    if (o.op != null && o.op < 1) return this.add({ t: 'path', d, fill, stroke: this.pal.out, sw: 1.2, op: o.op });
+    this.add({ t: 'path', d, fill }, { t: 'path', d, fill: this.pal.out, stroke: this.pal.out, sw: OW });
   }
-  /** A rounded limb: a thick line with an outline. */
+  /** A thick stroked path (a limb, a serpent's body) with an outline around it. */
+  stroke(d: string, w: number, color: string, extra = OW) {
+    this.add({ t: 'path', d, fill: 'none', stroke: color, sw: w }, { t: 'path', d, fill: 'none', stroke: this.pal.out, sw: w + extra });
+  }
+  /** A thin coloured line with no outline. */
+  line(d: string, color: string, w: number, op?: number) { this.add({ t: 'path', d, fill: 'none', stroke: color, sw: w, op }); }
+  ring(cx: number, cy: number, rx: number, ry: number, color: string, w: number, op?: number) {
+    this.add({ t: 'ellipse', cx, cy, rx, ry, fill: 'none', stroke: color, sw: w, op });
+  }
   limb(x1: number, y1: number, x2: number, y2: number, w: number, color: string, kx?: number, ky?: number) {
     const d = kx == null ? `M${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}` : `M${f(x1)} ${f(y1)}Q${f(kx)} ${f(ky!)} ${f(x2)} ${f(y2)}`;
-    this.s.push({ t: 'path', d, fill: 'none', stroke: this.pal.out, sw: w + 2.4 });
-    this.s.push({ t: 'path', d, fill: 'none', stroke: color, sw: w });
+    this.stroke(d, w, color);
   }
   poly(pts: number[][], fill: string, o: { op?: number; line?: boolean } = {}) {
     this.path('M' + pts.map(p => f(p[0]) + ' ' + f(p[1])).join('L') + 'Z', fill, o);
+  }
+  shapes(): Shape[] {
+    const out: Shape[] = [];
+    for (const g of LAYERS) {
+      const its = this.items.filter(i => i.g === g);
+      for (const i of its) if (i.out) out.push(i.out);
+      for (const i of its) out.push(i.fill);
+    }
+    return out;
   }
 }
 
@@ -147,6 +182,13 @@ function drawTail(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
 
 function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
   if (ph.wings === 'none') return;
+  const was = p.g;
+  p.g = far ? 'back' : 'front';
+  drawWingShape(p, a, ph, k, flap, far);
+  p.g = was;
+}
+
+function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
   const c = p.pal;
   const x = a.wx + (far ? 4 : 0), y = a.wy + (far ? -1 : 0);
   const up = flap * 7 * k;
@@ -212,8 +254,7 @@ function drawHorns(p: Pen, a: Anchors, ph: Pheno, k: number) {
     case 'antlers':
       for (const s of [-1, 1]) {
         const bx = hx + s * hr * 0.35;
-        p.path(`M${f(bx)} ${f(top + 2)}L${f(bx + s * 3 * k)} ${f(top - 9 * k)}L${f(bx + s * 8 * k)} ${f(top - 13 * k)}M${f(bx + s * 3 * k)} ${f(top - 9 * k)}L${f(bx - s * 1 * k)} ${f(top - 15 * k)}M${f(bx + s * 1.5 * k)} ${f(top - 4 * k)}L${f(bx + s * 7 * k)} ${f(top - 5 * k)}`, 'none', { stroke: c.out, sw: 3.2 * Math.max(0.6, k) });
-        p.path(`M${f(bx)} ${f(top + 2)}L${f(bx + s * 3 * k)} ${f(top - 9 * k)}L${f(bx + s * 8 * k)} ${f(top - 13 * k)}M${f(bx + s * 3 * k)} ${f(top - 9 * k)}L${f(bx - s * 1 * k)} ${f(top - 15 * k)}M${f(bx + s * 1.5 * k)} ${f(top - 4 * k)}L${f(bx + s * 7 * k)} ${f(top - 5 * k)}`, 'none', { stroke: bone, sw: 1.6 * Math.max(0.6, k) });
+        p.stroke(`M${f(bx)} ${f(top + 2)}L${f(bx + s * 3 * k)} ${f(top - 9 * k)}L${f(bx + s * 8 * k)} ${f(top - 13 * k)}M${f(bx + s * 3 * k)} ${f(top - 9 * k)}L${f(bx - s * 1 * k)} ${f(top - 15 * k)}M${f(bx + s * 1.5 * k)} ${f(top - 4 * k)}L${f(bx + s * 7 * k)} ${f(top - 5 * k)}`, 1.8 * Math.max(0.6, k), bone, 1.8);
       }
       break;
     case 'crown':
@@ -284,6 +325,7 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number) {
       p.ell(hx, hy, r, r * 0.95, c.base);
   }
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
+  p.g = 'face';
   drawEyes(p, hx, hy, r, ph);
   if (ph.head !== 'beak' && ph.head !== 'blunt') p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
 }
@@ -383,7 +425,7 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       star(p, backx - 12 * s, backy - 8 * s, 3 * s, e.glow); star(p, hx + hr + 4 * s, hy - hr - 2 * s, 2.4 * s, e.glow); star(p, bx - brx - 3 * s, by + bry * 0.5, 2 * s, '#ffffff');
       break;
     case 'radiant':
-      p.s.push({ t: 'ellipse', cx: hx, cy: hy - hr - 4 * s, rx: hr * 0.7, ry: 2.4 * s + 0.6, fill: 'none', stroke: e.base, sw: 1.8 });
+      p.ring(hx, hy - hr - 4 * s, hr * 0.7, 2.4 * s + 0.6, e.base, 1.8);
       for (let i = 0; i < 5; i++) { const ang = -Math.PI * (0.15 + i * 0.175); p.path(`M${f(hx + Math.cos(ang) * (hr + 7 * s))} ${f(hy + Math.sin(ang) * (hr + 7 * s))}L${f(hx + Math.cos(ang) * (hr + 12 * s))} ${f(hy + Math.sin(ang) * (hr + 12 * s))}`, 'none', { stroke: e.glow, sw: 1.4, op: 0.8 }); }
       break;
     case 'void':
@@ -405,12 +447,12 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   const far = shade(pal.base, -0.1);
   const flap = Math.sin(phase * TAU * (o.walking ? 2 : 1));
   let a: Anchors;
-  const ghostly = ph.el1 === 'spirit' || ph.el2 === 'spirit';
 
+  p.g = 'aura';
   if (o.stage >= 3) {
     // Ancient and legendary creatures get an aura, layered behind the same parts.
     p.ell(50, 56, 44, 38, pal.glow, { line: false, op: o.stage === 4 ? 0.3 : 0.2 });
-    p.s.push({ t: 'ellipse', cx: 50, cy: 56, rx: 40, ry: 34, fill: 'none', stroke: pal.glow, sw: 1.2, op: 0.55 });
+    p.ring(50, 56, 40, 34, pal.glow, 1.2, 0.55);
   }
   if (o.shadow !== false) p.ell(50, 92, 24 * b, 4, '#000000', { line: false, op: 0.18 });
 
@@ -420,16 +462,20 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hr = 12.5 * hs;
       a = { hx: 53, hy: by - bry - hr * 0.5 + breathe * 0.4, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 44, wy: by - bry * 0.45, backx: 40, backy: by - bry * 0.72 };
       drawWing(p, a, ph, k, flap, true);
-      drawTail(p, a, ph, k, breathe);
       const hip = by + bry * 0.6;
+      p.g = 'back';
       p.limb(52, hip, 54 - sw * 6, 89, 6.2 * ls, far);
+      p.ell(56 - sw * 6, 89.5, 4.2 * ls, 2.4 * ls, shade(pal.dark, -0.05));
       p.limb(55, by - bry * 0.35, 63 - sw * 4, by + 3, 4.6 * ls, far);
-      p.ell(48, by, brx, bry, pal.base);
-      drawPattern(p, a, ph);
+      p.g = 'body';
+      drawTail(p, a, ph, k, breathe);
       p.limb(45, hip, 44 + sw * 6, 89, 6.6 * ls, pal.base);
       p.ell(46 + sw * 6, 89.5, 4.6 * ls, 2.6 * ls, pal.dark);
-      p.ell(56 - sw * 6, 89.5, 4.2 * ls, 2.4 * ls, shade(pal.dark, -0.05));
+      p.ell(48, by, brx, bry, pal.base);
+      drawPattern(p, a, ph);
+      p.g = 'front';
       p.limb(50, by - bry * 0.3, 58 + sw * 4, by + 5, 4.8 * ls, pal.base);
+      p.g = 'body';
       break;
     }
     case 'quad': {
@@ -438,18 +484,22 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hx = 48 + brx * 0.82, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4;
       a = { hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
-      drawTail(p, a, ph, k, breathe);
       const hip = by + bry * 0.5;
       const fx = 46 + brx * 0.55, rx = 46 - brx * 0.6;
+      p.g = 'back';
       p.limb(fx + 4, hip, fx + 4 - sw * 6, 89, 5.6 * ls, far);
       p.limb(rx + 5, hip, rx + 5 + sw * 6, 89, 5.6 * ls, far);
-      p.limb(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 9 * b, pal.base);
-      p.ell(46, by, brx, bry, pal.base);
-      drawPattern(p, a, ph);
+      p.ell(fx + 5 - sw * 6, 89.6, 3.8 * ls, 2.2 * ls, shade(pal.dark, -0.05));
+      p.ell(rx + 6 + sw * 6, 89.6, 3.8 * ls, 2.2 * ls, shade(pal.dark, -0.05));
+      p.g = 'body';
+      drawTail(p, a, ph, k, breathe);
       p.limb(fx - 2, hip, fx - 2 + sw * 6, 89, 6 * ls, pal.base);
       p.limb(rx - 1, hip, rx - 1 - sw * 6, 89, 6 * ls, pal.base);
       p.ell(fx - 1 + sw * 6, 89.6, 4 * ls, 2.3 * ls, pal.dark);
       p.ell(rx - sw * 6, 89.6, 4 * ls, 2.3 * ls, pal.dark);
+      p.limb(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 9 * b, pal.base);
+      p.ell(46, by, brx, bry, pal.base);
+      drawPattern(p, a, ph);
       break;
     }
     case 'multi': {
@@ -459,11 +509,13 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hx = thx + thr + hr * 0.45, hy = by - 6 + breathe * 0.3;
       a = { hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
       drawWing(p, a, ph, k, flap, true);
-      drawTail(p, a, ph, k, breathe);
+      p.g = 'back';
       for (let i = 0; i < 3; i++) {
         const lx = thx - 7 + i * 6, s2 = (i % 2 === 0 ? sw : -sw) * 4;
         p.limb(lx + 2, by + 2, lx + (i - 1) * 9 + 3 - s2, 90, 2.6 * ls, far, lx + (i - 1) * 8 + 3, by - 4);
       }
+      p.g = 'body';
+      drawTail(p, a, ph, k, breathe);
       p.ell(abx, by - 2, arx, ary, pal.base);
       drawPattern(p, a, ph);
       p.ell(thx, by - 1, thr, thr * 0.9, shade(pal.base, -0.04));
@@ -480,10 +532,10 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const d = `M14 ${f(85 - wv)}Q24 ${f(74 + wv)} 36 ${f(84 - wv * 0.5)}Q50 ${f(94 + wv * 0.4)} 58 ${f(78)}Q63 66 58 56Q56 48 ${f(hx - 3)} ${f(hy + 5)}`;
       a = { hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
       drawWing(p, a, ph, k, flap, true);
+      p.g = 'body';
       drawTail(p, a, ph, k * 0.8, 0);
-      p.s.push({ t: 'path', d, fill: 'none', stroke: pal.out, sw: w + 2.6 });
-      p.s.push({ t: 'path', d, fill: 'none', stroke: pal.base, sw: w });
-      if (ph.pattern === 'belly') p.s.push({ t: 'path', d: `M30 ${f(86 - wv * 0.4)}Q48 ${f(95 + wv * 0.4)} 57 80`, fill: 'none', stroke: pal.light, sw: w * 0.35 });
+      p.stroke(d, w, pal.base);
+      if (ph.pattern === 'belly') p.line(`M30 ${f(86 - wv * 0.4)}Q48 ${f(95 + wv * 0.4)} 57 80`, pal.light, w * 0.35);
       else if (ph.pattern !== 'plain' && ph.pattern !== 'mask') {
         const col = ph.pattern === 'stars' ? pal.glow : ph.pattern === 'bands' ? pal.accentDark : pal.dark;
         for (const [x, y] of [[24, 79], [36, 84], [48, 87], [58, 76], [60, 62]]) {
@@ -497,13 +549,16 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hr = 12 * hs;
       a = { hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
+      p.g = 'body';
       // Every swimmer has a fluke; the tail gene adds to it.
       const fl = sw * 4 + breathe * 2;
       p.path(`M${f(a.tx + 3)} ${f(by)}L${f(a.tx - 12 * b)} ${f(by - 11 * b + fl)}Q${f(a.tx - 7 * b)} ${f(by)} ${f(a.tx - 12 * b)} ${f(by + 11 * b + fl)}Z`, pal.accent);
       if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTail(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
       p.ell(48, by, brx, bry, pal.base);
       drawPattern(p, a, ph);
+      p.g = 'front';
       p.ell(48 + brx * 0.05, by + bry * 0.55, 8 * ls, 4 * ls, shade(pal.base, -0.08), { rot: 28 + sw * 14 });
+      p.g = 'body';
       break;
     }
     default: {
@@ -512,27 +567,31 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hr = 13 * hs;
       a = { hx: 52, hy: cy - r * 0.35, hr, bx: 50, by: cy + r * 0.45, brx: r * 0.8, bry: r * 0.75, tx: 44, ty: cy + r * 1.25, tdir: -0.9, wx: 43, wy: cy - r * 0.1, backx: 40, backy: cy - r * 0.55 };
       drawWing(p, a, ph, k, flap, true);
+      p.g = 'back';
+      p.ell(50 - r * 0.75, cy + r * 0.6 - Math.sin(phase * TAU) * 1.6, 3.4 * ls, 3 * ls, far);
+      p.g = 'body';
       const wv = Math.sin(phase * TAU) * 1.6;
       p.path(`M${f(50 - r)} ${f(cy)}Q${f(50 - r)} ${f(cy - r * 1.1)} 50 ${f(cy - r * 1.1)}Q${f(50 + r)} ${f(cy - r * 1.1)} ${f(50 + r)} ${f(cy)}Q${f(50 + r)} ${f(cy + r * 1.1)} ${f(50 + r * 0.55)} ${f(cy + r * 1.45 + wv)}Q${f(50 + r * 0.35)} ${f(cy + r * 1.05)} ${f(50 + r * 0.1)} ${f(cy + r * 1.6 - wv)}Q${f(50 - r * 0.15)} ${f(cy + r * 1.1)} ${f(50 - r * 0.45)} ${f(cy + r * 1.7 + wv)}Q${f(50 - r * 0.95)} ${f(cy + r * 1.1)} ${f(50 - r)} ${f(cy)}Z`, pal.base);
       drawPattern(p, a, ph);
       if (ph.tail !== 'stub') drawTail(p, { ...a, tx: 50 - r * 0.5, ty: cy + r * 1.2, tdir: -0.6 }, ph, k * 0.7, wv);
       p.ell(50 + r * 0.95, cy + r * 0.45 + wv, 3.6 * ls, 3.2 * ls, pal.base);
-      p.ell(50 - r * 0.75, cy + r * 0.6 - wv, 3.4 * ls, 3 * ls, far);
     }
   }
 
   drawWing(p, a, ph, k, flap, false);
+  p.g = 'body';
   drawHead(p, a, ph, k);
+  p.g = 'body';
   drawCues(p, a, ph.el1, st.cue, phase, false);
   if (ph.el2) drawCues(p, a, ph.el2, st.cue, phase, true);
+  p.g = 'fx';
   if (o.stage === 4) {
     for (let i = 0; i < 5; i++) {
       const ang = phase * TAU + (i * TAU) / 5;
       star(p, 50 + Math.cos(ang) * 40, 54 + Math.sin(ang) * 32, 2.6, pal.glow, 0.9);
     }
   }
-  if (ghostly) for (const sh of p.s) sh.op = (sh.op ?? 1) * 0.86;
-  return p.s;
+  return p.shapes();
 }
 
 /** An egg, tinted by what will hatch: a hint, not the whole story. */
@@ -547,7 +606,12 @@ export function drawEgg(ph: Pheno, wobble = 0): Shape[] {
   p.dot(60, 40, 5, spot, 0.7); p.dot(44, 66, 6.5, spot, 0.7); p.dot(64, 68, 4, spot, 0.7); p.dot(36, 52, 3, pal.accent, 0.8);
   if (ph.pattern === 'stars') { star(p, 54, 54, 5, pal.glow); star(p, 40, 34, 3, pal.glow); }
   if (ph.pattern === 'stripes' || ph.pattern === 'bands') p.path('M24 58Q50 48 76 58', 'none', { stroke: pal.dark, sw: 3, op: 0.6 });
-  return p.s;
+  return p.shapes();
+}
+
+/** Spirits are a little see-through. Applied to the whole drawing so no inner lines show through. */
+export function creatureOpacity(ph: Pheno): number {
+  return ph.el1 === 'spirit' || ph.el2 === 'spirit' ? 0.86 : 1;
 }
 
 /** Shapes as an SVG string, for tools and tests. */

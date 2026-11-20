@@ -6,7 +6,7 @@ import { ELEMENTS, ElementId } from '../game/data/elements';
 import { MoveDef, RARITY_COLORS, RARITY_NAMES } from '../game/data/moves';
 import { Creature, STAGE_NAMES, stageOf, typeLabel } from '../game/creature';
 import { Pheno, express, rareCarrierCount, starRating } from '../game/genome';
-import { Shape, drawCreature, drawEgg } from '../render/creature';
+import { Shape, creatureOpacity, drawCreature, drawEgg } from '../render/creature';
 
 export const C = {
   bg: '#171226', panel: '#231b3a', panel2: '#2e2450', line: '#43366b', text: '#f4efff', dim: '#a99fc9',
@@ -31,7 +31,7 @@ interface CreatureViewProps { ph: Pheno; stage: number; size: number; phase?: nu
 export const CreatureView = memo(function CreatureView({ ph, stage, size, phase = 0, walking, flip, shadow }: CreatureViewProps) {
   const shapes = useMemo(() => drawCreature(ph, { stage, phase, walking, shadow }), [ph, stage, phase, walking, shadow]);
   return (
-    <Svg width={size} height={size} viewBox="0 0 100 100" style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
+    <Svg width={size} height={size} viewBox="0 0 100 100" opacity={creatureOpacity(ph)} style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
       <ShapeNodes shapes={shapes} />
     </Svg>
   );
