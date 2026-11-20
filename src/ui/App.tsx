@@ -1,6 +1,7 @@
 // App shell: starter pick, the five tabs, the tutorial banner, and the fight screen over everything.
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { preloadSfx, setAudioPrefs, setMusic } from './audio';
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { STARTERS, pickStarter } from '../game/economy';
@@ -69,6 +70,9 @@ function Shell() {
   const [run, setRun] = useState<Run | null>(null);
   const [runKey, setRunKey] = useState(0);
   const start = (r: Run) => { setRunKey(k => k + 1); setRun(r); };
+  useEffect(() => { setAudioPrefs(save.sound, save.music); }, [save.sound, save.music]);
+  useEffect(() => { if (!run) setMusic('hub'); }, [run]);
+  useEffect(() => { const t = setTimeout(preloadSfx, 1500); return () => clearTimeout(t); }, []);
 
   if (save.tutorial === TUT.PICK) return <StarterPick />;
   if (run) return <BattleScreen key={runKey} run={run} onExit={() => setRun(null)} />;

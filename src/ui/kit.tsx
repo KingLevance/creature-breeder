@@ -6,6 +6,7 @@ import { ELEMENTS, ElementId } from '../game/data/elements';
 import { MoveDef, RARITY_COLORS, RARITY_NAMES } from '../game/data/moves';
 import { Creature, STAGE_NAMES, stageOf, typeLabel } from '../game/creature';
 import { Pheno, express, rareCarrierCount, starRating } from '../game/genome';
+import { tap } from './audio';
 import { Shape, creatureOpacity, drawCreature, drawEgg } from '../render/creature';
 
 export const C = {
@@ -50,7 +51,7 @@ export function Btn({ label, onPress, disabled, kind = 'main', small, style }: {
   const bg = disabled ? '#3a3256' : kind === 'gold' ? C.gold : kind === 'danger' ? C.bad : kind === 'ghost' ? 'transparent' : C.accent;
   const fg = disabled ? C.dim : kind === 'gold' ? '#2a1d00' : C.text;
   return (
-    <Pressable onPress={disabled ? undefined : onPress} style={({ pressed }) => [st.btn, small && st.btnSmall, { backgroundColor: bg, borderColor: kind === 'ghost' ? C.line : bg, opacity: pressed ? 0.75 : 1 }, style]}>
+    <Pressable onPress={disabled ? undefined : () => { tap(); onPress(); }} style={({ pressed }) => [st.btn, small && st.btnSmall, { backgroundColor: bg, borderColor: kind === 'ghost' ? C.line : bg, opacity: pressed ? 0.75 : 1 }, style]}>
       <Text style={[st.btnText, small && { fontSize: 13 }, { color: fg }]}>{label}</Text>
     </Pressable>
   );

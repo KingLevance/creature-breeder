@@ -40,6 +40,8 @@ export interface Save {
   counts: { hatched: number; bred: number; fights: number; released: number };
   auto: boolean;
   fast: boolean;
+  sound: boolean;
+  music: boolean;
 }
 
 export function newSave(): Save {
@@ -48,7 +50,7 @@ export function newSave(): Save {
     creatures: [], eggs: [], incubators: [], rosterCap: 30, cleared: 0, clears: {}, pity: {},
     tutorial: TUT.PICK, tutorialPair: [], team: [], speedups: { day: '', n: 0 },
     arena: { rating: 100, wins: 0, losses: 0 }, raid: { week: '', dmg: 0, day: '', tries: 0, claimed: 0 },
-    tower: { best: 0 }, counts: { hatched: 0, bred: 0, fights: 0, released: 0 }, auto: false, fast: false,
+    tower: { best: 0 }, counts: { hatched: 0, bred: 0, fights: 0, released: 0 }, auto: false, fast: false, sound: true, music: true,
   };
 }
 

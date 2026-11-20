@@ -1,6 +1,8 @@
 // Incubators, eggs and breeding. Also the hatch reveal: stars first, then the creature.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
+import { SfxName, sfx } from './audio';
 import { Creature, Egg, STAGE_NAMES, stageLevels, stageOf, typeLabel } from '../game/creature';
 import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, doBreed, forecast, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
 import { SKELETON_NAMES, express, starRating } from '../game/genome';
@@ -9,43 +11,128 @@ import { Bar, Btn, C, Card, CreatureTile, CreatureView, EggView, H, P, SexMark, 
 import { CreatureDetail } from './Roster';
 import { fmtTime, rng, useGame, useNow } from './store';
 
+const CRACKS = [
+  '',
+  'M50 26 L46 34 L52 40 L47 48',
+  'M50 26 L46 34 L52 40 L47 48 L40 55 L44 62 M52 40 L61 45 L58 53',
+  'M50 26 L46 34 L52 40 L47 48 L40 55 L44 62 L36 68 M52 40 L61 45 L58 53 L66 60 M47 48 L54 58 L50 66',
+];
+const TAPS = 3;
+
+/** Hatching: tap the egg until it breaks open, then the stars appear one by one, then the creature. */
 function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
   const { width: W } = useWindowDimensions();
-  const [step, setStep] = useState(0);
-  const pop = useRef(new Animated.Value(0)).current;
   const ph = useMemo(() => express(c.g), [c.g]);
   const stars = starRating(c.g);
+  const [taps, setTaps] = useState(0);
+  const [phase, setPhase] = useState<'egg' | 'burst' | 'stars' | 'creature'>('egg');
+  const [shown, setShown] = useState(0);
+  const wob = useRef(new Animated.Value(0)).current;
+  const shake = useRef(new Animated.Value(0)).current;
+  const flash = useRef(new Animated.Value(0)).current;
+  const eggOut = useRef(new Animated.Value(0)).current;
+  const pop = useRef(new Animated.Value(0)).current;
+  const starPops = useRef(Array.from({ length: 5 }, () => new Animated.Value(0))).current;
+  const eggSize = W * 0.55;
+
+  // Idle wobble that grows as the egg cracks, so it looks ready to burst.
   useEffect(() => {
-    const t1 = setTimeout(() => setStep(1), 900);
-    const t2 = setTimeout(() => { setStep(2); Animated.spring(pop, { toValue: 1, friction: 5, useNativeDriver: true }).start(); }, 2000);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [pop]);
+    if (phase !== 'egg') return;
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(wob, { toValue: 1, duration: 140, useNativeDriver: true }),
+      Animated.timing(wob, { toValue: -1, duration: 220, useNativeDriver: true }),
+      Animated.timing(wob, { toValue: 0, duration: 140, useNativeDriver: true }),
+      Animated.delay(Math.max(250, 1300 - taps * 400)),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [phase, taps, wob]);
+
+  const onTap = () => {
+    if (phase === 'egg') {
+      const n = taps + 1;
+      setTaps(n);
+      Animated.sequence([
+        Animated.timing(shake, { toValue: 1, duration: 50, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: -1, duration: 60, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: 0.5, duration: 50, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: 0, duration: 50, useNativeDriver: true }),
+      ]).start();
+      if (n < TAPS) { sfx('crack'); return; }
+      sfx('crackBig');
+      setPhase('burst');
+      setTimeout(() => sfx('hatch'), 150);
+      Animated.parallel([
+        Animated.sequence([Animated.timing(flash, { toValue: 1, duration: 160, useNativeDriver: true }), Animated.timing(flash, { toValue: 0, duration: 500, useNativeDriver: true })]),
+        Animated.timing(eggOut, { toValue: 1, duration: 380, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      ]).start(() => {
+        setPhase('stars');
+        // Stars land one at a time, each a little higher in pitch.
+        for (let i = 0; i < stars; i++) setTimeout(() => {
+          setShown(i + 1);
+          sfx(('star' + (i + 1)) as SfxName);
+          Animated.spring(starPops[i], { toValue: 1, friction: 4, tension: 120, useNativeDriver: true }).start();
+        }, 250 + i * 380);
+        setTimeout(() => {
+          setPhase('creature');
+          sfx('reveal');
+          Animated.spring(pop, { toValue: 1, friction: 5, useNativeDriver: true }).start();
+        }, 250 + stars * 380 + 450);
+      });
+    }
+  };
+
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: '#000d', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        {step < 2 ? (
+      <Pressable onPress={onTap} style={{ flex: 1, backgroundColor: '#000e', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        {phase === 'egg' || phase === 'burst' ? (
           <>
-            <EggView ph={ph} size={W * 0.5} wobble={step} />
-            <Text style={{ color: C.text, fontSize: 18, fontWeight: '800', marginTop: 10 }}>{step === 0 ? 'The egg is cracking...' : ''}</Text>
-            {step === 1 ? <Stars n={stars} size={34} /> : null}
+            <Animated.View style={{
+              opacity: eggOut.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
+              transform: [
+                { translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-10, 10] }) },
+                { rotate: wob.interpolate({ inputRange: [-1, 1], outputRange: [`-${4 + taps * 3}deg`, `${4 + taps * 3}deg`] }) },
+                { scale: eggOut.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }) },
+              ],
+            }}>
+              <EggView ph={ph} size={eggSize} />
+              <Svg width={eggSize} height={eggSize} viewBox="0 0 100 100" style={{ position: 'absolute' }}>
+                {taps > 0 ? <Path d={CRACKS[Math.min(taps, 3)]} stroke="#2a1d33" strokeWidth={1.6} fill="none" strokeLinejoin="round" /> : null}
+                {taps >= 2 ? <Path d={CRACKS[Math.min(taps, 3)]} stroke="#fff6c8" strokeWidth={0.6} fill="none" opacity={0.9} /> : null}
+              </Svg>
+            </Animated.View>
+            <Text style={{ color: C.text, fontSize: 18, fontWeight: '800', marginTop: 16 }}>{taps === 0 ? 'Tap the egg to open it' : taps < TAPS ? 'Keep tapping!' : ''}</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+              {Array.from({ length: TAPS }, (_, i) => <View key={i} style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: i < taps ? C.gold : '#3a3256' }} />)}
+            </View>
+            <Animated.View pointerEvents="none" style={{ position: 'absolute', width: W * 1.4, height: W * 1.4, borderRadius: W, backgroundColor: '#fff8dc', opacity: flash.interpolate({ inputRange: [0, 1], outputRange: [0, 0.85] }), transform: [{ scale: flash.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }} />
           </>
         ) : (
           <>
-            <Stars n={stars} size={30} />
-            <Animated.View style={{ transform: [{ scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }}>
-              <CreatureView ph={ph} stage={stageOf(c)} size={W * 0.6} />
-            </Animated.View>
-            <View style={st.row}>
-              <Text style={{ color: C.text, fontSize: 24, fontWeight: '900' }}>{c.name}</Text>
-              <SexMark sex={c.sex} />
+            <View style={{ flexDirection: 'row', gap: 6, height: 44, alignItems: 'center' }}>
+              {Array.from({ length: 5 }, (_, i) => (
+                <Animated.Text key={i} style={{ fontSize: 34, color: i < stars ? C.gold : '#4a416b', opacity: i < stars ? starPops[i] : phase === 'creature' ? 1 : 0.6, transform: [{ scale: i < stars ? starPops[i].interpolate({ inputRange: [0, 1], outputRange: [2.4, 1] }) : 1 }] }}>★</Animated.Text>
+              ))}
             </View>
-            <View style={{ marginVertical: 6 }}><TypeChips ph={ph} /></View>
-            <P dim>{SKELETON_NAMES[ph.skel]} · {c.origin === 'bred' ? 'Bred' : 'Wild-born'}</P>
-            {c.mom && c.dad ? <P dim>Child of {c.mom.name} and {c.dad.name}</P> : null}
-            <Btn style={{ marginTop: 16, minWidth: 180 }} kind="gold" label="Welcome!" onPress={onClose} />
+            {phase === 'stars' ? <Text style={{ color: C.dim, marginTop: 10 }}>{shown < stars ? '' : ['', 'Humble', 'Promising', 'Strong', 'Excellent', 'Extraordinary'][stars]}</Text> : null}
+            {phase === 'creature' ? (
+              <>
+                <Animated.View style={{ opacity: pop, transform: [{ scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }}>
+                  <CreatureView ph={ph} stage={stageOf(c)} size={W * 0.6} />
+                </Animated.View>
+                <View style={st.row}>
+                  <Text style={{ color: C.text, fontSize: 24, fontWeight: '900' }}>{c.name}</Text>
+                  <SexMark sex={c.sex} />
+                </View>
+                <View style={{ marginVertical: 6 }}><TypeChips ph={ph} /></View>
+                <P dim>{SKELETON_NAMES[ph.skel]} · {c.origin === 'bred' ? 'Bred' : 'Wild-born'}</P>
+                {c.mom && c.dad ? <P dim>Child of {c.mom.name} and {c.dad.name}</P> : null}
+                <Btn style={{ marginTop: 16, minWidth: 180 }} kind="gold" label="Welcome!" onPress={onClose} />
+              </>
+            ) : null}
           </>
         )}
-      </View>
+      </Pressable>
     </Modal>
   );
 }
@@ -209,7 +296,7 @@ export function BreedScreen() {
           kind="gold"
           label={mom && dad ? (tutorial ? 'Breed (free this time)' : `Breed for ${breedCost(mom, dad)} gold`) : 'Pick two parents'}
           disabled={!!problem}
-          onPress={() => { const e = mutate(s => doBreed(rng, s, momId!, dadId!, mats, Date.now())); if (e) { setMade(e); setMats({ dust: false, shard: false, core: false }); } }}
+          onPress={() => { const e = mutate(s => doBreed(rng, s, momId!, dadId!, mats, Date.now())); if (e) { sfx('breed'); setTimeout(() => sfx('egg'), 700); setMade(e); setMats({ dust: false, shard: false, core: false }); } }}
         />
         {problem && (mom || dad) ? <P style={{ color: C.bad, marginTop: 4, textAlign: 'center' }}>{problem}</P> : null}
         <P dim style={{ marginTop: 4, textAlign: 'center' }}>Cost rises with the parents' rarity and how often they've bred. Parents rest afterwards.</P>

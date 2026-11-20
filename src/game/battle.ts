@@ -1,7 +1,7 @@
 // Turn-based team fights. Speed fills a gauge; whoever fills it first acts, so a fast creature can act twice
 // before a slow one acts once. One move per action, cooldowns and status effects count a creature's own actions.
 import { ElementId, matchup } from './data/elements';
-import { Fx, MOVES, MoveDef, StatusKind, STRIKE_ID } from './data/moves';
+import { Fx, MOVES, MoveDef, MoveStyle, StatusKind, STRIKE_ID, moveStyle } from './data/moves';
 import { Creature, Stats, movesOf, stageOf, statsFor } from './creature';
 import { Genome, Pheno, Rng, clamp, express } from './genome';
 
@@ -33,7 +33,7 @@ export interface Unit {
 }
 
 export type Ev =
-  | { t: 'move'; u: number; name: string; el: ElementId; targets: number[] }
+  | { t: 'move'; u: number; name: string; el: ElementId; targets: number[]; style: MoveStyle; heal: boolean }
   | { t: 'dmg'; u: number; from: number; n: number; mult: number; shield: number }
   | { t: 'miss'; u: number }
   | { t: 'heal'; u: number; n: number }
@@ -239,7 +239,7 @@ function resolveTargets(b: Battle, u: Unit, mv: MoveDef, target: number): Unit[]
 
 function perform(b: Battle, u: Unit, mv: MoveDef, target: number, ev: Ev[]) {
   const targets = resolveTargets(b, u, mv, target);
-  ev.push({ t: 'move', u: u.uid, name: mv.name, el: mv.el, targets: targets.map(t => t.uid) });
+  ev.push({ t: 'move', u: u.uid, name: mv.name, el: mv.el, targets: targets.map(t => t.uid), style: moveStyle(mv), heal: !!(mv.heal || mv.teamHeal || mv.fullHeal || mv.revive) });
   const hostile = mv.target === 'enemy' || mv.target === 'two' || mv.target === 'enemies';
   let dealt = 0;
 

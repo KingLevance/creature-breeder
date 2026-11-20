@@ -1,18 +1,28 @@
-// The fight screen: turn-order bar, the two teams, move buttons, and the result of each fight in a run.
+// The fight screen. Everything that moves runs on native-driver animations so it stays smooth:
+// - Between fights the team walks on while the ground and hills scroll, and the next enemies slide in with the
+//   ground until the camera settles, so there is no cut.
+// - Melee moves send the attacker to the target to strike it there. Ranged moves fire an element projectile or
+//   beam, area moves burst on every target, and support moves sparkle on the creatures they help.
+// - A creature that faints is knocked back, squashes and topples onto the ground. Enemies then dissolve in a puff;
+//   your own stay down, dimmed, until revived.
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
-import Svg, { Defs, Ellipse, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { ELEMENTS } from '../game/data/elements';
+import Svg, { Defs, Ellipse, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import { ELEMENTS, ElementId } from '../game/data/elements';
 import { MoveDef, StatusKind } from '../game/data/moves';
 import { Battle, Ev, Unit, act, aiChoose, isBuff, needsPick, nextActor, turnOrder, usable, validTargets } from '../game/battle';
 import { STAGE_NAMES } from '../game/creature';
 import { express, starRating } from '../game/genome';
 import { FightResult, Loot, Run, finishFight, startBattle } from '../game/run';
 import { byId } from '../game/save';
+import { castSfx, setMusic, sfx, tap } from './audio';
+import { FxLayer, FxNew, FxSpec, isBeam } from './Fx';
 import { Bar, Btn, C, CreatureView, EggView, P, Stars, readable, st } from './kit';
 import { rng, useGame } from './store';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const ND = true; // native driver for every transform and opacity animation
+const run = (a: Animated.CompositeAnimation) => new Promise<void>(r => a.start(() => r()));
 
 interface UV { hp: number; shield: number; alive: boolean; statuses: StatusKind[] }
 const snap = (b: Battle): UV[] => b.units.map(u => ({ hp: u.hp, shield: u.shield, alive: u.alive, statuses: u.statuses.map(s => s.k) }));
@@ -32,10 +42,20 @@ const BOSS_SLOTS = [[0.34, 0.66], [0.1, 0.34], [0.1, 0.68], [0.12, 1.0], [0.4, 1
 
 interface Float { id: number; uid: number; text: string; color: string; big?: boolean }
 
+/** Per-creature animation values. */
+interface UA {
+  ox: Animated.Value; oy: Animated.Value; shake: Animated.Value; blink: Animated.Value;
+  down: Animated.Value; squash: Animated.Value; fade: Animated.Value;
+}
+const newUA = (): UA => ({
+  ox: new Animated.Value(0), oy: new Animated.Value(0), shake: new Animated.Value(0), blink: new Animated.Value(1),
+  down: new Animated.Value(0), squash: new Animated.Value(0), fade: new Animated.Value(1),
+});
+
 const FloatText = memo(function FloatText({ f, x, y, onDone }: { f: Float; x: number; y: number; onDone: (id: number) => void }) {
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(a, { toValue: 1, duration: 850, easing: Easing.out(Easing.quad), useNativeDriver: true }).start(() => onDone(f.id));
+    Animated.timing(a, { toValue: 1, duration: 850, easing: Easing.out(Easing.quad), useNativeDriver: ND }).start(() => onDone(f.id));
   }, [a, f.id, onDone]);
   return (
     <Animated.Text pointerEvents="none" style={{
@@ -47,10 +67,56 @@ const FloatText = memo(function FloatText({ f, x, y, onDone }: { f: Float; x: nu
   );
 });
 
-const UnitSprite = memo(function UnitSprite({ u, v, size, phase, walking }: { u: Unit; v: UV; size: number; phase: number; walking: boolean }) {
+/** A creature's picture. When walking it steps through its walk cycle on its own timer. */
+const Sprite = memo(function Sprite({ u, size, walking }: { u: Unit; size: number; walking: boolean }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!walking) { setFrame(0); return; }
+    const id = setInterval(() => setFrame(f => (f + 1) % 12), 55);
+    return () => clearInterval(id);
+  }, [walking]);
+  return <CreatureView ph={u.ph} stage={u.stage} size={size} flip={u.side === 1} phase={frame / 12} walking={walking} />;
+});
+
+// ---------- scrolling background
+function hills(W: number, H: number) {
+  const out: string[] = [];
+  for (let k = -1; k <= 2; k++) for (const [x, r, h] of [[0.1, 0.32, 0.1], [0.45, 0.26, 0.07], [0.78, 0.36, 0.12]]) {
+    const cx = (x + k) * W, rx = r * W;
+    out.push(`M${cx - rx} ${H} Q${cx} ${H - h * 2 * W * 0.6} ${cx + rx} ${H}Z`);
+  }
+  return out.join(' ');
+}
+const DECOR: [number, number, number, number][] = Array.from({ length: 14 }, (_, i) => [((i * 137) % 100) / 100, 0.08 + ((i * 53) % 90) / 100, 10 + ((i * 29) % 26), i % 3]);
+
+const Backdrop = memo(function Backdrop({ W, H, sky, ground, travel }: { W: number; H: number; sky: [string, string]; ground: string; travel: Animated.Value }) {
+  const horizon = H * 0.22;
+  const far = useMemo(() => Animated.multiply(Animated.modulo(Animated.multiply(travel, 0.3), W), -1), [travel, W]);
+  const near = useMemo(() => Animated.multiply(Animated.modulo(travel, W), -1), [travel, W]);
+  const groundH = H - horizon;
   return (
-    <View style={{ opacity: v.alive ? 1 : 0.22, transform: v.alive ? undefined : [{ rotate: u.side === 0 ? '-80deg' : '80deg' }] }}>
-      <CreatureView ph={u.ph} stage={u.stage} size={size} flip={u.side === 1} phase={phase} walking={walking} />
+    <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, overflow: 'hidden' }}>
+      <Svg width={W} height={H} style={{ position: 'absolute' }}>
+        <Defs>
+          <LinearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><Stop offset="0" stopColor={sky[0]} /><Stop offset="1" stopColor={sky[1]} /></LinearGradient>
+          <LinearGradient id="gnd" x1="0" y1="0" x2="0" y2="1"><Stop offset="0" stopColor={ground} stopOpacity={0.85} /><Stop offset="1" stopColor={ground} /></LinearGradient>
+        </Defs>
+        <Rect x={0} y={0} width={W} height={H} fill="url(#sky)" />
+        <Rect x={0} y={horizon} width={W} height={groundH} fill="url(#gnd)" />
+      </Svg>
+      <Animated.View style={{ position: 'absolute', left: 0, top: 0, width: W * 2, height: horizon + 2, transform: [{ translateX: far }] }}>
+        <Svg width={W * 2} height={horizon + 2}><Path d={hills(W, horizon + 2)} fill={ground} opacity={0.55} /></Svg>
+      </Animated.View>
+      <Animated.View style={{ position: 'absolute', left: 0, top: horizon, width: W * 2, height: groundH, transform: [{ translateX: near }] }}>
+        <Svg width={W * 2} height={groundH}>
+          {[-1, 0, 1, 2].flatMap(k => DECOR.map(([x, y, r, kind], i) => {
+            const cx = (x + k) * W, cy = y * groundH;
+            if (kind === 0) return <Ellipse key={k + '_' + i} cx={cx} cy={cy} rx={r} ry={r * 0.22} fill="#000" opacity={0.08} />;
+            if (kind === 1) return <Path key={k + '_' + i} d={`M${cx - 6} ${cy} L${cx - 3} ${cy - 9} L${cx} ${cy} L${cx + 3} ${cy - 11} L${cx + 6} ${cy}Z`} fill="#000" opacity={0.1} />;
+            return <Ellipse key={k + '_' + i} cx={cx} cy={cy} rx={r * 0.35} ry={r * 0.2} fill="#fff" opacity={0.1} />;
+          }))}
+        </Svg>
+      </Animated.View>
     </View>
   );
 });
@@ -87,10 +153,10 @@ export function LootView({ title, loot }: { title: string; loot: Loot }) {
   );
 }
 
-export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) {
+export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => void }) {
   const { save, mutate } = useGame();
   const { width: W, height: winH } = useWindowDimensions();
-  const fieldH = Math.min(W * 0.92, winH * 0.46);
+  const fieldH = Math.round(Math.min(W * 0.92, winH * 0.46));
   const bRef = useRef<Battle | null>(null);
   const live = useRef(true);
   const autoRef = useRef(save.auto);
@@ -102,105 +168,264 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
   const [sel, setSel] = useState<MoveDef | null>(null);
   const [banner, setBanner] = useState<{ text: string; color: string } | null>(null);
   const [floats, setFloats] = useState<Float[]>([]);
+  const [fx, setFx] = useState<FxSpec[]>([]);
   const [result, setResult] = useState<FightResult | null>(null);
-  const [mode, setMode] = useState<'fight' | 'walk'>('walk');
-  const [tick, setTick] = useState(0);
+  const [mode, setMode] = useState<'walk' | 'fight'>('walk');
   const [fightNo, setFightNo] = useState(0);
-  const floatId = useRef(0);
-  const anims = useRef<Record<number, { lunge: Animated.Value; hit: Animated.Value }>>({});
+  const nextId = useRef(0);
+  const ua = useRef<Record<number, UA>>({});
   const bob = useRef(new Animated.Value(0)).current;
+  const travel = useRef(new Animated.Value(0)).current;
   const busy = useRef(false);
+  const D = W * 0.95; // how far the camera travels between chambers
+  const enter = useMemo(() => Animated.subtract(D, travel), [D, travel]);
 
-  const anim = (uid: number) => (anims.current[uid] ??= { lunge: new Animated.Value(0), hit: new Animated.Value(0) });
-  const T = () => (fastRef.current ? 0.45 : 1);
+  const A = (uid: number) => (ua.current[uid] ??= newUA());
+  const T = () => (fastRef.current ? 0.5 : 1);
 
   useEffect(() => {
     live.current = true;
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(bob, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      Animated.timing(bob, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bob, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
+      Animated.timing(bob, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
     ]));
     loop.start();
     return () => { live.current = false; loop.stop(); };
   }, [bob]);
 
   const addFloat = useCallback((uid: number, text: string, color: string, big?: boolean) => {
-    setFloats(fs => [...fs.slice(-14), { id: ++floatId.current, uid, text, color, big }]);
+    setFloats(fs => [...fs.slice(-14), { id: ++nextId.current, uid, text, color, big }]);
   }, []);
   const dropFloat = useCallback((id: number) => setFloats(fs => fs.filter(f => f.id !== id)), []);
-
+  const addFx = useCallback((s: FxNew) => setFx(xs => [...xs.slice(-24), { ...(s as FxSpec), id: ++nextId.current }]), []);
+  const dropFx = useCallback((id: number) => setFx(xs => xs.filter(x => x.id !== id)), []);
   const patch = (uid: number, fn: (v: UV) => UV) => setView(vs => vs.map((v, i) => (i === uid ? fn(v) : v)));
+
+  // ---------- layout
+  const b = bRef.current;
+  const biggest = b ? Math.max(b.units.filter(u => u.side === 0).length, b.units.filter(u => u.side === 1).length) : 5;
+  const size = Math.min(W * 0.21, fieldH * 0.25) * (biggest <= 2 ? 1.35 : biggest === 3 ? 1.15 : 1);
+  const place = useCallback((u: Unit) => {
+    const bossFight = bRef.current!.units.some(x => x.side === 1 && x.boss);
+    const slots = u.side === 1 && bossFight ? BOSS_SLOTS : SLOTS;
+    const [cx, fy] = slots[u.slot % 5];
+    const sz = size * (u.boss ? 1.55 : u.stage === 0 ? 0.82 : 1);
+    const x = (u.side === 0 ? cx : 1 - cx) * W;
+    const feet = fieldH * (0.2 + fy * 0.76);
+    return { left: x - sz / 2, top: feet - sz, sz, feet, x, midY: feet - sz * 0.45 };
+  }, [size, W, fieldH]);
+
+  // ---------- animations
+  const faintAnim = useCallback(async (u: Unit, fromX: number | null) => {
+    const a = A(u.uid);
+    const dir = u.side === 0 ? -1 : 1; // pushed away from the other team
+    const push = fromX == null ? dir : Math.sign(place(u).x - fromX) || dir;
+    sfx('faint');
+    await run(Animated.parallel([
+      Animated.timing(a.ox, { toValue: push * 16, duration: 140 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+      Animated.sequence([
+        Animated.timing(a.blink, { toValue: 0.25, duration: 60, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND }),
+        Animated.timing(a.blink, { toValue: 0.25, duration: 60, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND }),
+      ]),
+      Animated.timing(a.squash, { toValue: 1, duration: 140 * T(), useNativeDriver: ND }),
+    ]));
+    // Topple over onto the ground and settle with a small bounce.
+    await run(Animated.parallel([
+      Animated.timing(a.squash, { toValue: 0, duration: 120 * T(), useNativeDriver: ND }),
+      Animated.timing(a.down, { toValue: 1, duration: 380 * T(), easing: Easing.bounce, useNativeDriver: ND }),
+    ]));
+    const p = place(u);
+    addFx({ kind: 'puff', x: p.x, y: p.feet - 6 });
+    if (u.side === 1) {
+      await sleep(180 * T());
+      sfx('poof');
+      addFx({ kind: 'puff', x: p.x, y: p.feet - p.sz * 0.3, color: ELEMENTS[u.ph.el1].light });
+      Animated.timing(a.fade, { toValue: 0, duration: 420, useNativeDriver: ND }).start();
+    } else {
+      Animated.timing(a.fade, { toValue: 0.4, duration: 400, useNativeDriver: ND }).start();
+    }
+  }, [addFx, place]);
+
+  const reviveAnim = useCallback(async (u: Unit) => {
+    const a = A(u.uid);
+    const p = place(u);
+    sfx('revive');
+    addFx({ kind: 'aura', color: C.good, x: p.x, y: p.feet - p.sz * 0.5 });
+    await run(Animated.parallel([
+      Animated.timing(a.fade, { toValue: 1, duration: 250, useNativeDriver: ND }),
+      Animated.timing(a.down, { toValue: 0, duration: 350 * T(), easing: Easing.out(Easing.back(1.5)), useNativeDriver: ND }),
+      Animated.timing(a.ox, { toValue: 0, duration: 350 * T(), useNativeDriver: ND }),
+    ]));
+  }, [addFx, place]);
 
   const play = useCallback(async (events: Ev[]) => {
     const b = bRef.current!;
+    let moveEl: ElementId = 'plain';
+    let melee: number | null = null;
+    let attackerX: number | null = null;
+    let attackerSide = -1;
+    let statusSound = false;
     for (const e of events) {
       if (!live.current) return;
       switch (e.t) {
         case 'move': {
           const u = b.units[e.u];
+          moveEl = e.el;
+          attackerSide = u.side;
           setBanner({ text: `${u.name}: ${e.name}`, color: ELEMENTS[e.el].base });
-          const a = anim(e.u).lunge;
-          Animated.sequence([
-            Animated.timing(a, { toValue: u.side === 0 ? 22 : -22, duration: 110 * T(), useNativeDriver: true }),
-            Animated.timing(a, { toValue: 0, duration: 160 * T(), useNativeDriver: true }),
-          ]).start();
-          await sleep(330 * T());
+          const pa = place(u);
+          attackerX = pa.x;
+          const a = A(e.u);
+          const dir = u.side === 0 ? 1 : -1;
+          const targets = e.targets.map(t => b.units[t]).filter(Boolean);
+          if (e.style === 'melee' && targets[0]) {
+            const pt = place(targets[0]);
+            const tx = pt.x - dir * (pt.sz * 0.42 + pa.sz * 0.3) - pa.x;
+            const ty = pt.feet - pa.feet + 2;
+            melee = e.u;
+            sfx('swing');
+            await run(Animated.parallel([
+              Animated.timing(a.ox, { toValue: tx, duration: 240 * T(), easing: Easing.in(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.oy, { toValue: ty, duration: 240 * T(), easing: Easing.in(Easing.quad), useNativeDriver: ND }),
+            ]));
+            Animated.sequence([
+              Animated.timing(a.ox, { toValue: tx + dir * 12, duration: 60, useNativeDriver: ND }),
+              Animated.timing(a.ox, { toValue: tx, duration: 90, useNativeDriver: ND }),
+            ]).start();
+            await sleep(50);
+          } else if (e.style === 'ranged') {
+            sfx(castSfx(e.el));
+            Animated.sequence([
+              Animated.timing(a.ox, { toValue: dir * 8, duration: 90, useNativeDriver: ND }),
+              Animated.timing(a.ox, { toValue: 0, duration: 140, useNativeDriver: ND }),
+            ]).start();
+            let wait = 0;
+            for (const t of targets) {
+              const pt = place(t);
+              const x1 = pa.x + dir * pa.sz * 0.25, y1 = pa.midY, x2 = pt.x, y2 = pt.midY;
+              const dur = Math.round(Math.min(380, 160 + Math.abs(x2 - x1) * 0.5) * T());
+              if (isBeam(e.el)) addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: dur + 120 });
+              else addFx({ kind: 'proj', el: e.el, x1, y1, x2, y2, dur });
+              wait = Math.max(wait, isBeam(e.el) ? 90 : dur);
+            }
+            await sleep(wait);
+          } else if (e.style === 'area') {
+            sfx(castSfx(e.el));
+            addFx({ kind: 'charge', el: e.el, x: pa.x, y: pa.midY });
+            await sleep(260 * T());
+            targets.forEach((t, i) => setTimeout(() => { const pt = place(t); addFx({ kind: 'burst', el: e.el, x: pt.x, y: pt.midY, big: true }); }, i * 45));
+            await sleep(120 * T());
+          } else {
+            sfx(e.heal ? 'heal' : castSfx(e.el) === 'magic' ? 'magic' : 'buff');
+            Animated.sequence([
+              Animated.timing(a.oy, { toValue: -12, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.oy, { toValue: 0, duration: 160, easing: Easing.in(Easing.quad), useNativeDriver: ND }),
+            ]).start();
+            for (const t of targets) {
+              if (!t.alive && !e.heal) continue;
+              const pt = place(t);
+              addFx({ kind: 'aura', color: e.heal ? C.good : ELEMENTS[e.el].glow, x: pt.x, y: pt.feet - pt.sz * 0.55 });
+            }
+            await sleep(320 * T());
+          }
           break;
         }
         case 'dmg': {
+          const t = b.units[e.u];
+          const pt = place(t);
           patch(e.u, v => ({ ...v, hp: Math.max(0, v.hp - (e.n - e.shield)), shield: Math.max(0, v.shield - e.shield) }));
           addFloat(e.u, `-${e.n}${e.mult > 1 ? '!' : ''}`, e.mult > 1 ? '#ffd34d' : e.mult < 1 ? '#b9b3cc' : '#ff7b7b', e.mult > 1);
           if (e.mult > 1) addFloat(e.u, e.mult >= 4 ? 'Devastating' : 'Hits hard', '#ffd34d');
           else if (e.mult < 1) addFloat(e.u, 'Hits weakly', '#b9b3cc');
-          const a = anim(e.u).hit;
+          if (e.from >= 0) addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
+          sfx(e.mult > 1 || e.n > t.max.hp * 0.3 ? 'hitBig' : 'hit');
+          const a = A(e.u);
           Animated.sequence([
-            Animated.timing(a, { toValue: 6, duration: 45, useNativeDriver: true }), Animated.timing(a, { toValue: -5, duration: 45, useNativeDriver: true }),
-            Animated.timing(a, { toValue: 0, duration: 45, useNativeDriver: true }),
+            Animated.timing(a.shake, { toValue: 7, duration: 40, useNativeDriver: ND }), Animated.timing(a.shake, { toValue: -6, duration: 50, useNativeDriver: ND }),
+            Animated.timing(a.shake, { toValue: 3, duration: 40, useNativeDriver: ND }), Animated.timing(a.shake, { toValue: 0, duration: 40, useNativeDriver: ND }),
           ]).start();
-          await sleep(190 * T());
+          Animated.sequence([
+            Animated.timing(a.blink, { toValue: 0.45, duration: 50, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 90, useNativeDriver: ND }),
+          ]).start();
+          await sleep(200 * T());
           break;
         }
-        case 'miss': addFloat(e.u, 'Dodged', '#9fe8ff'); await sleep(160 * T()); break;
-        case 'heal': if (e.n > 0) { patch(e.u, v => ({ ...v, hp: v.hp + e.n })); addFloat(e.u, `+${e.n}`, C.good); await sleep(150 * T()); } break;
-        case 'shield': if (e.n > 0) { patch(e.u, v => ({ ...v, shield: v.shield + e.n })); addFloat(e.u, 'Shield', '#9fe8ff'); await sleep(120 * T()); } break;
+        case 'miss': {
+          addFloat(e.u, 'Dodged', '#9fe8ff');
+          sfx('miss');
+          const a = A(e.u);
+          const dir = b.units[e.u].side === 0 ? -1 : 1;
+          Animated.sequence([
+            Animated.timing(a.oy, { toValue: -16, duration: 110, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+            Animated.timing(a.oy, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: ND }),
+          ]).start();
+          Animated.sequence([
+            Animated.timing(a.ox, { toValue: dir * 14, duration: 110, useNativeDriver: ND }),
+            Animated.timing(a.ox, { toValue: 0, duration: 160, useNativeDriver: ND }),
+          ]).start();
+          await sleep(200 * T());
+          break;
+        }
+        case 'heal': if (e.n > 0) { patch(e.u, v => ({ ...v, hp: v.hp + e.n })); addFloat(e.u, `+${e.n}`, C.good); await sleep(120 * T()); } break;
+        case 'shield': if (e.n > 0) { patch(e.u, v => ({ ...v, shield: v.shield + e.n })); addFloat(e.u, 'Shield', '#9fe8ff'); sfx('shield'); await sleep(110 * T()); } break;
         case 'status':
           patch(e.u, v => (v.statuses.includes(e.k) ? v : { ...v, statuses: [...v.statuses, e.k] }));
           addFloat(e.u, STATUS_WORD[e.k], isBuff(e.k) ? '#9fe8a0' : '#f3a5ff');
-          await sleep(90 * T());
+          if (!statusSound && !isBuff(e.k) && b.units[e.u].side !== attackerSide) { statusSound = true; sfx('debuff'); }
+          await sleep(80 * T());
           break;
-        case 'skip': addFloat(e.u, e.k === 'freeze' ? 'Frozen' : 'Stunned', '#f3a5ff', true); await sleep(380 * T()); break;
-        case 'faint': patch(e.u, v => ({ ...v, alive: false, hp: 0, shield: 0, statuses: [] })); await sleep(260 * T()); break;
-        case 'revive': patch(e.u, v => ({ ...v, alive: true, hp: e.n })); addFloat(e.u, 'Revived!', C.good, true); await sleep(300 * T()); break;
-        case 'text': addFloat(e.u, e.s, '#e7e0ff'); await sleep(140 * T()); break;
-        case 'tick': break;
+        case 'skip': addFloat(e.u, e.k === 'freeze' ? 'Frozen' : 'Stunned', '#f3a5ff', true); sfx('debuff'); await sleep(380 * T()); break;
+        case 'faint': patch(e.u, v => ({ ...v, alive: false, hp: 0, shield: 0, statuses: [] })); await faintAnim(b.units[e.u], attackerX); break;
+        case 'revive': patch(e.u, v => ({ ...v, alive: true, hp: e.n })); addFloat(e.u, 'Revived!', C.good, true); await reviveAnim(b.units[e.u]); break;
+        case 'text': addFloat(e.u, e.s, '#e7e0ff'); await sleep(130 * T()); break;
+        case 'tick': {
+          const p = place(b.units[e.u]);
+          addFx({ kind: 'burst', el: e.k === 'burn' ? 'ember' : 'venom', x: p.x, y: p.midY });
+          break;
+        }
+      }
+    }
+    // A melee attacker runs back to its spot.
+    if (melee != null && live.current) {
+      const a = A(melee);
+      if (bRef.current!.units[melee].alive) {
+        await run(Animated.parallel([
+          Animated.timing(a.ox, { toValue: 0, duration: 260 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+          Animated.timing(a.oy, { toValue: 0, duration: 260 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+        ]));
       }
     }
     if (live.current) { setView(snap(b)); setOrder(turnOrder(b, 8)); }
-  }, [addFloat]);
+  }, [addFloat, addFx, faintAnim, place, reviveAnim]);
 
   const finish = useCallback(() => {
     const b = bRef.current!;
-    if (b.over == null) b.over = 0; // raid: time ran out
-    const res = mutate(s => finishFight(rng, s, run, b, Date.now()));
+    if (b.over == null) b.over = 0; // raid: out of actions
+    const res = mutate(s => finishFight(rng, s, theRun, b, Date.now()));
     setBanner(null); setActor(null); setSel(null);
+    setMusic(null);
+    sfx(theRun.kind === 'raid' || res.won ? 'victory' : 'defeat');
+    if (res.chest) setTimeout(() => sfx('chest'), 900);
+    if (res.xp.some(x => x.newStage != null)) setTimeout(() => sfx('grow'), 1400);
+    else if (res.xp.some(x => x.levels > 0)) setTimeout(() => sfx('levelup'), 1400);
     setResult(res);
-  }, [mutate, run]);
+  }, [mutate, theRun]);
 
   const step = useCallback(async () => {
     const b = bRef.current!;
     for (;;) {
       if (!live.current) return;
-      if (b.over != null || (run.actionLimit > 0 && b.actions[0] >= run.actionLimit)) { await sleep(350); if (live.current) finish(); return; }
+      if (b.over != null || (theRun.actionLimit > 0 && b.actions[0] >= theRun.actionLimit)) { await sleep(500); if (live.current) finish(); return; }
       const { actor: uid, events } = nextActor(b);
       await play(events);
       if (uid == null) continue;
       const u = b.units[uid];
       if (u.side === 0 && !autoRef.current) { setBanner(null); setActor(uid); setSel(null); return; }
-      await sleep((u.side === 0 ? 120 : 260) * T());
+      await sleep((u.side === 0 ? 150 : 300) * T());
       const c = aiChoose(b, uid);
       await play(act(b, uid, c.move, c.target));
     }
-  }, [finish, play, run]);
+  }, [finish, play, theRun]);
 
   const fire = useCallback(async (mv: MoveDef, target: number) => {
     const b = bRef.current!;
@@ -213,7 +438,6 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
     step();
   }, [actor, play, step]);
 
-  // Auto switched on while it's the player's turn: let the AI take it.
   useEffect(() => {
     if (save.auto && actor != null && bRef.current && !busy.current) {
       const c = aiChoose(bRef.current, actor);
@@ -222,77 +446,59 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
     }
   }, [save.auto, actor, fire]);
 
-  const begin = useCallback(() => {
-    const b = mutate(s => startBattle(rng, s, run));
+  /** Set up the next chamber and walk into it: the ground scrolls and the enemies arrive with it. */
+  const enterChamber = useCallback(() => {
+    const b = mutate(s => startBattle(rng, s, theRun));
     bRef.current = b;
-    anims.current = {};
-    setView(snap(b)); setOrder(turnOrder(b, 8)); setResult(null); setFloats([]);
-    setMode('fight');
+    ua.current = {};
+    for (const u of b.units) if (!u.alive) { const a = A(u.uid); a.down.setValue(1); a.fade.setValue(u.side === 0 ? 0.4 : 0); }
+    setView(snap(b)); setOrder(turnOrder(b, 8)); setResult(null); setFloats([]); setFx([]);
+    setMode('walk');
     setFightNo(n => n + 1);
-    setTimeout(() => { if (live.current) step(); }, 500);
-  }, [mutate, run, step]);
+    const f = theRun.fights[theRun.idx];
+    setMusic(f?.boss ? 'boss' : 'battle');
+    travel.setValue(0);
+    Animated.timing(travel, { toValue: D, duration: 1800, easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }).start(() => {
+      if (!live.current) return;
+      setMode('fight');
+      setOrder(turnOrder(b, 8));
+      setTimeout(() => { if (live.current) step(); }, 300);
+    });
+  }, [D, mutate, step, theRun, travel]);
 
-  // Walk into the chamber, then the fight starts.
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    bRef.current = mutate(s => startBattle(rng, s, run));
-    setView(snap(bRef.current));
-    const id = setInterval(() => setTick(t => t + 1), 90);
-    setTimeout(() => { clearInterval(id); if (live.current) begin(); }, 1300);
-  }, [begin, mutate, run]);
+    enterChamber();
+  }, [enterChamber]);
 
-  const nextFight = () => {
-    setResult(null);
-    setMode('walk');
-    bRef.current = mutate(s => startBattle(rng, s, run));
-    setView(snap(bRef.current));
-    const id = setInterval(() => setTick(t => t + 1), 90);
-    setTimeout(() => { clearInterval(id); if (live.current) begin(); }, 1300);
-  };
-
-  const b = bRef.current;
-  const fight = run.fights[Math.min(run.idx, run.fights.length - 1)];
-  const biggest = b ? Math.max(b.units.filter(u => u.side === 0).length, b.units.filter(u => u.side === 1).length) : 5;
-  const size = Math.min(W * 0.21, fieldH * 0.25) * (biggest <= 2 ? 1.35 : biggest === 3 ? 1.15 : 1);
+  const fight = theRun.fights[Math.min(theRun.idx, theRun.fights.length - 1)];
   const targets = useMemo(() => (b && actor != null && sel ? validTargets(b, b.units[actor], sel) : []), [b, actor, sel, view]);
-
-  const place = (u: Unit) => {
-    const bossFight = b!.units.some(x => x.side === 1 && x.boss);
-    const slots = u.side === 1 && bossFight ? BOSS_SLOTS : SLOTS;
-    const [cx, fy] = slots[u.slot % 5];
-    const sz = size * (u.boss ? 1.55 : u.stage === 0 ? 0.82 : 1);
-    const x = (u.side === 0 ? cx : 1 - cx) * W;
-    const feet = fieldH * (0.2 + fy * 0.76);
-    return { left: x - sz / 2, top: feet - sz, sz, feet, x };
-  };
-
   const onTapUnit = (uid: number) => {
     if (actor == null || !sel || !b) return;
-    if (targets.includes(uid)) fire(sel, uid);
+    if (targets.includes(uid)) { tap(); fire(sel, uid); }
   };
-
   const units = b ? [...b.units].sort((x, y) => place(x).feet - place(y).feet) : [];
   const me = b && actor != null ? b.units[actor] : null;
+  const allyPick = sel && (sel.target === 'ally' || sel.target === 'allies' || sel.target === 'self' || sel.target === 'fallen' || sel.target === 'allFallen');
+  const leave = () => { setMusic('hub'); onExit(); };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      {/* Header */}
       <View style={[st.row, { paddingHorizontal: 12, paddingVertical: 6, justifyContent: 'space-between' }]}>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: C.text, fontWeight: '800', fontSize: 15 }} numberOfLines={1}>{run.title}</Text>
+          <Text style={{ color: C.text, fontWeight: '800', fontSize: 15 }} numberOfLines={1}>{theRun.title}</Text>
           <Text style={{ color: C.dim, fontSize: 11 }}>
-            {run.kind === 'tower' ? `Floor ${run.floor}` : run.kind === 'raid' && b ? `Actions left: ${Math.max(0, run.actionLimit - b.actions[0])}` : run.fights.length > 1 ? `Fight ${run.idx + 1} of ${run.fights.length}` : ''}
+            {theRun.kind === 'tower' ? `Floor ${theRun.floor}` : theRun.kind === 'raid' && b ? `Actions left: ${Math.max(0, theRun.actionLimit - b.actions[0])}` : theRun.fights.length > 1 ? `Fight ${theRun.idx + 1} of ${theRun.fights.length}` : ''}
             {fight?.boss ? '  ·  Boss' : ''}
           </Text>
         </View>
         <Btn small kind={save.auto ? 'main' : 'ghost'} label={save.auto ? 'Auto on' : 'Auto'} onPress={() => mutate(s => { s.auto = !s.auto; })} />
         <Btn small kind={save.fast ? 'main' : 'ghost'} label={save.fast ? '2x' : '1x'} onPress={() => mutate(s => { s.fast = !s.fast; })} />
-        <Btn small kind="ghost" label="Flee" onPress={onExit} />
+        <Btn small kind="ghost" label="Flee" onPress={leave} />
       </View>
 
-      {/* Turn order */}
       <View style={[st.row, { paddingHorizontal: 10, height: 44, gap: 4 }]}>
         <Text style={{ color: C.dim, fontSize: 10, width: 30 }}>Next</Text>
         {mode === 'fight' && b ? order.map((uid, i) => {
@@ -305,43 +511,42 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
         }) : null}
       </View>
 
-      {/* Field */}
       <View style={{ width: W, height: fieldH, overflow: 'hidden' }}>
-        <Svg width={W} height={fieldH} style={{ position: 'absolute' }}>
-          <Defs>
-            <LinearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor={run.sky[0]} /><Stop offset="1" stopColor={run.sky[1]} />
-            </LinearGradient>
-          </Defs>
-          <Rect x={0} y={0} width={W} height={fieldH} fill="url(#sky)" />
-          <Ellipse cx={W * 0.25} cy={fieldH * 0.24} rx={W * 0.4} ry={fieldH * 0.09} fill={run.ground} opacity={0.5} />
-          <Ellipse cx={W * 0.8} cy={fieldH * 0.24} rx={W * 0.35} ry={fieldH * 0.07} fill={run.ground} opacity={0.5} />
-          <Rect x={0} y={fieldH * 0.22} width={W} height={fieldH * 0.78} fill={run.ground} />
-          {[0, 1, 2, 3, 4, 5].map(i => {
-            const span = W + 80;
-            const x = (((i * 131 - (mode === 'walk' ? tick * 16 : 0)) % span) + span) % span - 40;
-            return <Ellipse key={i} cx={x} cy={fieldH * (0.34 + ((i * 37) % 60) / 100)} rx={26 + (i % 3) * 10} ry={5} fill="#000" opacity={0.08} />;
-          })}
-        </Svg>
+        <Backdrop W={W} H={fieldH} sky={theRun.sky} ground={theRun.ground} travel={travel} />
 
         {b && units.map(u => {
           const v = view[u.uid];
           if (!v) return null;
-          if (mode === 'walk' && u.side === 1) return null;
           const pos = place(u);
-          const a = anim(u.uid);
+          const a = A(u.uid);
           const canPick = targets.includes(u.uid);
           const isActor = actor === u.uid;
-          const walking = mode === 'walk' && v.alive;
+          const walking = mode === 'walk' && v.alive && u.side === 0;
+          const fallDir = u.side === 0 ? -1 : 1;
+          const showBars = v.alive && (mode === 'fight' || u.side === 0);
           return (
             <Animated.View key={u.uid} style={{
-              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz,
-              transform: [{ translateX: Animated.add(a.lunge, a.hit) }, { translateY: v.alive && !walking ? bob.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [0, -3] : [-3, 0] }) : 0 }],
+              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz,
+              transform: [
+                { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(a.ox, a.shake) },
+                { translateY: Animated.add(a.oy, v.alive && !walking ? bob.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [0, -3] : [-3, 0] }) : 0) },
+              ],
             }}>
-              <Pressable onPress={() => onTapUnit(u.uid)}>
-                {(canPick || isActor) ? <View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: isActor ? C.gold : sel && (sel.target === 'ally' || sel.target === 'allies' || sel.target === 'self' || sel.target === 'fallen' || sel.target === 'allFallen') ? C.good : C.bad, backgroundColor: isActor ? 'rgba(245,197,66,0.18)' : 'rgba(255,255,255,0.12)' }} /> : null}
-                <UnitSprite u={u} v={v} size={pos.sz} phase={walking ? (tick % 8) / 8 : 0} walking={walking} />
-                {v.alive && mode === 'fight' ? (
+              <Pressable onPress={() => onTapUnit(u.uid)} style={{ width: pos.sz, height: pos.sz }}>
+                {(canPick || isActor) ? <View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: isActor ? C.gold : allyPick ? C.good : C.bad, backgroundColor: isActor ? 'rgba(245,197,66,0.18)' : 'rgba(255,255,255,0.12)' }} /> : null}
+                <Animated.View style={{
+                  width: pos.sz, height: pos.sz, opacity: Animated.multiply(a.fade, a.blink),
+                  transform: [
+                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.12] }) },
+                    { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, pos.sz * 0.24] }) },
+                    { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 90}deg`] }) },
+                    { scaleX: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) },
+                    { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
+                  ],
+                }}>
+                  <Sprite u={u} size={pos.sz} walking={walking} />
+                </Animated.View>
+                {showBars ? (
                   <View pointerEvents="none" style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
                     <Bar frac={v.hp / u.max.hp} color={u.side === 0 ? C.good : C.bad} height={5} />
                     {v.shield > 0 ? <View style={{ marginTop: 1 }}><Bar frac={v.shield / (u.max.hp * 0.6)} color="#9fe8ff" height={3} /></View> : null}
@@ -360,6 +565,8 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
           );
         })}
 
+        <FxLayer items={fx} onDone={dropFx} W={W} H={fieldH} />
+
         {b && floats.map((f, i) => {
           const u = b.units[f.uid];
           if (!u) return null;
@@ -374,12 +581,11 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
         ) : null}
         {mode === 'walk' ? (
           <View pointerEvents="none" style={{ position: 'absolute', top: 6, alignSelf: 'center', backgroundColor: '#0008', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 4 }}>
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>{fightNo === 0 ? 'Entering...' : 'On to the next chamber...'}</Text>
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>{fightNo <= 1 ? 'Entering...' : fight?.boss ? 'Something big is ahead...' : 'On to the next chamber...'}</Text>
           </View>
         ) : null}
       </View>
 
-      {/* Moves */}
       <View style={{ flex: 1, padding: 10 }}>
         {me && b ? (
           <>
@@ -394,7 +600,7 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
                 const e = ELEMENTS[mv.el];
                 const on = sel?.id === mv.id;
                 return (
-                  <Pressable key={mv.id} disabled={!ok} onPress={() => setSel(mv)} style={{ width: (W - 26) / 2, backgroundColor: on ? C.panel2 : C.panel, borderRadius: 10, borderWidth: on ? 2 : 1, borderColor: on ? C.gold : C.line, borderLeftWidth: 6, borderLeftColor: e.base, padding: 7, opacity: ok ? 1 : 0.45 }}>
+                  <Pressable key={mv.id} disabled={!ok} onPress={() => { sfx('select'); setSel(mv); }} style={{ width: (W - 26) / 2, backgroundColor: on ? C.panel2 : C.panel, borderRadius: 10, borderWidth: on ? 2 : 1, borderColor: on ? C.gold : C.line, borderLeftWidth: 6, borderLeftColor: e.base, padding: 7, opacity: ok ? 1 : 0.45 }}>
                     <Text style={{ color: C.text, fontWeight: '800', fontSize: 13 }} numberOfLines={1}>{mv.name}</Text>
                     <Text style={{ color: C.dim, fontSize: 10 }} numberOfLines={1}>{cd > 0 ? `Ready in ${cd}` : !ok ? 'Not usable' : mv.id === 'strike' ? 'Typeless' : e.name}{mv.cd && cd <= 0 ? ` · cd ${mv.cd}` : ''}</Text>
                   </Pressable>
@@ -413,12 +619,11 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
         )}
       </View>
 
-      {/* Result */}
       {result ? (
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000a', justifyContent: 'center', padding: 16 }}>
           <View style={[st.card, { maxHeight: winH * 0.8 }]}>
             <Text style={{ color: result.won ? C.gold : C.bad, fontSize: 22, fontWeight: '900', textAlign: 'center' }}>
-              {run.kind === 'raid' ? 'Raid attempt over' : result.won ? (result.cleared && run.kind === 'area' ? 'Area cleared!' : 'Victory') : 'Defeated'}
+              {theRun.kind === 'raid' ? 'Raid attempt over' : result.won ? (result.cleared && theRun.kind === 'area' ? 'Area cleared!' : 'Victory') : 'Defeated'}
             </Text>
             {result.note ? <P style={{ textAlign: 'center', marginTop: 4 }}>{result.note}</P> : null}
             <ScrollView style={{ marginTop: 8 }}>
@@ -436,13 +641,13 @@ export function BattleScreen({ run, onExit }: { run: Run; onExit: () => void }) 
                 );
               })}
               <LootView title="Drops" loot={result.drops} />
-              {result.chest ? <LootView title={run.kind === 'raid' ? 'Raid rewards' : 'Boss chest'} loot={result.chest} /> : null}
+              {result.chest ? <LootView title={theRun.kind === 'raid' ? 'Raid rewards' : 'Boss chest'} loot={result.chest} /> : null}
             </ScrollView>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-              {!result.runOver ? <Btn style={{ flex: 1 }} kind="ghost" label="Leave" onPress={onExit} /> : null}
+              {!result.runOver ? <Btn style={{ flex: 1 }} kind="ghost" label="Leave" onPress={leave} /> : null}
               {!result.runOver
-                ? <Btn style={{ flex: 2 }} kind="gold" label={run.kind === 'tower' ? `Floor ${run.floor}` : run.fights[run.idx]?.boss ? 'Face the boss' : 'Next fight'} onPress={nextFight} />
-                : <Btn style={{ flex: 1 }} kind="gold" label="Done" onPress={onExit} />}
+                ? <Btn style={{ flex: 2 }} kind="gold" label={theRun.kind === 'tower' ? `Floor ${theRun.floor}` : theRun.fights[theRun.idx]?.boss ? 'Face the boss' : 'Next fight'} onPress={enterChamber} />
+                : <Btn style={{ flex: 1 }} kind="gold" label="Done" onPress={leave} />}
             </View>
           </View>
         </View>

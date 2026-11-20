@@ -79,6 +79,10 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
 
         <H>Settings</H>
         <Card>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+            <Btn style={{ flex: 1 }} kind={save.sound ? 'main' : 'ghost'} label={save.sound ? 'Sound on' : 'Sound off'} onPress={() => mutate(s => { s.sound = !s.sound; })} />
+            <Btn style={{ flex: 1 }} kind={save.music ? 'main' : 'ghost'} label={save.music ? 'Music on' : 'Music off'} onPress={() => mutate(s => { s.music = !s.music; })} />
+          </View>
           {wipe ? (
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Btn style={{ flex: 1 }} kind="ghost" label="Keep my save" onPress={() => setWipe(false)} />

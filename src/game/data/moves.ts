@@ -276,6 +276,25 @@ hit('void', R, 'Unravel', 60, 3, "Strips an enemy's boosts.", { strip: 'target' 
 hit('void', R, 'Null Pulse', 160, 3, 'A strong hit that removes a buff.', { strip: 'one' });
 hit('void', L, 'Oblivion', 230, 5, 'Huge damage, and strips all enemy boosts.', { strip: 'all' });
 
+/** Moves where the user runs up and strikes in person. Every other single-target attack is a projectile or beam. */
+const MELEE = new Set([
+  'Cinder Lash', 'Inferno Crash', 'Phoenix Dive', 'Riptide Slam', 'Splash Jab', 'Thorn Whip', 'Heartwood Slam', 'Static Snap',
+  'Thunder Crash', 'Glacial Crush', 'Chill Touch', 'Hammer Fist', 'Low Sweep', 'Titan Slam', 'Rampage', "Champion's Fury",
+  'Viper Bite', 'Quake Stomp', 'Earthen Crush', 'Cyclone Dive', 'Sky Rend', 'Pincer Nip', 'Locust Surge', 'Swarm Assault',
+  'Haunting Touch', 'Drain Touch', 'Soul Rend', 'Drake Claw', 'Tail Whip', 'Crushing Fang', 'Shadow Strike', 'Night Ambush',
+  'Eclipse Slash', 'Iron Jab', 'Anvil Crash', 'Heated Edge', 'Hammer Barrage', 'Quick Strike', 'Scuffle', 'Power Slam',
+  'Overpower', 'Echo Strike', 'Rift Slash', 'Strike',
+]);
+
+export type MoveStyle = 'melee' | 'ranged' | 'area' | 'support';
+/** How a move looks when used. Presentation only: it changes nothing in the rules. */
+export function moveStyle(mv: MoveDef): MoveStyle {
+  if (mv.target === 'enemies') return 'area';
+  if (mv.target === 'enemy' && MELEE.has(mv.name)) return 'melee';
+  if (mv.target === 'enemy' || mv.target === 'two') return 'ranged';
+  return 'support';
+}
+
 export const MOVE_LIST: MoveDef[] = list;
 export const MOVES: Record<string, MoveDef> = Object.fromEntries(list.map(x => [x.id, x]));
 
