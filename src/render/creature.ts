@@ -77,7 +77,9 @@ type Layer = (typeof LAYERS)[number];
 /** Outline width. Only the outer half shows, because the fill covers the inner half. */
 const OW = 2;
 
-interface Item { g: Layer; out?: Shape; fill: Shape }
+/** Pieces that animate on their own, rotating about a joint: everything else is the main body. */
+export type Part = 'main' | 'tail' | 'wingFar' | 'wingNear';
+interface Item { g: Layer; part: Part; out?: Shape; fill: Shape }
 
 /** A rotation about (cx, cy) by deg degrees, then a shift. Used to lean and lower a body into its stance. */
 interface Tf { cx: number; cy: number; deg: number; c: number; s: number; dx: number; dy: number }
@@ -128,10 +130,17 @@ class Pen {
   g: Layer = 'body';
   /** While set, everything drawn is leaned and lowered into the creature's stance. */
   tf: Tf | null = null;
+  /** Which animated piece is being drawn, and where each piece's joint is. */
+  part: Part = 'main';
+  pivots: Partial<Record<Part, [number, number]>> = {};
+  /** Drawing for the live rig: the tail and wings are drawn at rest, and the app moves them. */
+  rig = false;
+  /** Where the eyes look: -1 back, 0 ahead, 1 forward. */
+  look = 0;
   constructor(public pal: Palette) {}
   private add(fill: Shape, out?: Shape) {
     if (this.tf) { fill = tfShape(fill, this.tf); if (out) out = tfShape(out, this.tf); }
-    this.items.push({ g: this.g, fill, out });
+    this.items.push({ g: this.g, part: this.part, fill, out });
   }
   /** Where a point ends up under the current stance. */
   at(x: number, y: number): [number, number] { return this.tf ? tpt(this.tf, x, y) : [x, y]; }
@@ -197,10 +206,10 @@ class Pen {
   poly(pts: number[][], fill: string, o: { op?: number; line?: boolean } = {}) {
     this.path('M' + pts.map(p => f(p[0]) + ' ' + f(p[1])).join('L') + 'Z', fill, o);
   }
-  shapes(): Shape[] {
+  shapes(part?: Part): Shape[] {
     const out: Shape[] = [];
     for (const g of LAYERS) {
-      const its = this.items.filter(i => i.g === g);
+      const its = this.items.filter(i => i.g === g && (part == null || i.part === part));
       for (const i of its) if (i.out) out.push(i.out);
       for (const i of its) out.push(i.fill);
     }
@@ -252,9 +261,28 @@ export interface DrawOpts {
   ko?: boolean;
   /** A momentary expression or action. */
   pose?: Pose;
+  /** Limb positions, 0..1, for blending smoothly into and out of a pose. Default: the pose's own. */
+  reach?: number;
+  raise?: number;
+  guard?: number;
+  /** Draw for the live rig: no breathing, tail and wings at rest. */
+  rig?: boolean;
+  /** Eyes glancing back (-1) or forward (1). */
+  look?: number;
 }
 
-export type Pose = 'idle' | 'blink' | 'attack' | 'cast' | 'hurt';
+export type Pose = 'idle' | 'blink' | 'attack' | 'cast' | 'hurt' | 'roar' | 'happy' | 'guard' | 'dizzy';
+/** How far each pose moves the limbs: reach forward to strike, raise up to cast or cheer, guard in front. */
+export function poseWeights(pose?: Pose): { reach: number; raise: number; guard: number } {
+  switch (pose) {
+    case 'attack': return { reach: 1, raise: 0, guard: 0 };
+    case 'cast': case 'happy': return { reach: 0, raise: 1, guard: 0 };
+    case 'roar': return { reach: 0.2, raise: 0.55, guard: 0 };
+    case 'guard': return { reach: 0, raise: 0, guard: 1 };
+    case 'hurt': return { reach: 0, raise: 0.25, guard: 0.3 };
+    default: return { reach: 0, raise: 0, guard: 0 };
+  }
+}
 
 function star(p: Pen, x: number, y: number, r: number, fill: string, op = 1) {
   const q = r * 0.3;
@@ -267,6 +295,14 @@ function flame(p: Pen, x: number, y: number, r: number, c1: string, c2: string) 
 }
 
 function drawTail(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
+  const was = p.part;
+  p.part = 'tail';
+  p.pivots.tail = p.at(a.tx, a.ty);
+  drawTailShape(p, a, ph, k, p.rig ? 0 : sway);
+  p.part = was;
+}
+
+function drawTailShape(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
   const { tx, ty } = a;
   const c = p.pal;
   let len = (ph.tail === 'stub' ? 5 : ph.tail === 'whip' ? 26 : 19) * k;
@@ -331,10 +367,15 @@ function tailTip(p: Pen, x: number, y: number, el: ElementId, k: number) {
 
 function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
   if (ph.wings === 'none') return;
-  const was = p.g;
+  const was = p.g, wasPart = p.part;
   p.g = far ? 'back' : 'front';
-  drawWingShape(p, a, ph, k, flap, far);
+  p.part = far ? 'wingFar' : 'wingNear';
+  const jx = ph.wings === 'flipper' && a.flatBack ? a.bx + a.brx * 0.42 + (far ? 4 : 0) : a.wx + (far ? 4 : 0) + (ph.wings === 'flipper' ? 4 : 0);
+  const jy = ph.wings === 'flipper' && a.flatBack ? a.by - a.bry * 0.3 + (far ? -1 : 0) : a.wy + (far ? -1 : 0) + (ph.wings === 'flipper' ? 2 : 0);
+  p.pivots[p.part] = p.at(jx, jy);
+  drawWingShape(p, a, ph, k, p.rig ? 0 : flap, far);
   p.g = was;
+  p.part = wasPart;
 }
 
 function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
@@ -451,6 +492,25 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
     }
     return;
   }
+  if (pose === 'happy') {
+    // Happy: eyes squeezed into upward arcs.
+    for (const [dx, dy, er0] of spots) {
+      const ex = x + r * dx, ey = y + r * dy, k = r * er0 * 0.9, w = Math.max(1.2, r * er0 * 0.42);
+      p.line(`M${f(ex - k)} ${f(ey + k * 0.35)}Q${f(ex)} ${f(ey - k * 0.95)} ${f(ex + k)} ${f(ey + k * 0.35)}`, c.out, w);
+    }
+    return;
+  }
+  if (pose === 'dizzy') {
+    // Dazed: spirals for eyes.
+    for (const [dx, dy, er0] of spots) {
+      const ex = x + r * dx, ey = y + r * dy, er = r * er0;
+      p.ell(ex, ey, er, er, '#ffffff');
+      const pts: string[] = [];
+      for (let i = 0; i <= 18; i++) { const t = i / 18, a2 = t * Math.PI * 3.4, rr = er * 0.82 * t; pts.push(`${f(ex + Math.cos(a2) * rr)} ${f(ey + Math.sin(a2) * rr)}`); }
+      p.line('M' + pts.join('L'), c.out, Math.max(0.9, er * 0.22));
+    }
+    return;
+  }
   if (pose === 'blink' || pose === 'hurt') {
     // Closed eyes for a blink; squeezed shut (> <) when hurt.
     spots.forEach(([dx, dy, er0], i) => {
@@ -490,7 +550,7 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
       return;
     }
     p.ell(ex, ey, rx, er, '#ffffff');
-    const ir = Math.min(er * (ph.eyes === 'big' ? 0.74 : 0.62), rx * 0.8), ix = ex + rx * 0.16, iy = ey + er * 0.06;
+    const ir = Math.min(er * (ph.eyes === 'big' ? 0.74 : 0.62), rx * 0.8), ix = ex + rx * (0.16 + p.look * 0.24), iy = ey + er * 0.06;
     p.dot(ix, iy, ir, iris);
     p.dot(ix + ir * 0.08, iy + ir * 0.05, ir * 0.55, INK);
     p.dot(ix - ir * 0.32, iy - ir * 0.38, ir * 0.32, '#ffffff');
@@ -501,6 +561,13 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
       p.line(`M${f(ex - rx)} ${f(ey - er * 0.02)}L${f(ex + rx)} ${f(ey - er * 0.02)}`, c.out, 1);
     }
   });
+  if ((pose === 'roar' || pose === 'guard') && ph.eyes !== 'multi') {
+    // Brows: angled down toward the nose for a roar, low and level for a determined guard.
+    spots.forEach(([dx, dy, er0], i) => {
+      const ex = x + r * dx, ey = y + r * dy, er = r * er0, side = i === 0 ? 1 : -1, hi = pose === 'roar' ? 1.25 : 1.05, lo = pose === 'roar' ? 0.62 : 0.92;
+      p.line(`M${f(ex - er * 1.05 * side)} ${f(ey - er * hi)}L${f(ex + er * 0.95 * side)} ${f(ey - er * lo)}`, c.out, Math.max(1.2, er * 0.36));
+    });
+  }
 }
 
 function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose: Pose = 'idle') {
@@ -557,8 +624,16 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
   p.g = 'face';
   drawEyes(p, hx, hy, r, ph, ko, pose);
-  const open = !ko && (pose === 'attack' || pose === 'cast' || pose === 'hurt');
-  if (ko) {
+  const open = !ko && (pose === 'attack' || pose === 'cast' || pose === 'hurt' || pose === 'roar');
+  const mouthX = ph.head === 'beak' ? hx + r * 1.0 : ph.head === 'long' ? hx + r * 1.0 : ph.head === 'snout' ? hx + r * 0.95 : ph.head === 'blunt' ? hx + r * 0.85 : hx + r * 0.55;
+  if (!ko && pose === 'happy') {
+    // A wide, open smile.
+    const mx = mouthX - r * 0.05, my = hy + r * 0.42, w = r * 0.3;
+    p.path(`M${f(mx - w)} ${f(my)}Q${f(mx)} ${f(my + w * 1.5)} ${f(mx + w)} ${f(my)}Z`, '#3a1626');
+    p.path(`M${f(mx - w * 0.5)} ${f(my + w * 0.55)}Q${f(mx)} ${f(my + w * 1.15)} ${f(mx + w * 0.5)} ${f(my + w * 0.55)}Z`, '#e0677a', { line: false });
+  } else if (!ko && pose === 'guard') {
+    p.line(`M${f(hx + r * 0.3)} ${f(hy + r * 0.5)}L${f(hx + r * 0.72)} ${f(hy + r * 0.46)}`, c.out, 1.2);
+  } else if (ko || pose === 'dizzy') {
     // Knocked out: a dazed, wavy mouth instead of a smile.
     const mx = ph.head === 'beak' || ph.head === 'long' ? hx + r * 0.75 : ph.head === 'snout' ? hx + r * 0.75 : hx + r * 0.5;
     const my = hy + r * 0.5, w = r * 0.22;
@@ -567,7 +642,7 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
     // Open mouth: a roar for attacks and casts, a gasp when hurt.
     const mx = ph.head === 'beak' ? hx + r * 1.0 : ph.head === 'long' ? hx + r * 1.0 : ph.head === 'snout' ? hx + r * 0.95 : ph.head === 'blunt' ? hx + r * 0.85 : hx + r * 0.55;
     const my = ph.head === 'beak' ? hy + r * 0.5 : hy + r * 0.48;
-    const mr = pose === 'hurt' ? r * 0.14 : pose === 'attack' ? r * 0.3 : r * 0.22;
+    const mr = pose === 'hurt' ? r * 0.14 : pose === 'roar' ? r * 0.38 : pose === 'attack' ? r * 0.3 : r * 0.22;
     p.ell(mx, my, mr, mr * (pose === 'hurt' ? 1 : 0.8), '#3a1626');
     if (pose !== 'hurt') p.ell(mx, my + mr * 0.35, mr * 0.55, mr * 0.3, '#e0677a', { line: false });
   } else if (ph.head !== 'beak' && ph.head !== 'blunt') p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
@@ -1212,35 +1287,75 @@ const STANCES: Record<Skeleton, StancePose[]> = {
 
 /** Draw a creature. Returns shapes back-to-front. */
 export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
+  return buildCreature(ph, o).shapes();
+}
+
+/** A creature split for the live rig: the body, plus a tail and wings that the app swings about their joints. */
+export interface Rig {
+  main: Shape[]; tail: Shape[]; wingFar: Shape[]; wingNear: Shape[];
+  pivots: Partial<Record<Part, [number, number]>>;
+}
+export function drawCreatureRig(ph: Pheno, o: DrawOpts): Rig {
+  const p = buildCreature(ph, { ...o, rig: true });
+  return { main: p.shapes('main'), tail: p.shapes('tail'), wingFar: p.shapes('wingFar'), wingNear: p.shapes('wingNear'), pivots: p.pivots };
+}
+
+/** How a pose tips the whole body: a quadruped rears up to cast, a swimmer noses down to strike. */
+function poseTilt(skel: Skeleton, reach: number, raise: number, guard: number): [number, number] {
+  switch (skel) {
+    case 'biped': return [3 * reach - 3 * raise - 4 * guard, 1.5 * guard];
+    case 'quad': return [3 * reach - 11 * raise + 3 * guard, 2 * guard];
+    case 'multi': return [2 * reach - 9 * raise, 1.5 * guard];
+    case 'aquatic': return [6 * reach - 9 * raise, 0];
+    case 'floater': return [8 * reach - 7 * raise - 4 * guard, 0];
+    default: return [0, 0];
+  }
+}
+
+function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   const pal = paletteFor(ph);
   const p = new Pen(pal);
+  p.rig = !!o.rig;
+  p.look = o.look ?? 0;
   const st = STAGE[Math.max(0, Math.min(4, o.stage))];
   const phase = o.phase ?? 0;
   const sw = o.walking ? Math.sin(phase * TAU) : 0;
-  const breathe = Math.sin(phase * TAU) * 0.6;
+  // While walking, each foot lifts as it swings forward, and the body rises as the feet pass under it.
+  const cw = o.walking ? Math.cos(phase * TAU) : 0;
   const b = st.body, hs = st.head, ls = st.limb, k = st.feat;
+  const liftA = Math.max(0, cw) * 4.5 * ls, liftB = Math.max(0, -cw) * 4.5 * ls;
+  const bob = o.walking ? -1.8 * (1 - Math.abs(sw)) : 0;
+  // On the live rig the app does the breathing, smoothly; drawn frames stay still.
+  const breathe = o.rig ? 0 : Math.sin(phase * TAU) * 0.6;
   const far = shade(pal.base, -0.1);
   const flap = Math.sin(phase * TAU * (o.walking ? 2 : 1));
-  const reach = o.pose === 'attack' ? 1 : 0;
-  const raise = o.pose === 'cast' ? 1 : 0;
+  const pw = poseWeights(o.pose);
+  const reach = o.ko ? 0 : o.reach ?? pw.reach, raise = o.ko ? 0 : o.raise ?? pw.raise, guard = o.ko ? 0 : o.guard ?? pw.guard;
   // A fainted creature slumps upright-ish; otherwise it holds its stance.
   const sp = o.ko ? S0 : STANCES[ph.skel][ph.stance ?? 0] ?? S0;
-  /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks. */
-  const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col: string, kx?: number, ky?: number, knee = 1) => {
+  const [tiltL, tiltD] = poseTilt(ph.skel, reach, raise, guard);
+  /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks or the foot lifts. */
+  const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col: string, kx?: number, ky?: number, knee = 1, lift = 0) => {
     const [x1, y1] = p.at(hx0, hy0);
     p.free(() => {
-      const bend = Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop) * 0.6) * 0.9 * knee;
+      const bend = (Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop) * 0.6) * 0.9 + lift * 0.9) * knee;
       const mx = kx ?? (x1 + fx) / 2, my = ky ?? (y1 + fy) / 2;
-      p.taper(x1, y1, fx, fy, w0, w1, col, mx + bend, my + (ky == null ? 0 : (y1 - hy0) * 0.5));
+      p.taper(x1, y1, fx, fy - lift, w0, w1, col, mx + bend, my - lift * 0.5 + (ky == null ? 0 : (y1 - hy0) * 0.5));
     });
   };
-  const freePaw = (x: number, y: number, w: number, col: string) => p.free(() => paw(x, y, w, col));
+  const freePaw = (x: number, y: number, w: number, col: string, lift = 0) => p.free(() => paw(x, y - lift, w, col, lift));
   const ft = sp.ft ?? 0;
-  const lean = (cx: number, cy: number) => { p.tf = sp.lean || sp.drop ? mkTf(cx, cy, sp.lean, sp.sx ?? 0, sp.drop) : null; };
+  const lean = (cx: number, cy: number) => {
+    const L = sp.lean + tiltL, D = sp.drop + tiltD + bob;
+    p.tf = L || D || sp.sx ? mkTf(cx, cy, L, sp.sx ?? 0, D) : null;
+  };
+  /** An arm, blended from its resting place toward a strike, a raised cast, or a guard. Each target: [x, y, bendx, bendy]. */
+  const blendArm = (rest: number[], strike: number[], up: number[], block: number[]) =>
+    rest.map((v, i) => v + (strike[i] - v) * reach + (up[i] - v) * raise + (block[i] - v) * guard);
   let a: Anchors;
-  /** A foot with two toe lines, pointing forward. */
-  const paw = (x: number, y: number, w: number, col: string) => {
-    p.ell(x + w * 0.22, y, w * 0.82, w * 0.46, col);
+  /** A foot with two toe lines, pointing forward; the toes tip up as the foot lifts. */
+  const paw = (x: number, y: number, w: number, col: string, lift = 0) => {
+    p.ell(x + w * 0.22, y, w * 0.82, w * 0.46, col, lift ? { rot: -lift * 4 } : undefined);
     p.line(`M${f(x + w * 0.5)} ${f(y - w * 0.08)}l0 ${f(w * 0.36)}M${f(x + w * 0.8)} ${f(y - w * 0.02)}l0 ${f(w * 0.3)}`, pal.out, 0.7);
   };
 
@@ -1262,15 +1377,18 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       a = { back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.9), hx: 53 + sp.hdx, hy: by - bry - hr * 0.5 + breathe * 0.4 + sp.hdy, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 44, wy: by - bry * 0.45, backx: 40, backy: by - bry * 0.72 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'back';
-      leg(52, hip, 54 - sw * 6 + ft, 87.6, 8.5 * ls, 5.4 * ls, far);
-      freePaw(54 - sw * 6 + ft, 89.2, 5.6 * ls, far);
-      // The far arm: up in a guard for a ready stance, otherwise hanging.
-      if (ph.stance === 1 && !o.ko && !reach && !raise) p.taper(55, by - bry * 0.35, 66, by - bry * 0.55, 5 * ls, 4 * ls, far, 64, by - bry * 0.05);
-      else p.taper(55, by - bry * 0.35, 63 - sw * 4, by + 3, 5 * ls, 3.6 * ls, far);
+      leg(52, hip, 54 - sw * 6 + ft, 87.6, 8.5 * ls, 5.4 * ls, far, undefined, undefined, 1, liftB);
+      freePaw(54 - sw * 6 + ft, 89.2, 5.6 * ls, far, liftB);
+      // The far arm: up in a guard for a ready stance, otherwise hanging and swinging against the legs.
+      {
+        const restX = 63 + sw * 4, rest = ph.stance === 1 && !o.ko ? [66, by - bry * 0.55, 64, by - bry * 0.05] : [restX, by + 3, (55 + restX) / 2 + 1, (by - bry * 0.35 + by + 3) / 2];
+        const [ex, ey, cx, cy] = blendArm(rest, [65, by - bry * 0.2, 62, by + bry * 0.12], [58, by - bry * 1.0, 61, by - bry * 0.45], [65, by - bry * 0.5, 63, by]);
+        p.taper(55, by - bry * 0.35, ex, ey, 5 * ls, 3.8 * ls, far, cx, cy);
+      }
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
-      leg(45, hip, 44 + sw * 6 - ft, 87.6, 10 * ls, 6 * ls, pal.base);
-      freePaw(44 + sw * 6 - ft, 89.2, 6.2 * ls, pal.base);
+      leg(45, hip, 44 + sw * 6 - ft, 87.6, 10 * ls, 6 * ls, pal.base, undefined, undefined, 1, liftA);
+      freePaw(44 + sw * 6 - ft, 89.2, 6.2 * ls, pal.base, liftA);
       // A pear-shaped torso: the belly is wider than the chest.
       p.ell(48, by, brx, bry, pal.base);
       p.ell(48, by + bry * 0.28, brx * 1.07, bry * 0.72, pal.base);
@@ -1279,14 +1397,18 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       drawPattern(p, a, ph, st.cue);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
-      // The near arm swings forward to strike, or up to cast.
-      if (reach) p.taper(50, by - bry * 0.3, 66, by - bry * 0.45, 5.6 * ls, 4.4 * ls, pal.base, 60, by - bry * 0.05);
-      else if (raise) p.taper(50, by - bry * 0.3, 60, by - bry * 1.05, 5.6 * ls, 4.4 * ls, pal.base, 59, by - bry * 0.4);
-      // Ready: fists up in front of the chest. Proud: the arm relaxed down the side. Hunched: arms hang forward.
-      else if (ph.stance === 1 && !o.ko) p.taper(50, by - bry * 0.3, 62, by - bry * 0.4, 5.6 * ls, 4.8 * ls, pal.base, 60, by + bry * 0.12);
-      else if (ph.stance === 2 && !o.ko) p.taper(50, by - bry * 0.3, 46 + sw * 3, by + bry * 0.38, 5.6 * ls, 4.2 * ls, pal.base, 51, by + bry * 0.05);
-      else if (ph.stance === 3 && !o.ko) p.taper(50, by - bry * 0.3, 58 + sw * 4, by + bry * 0.32, 5.6 * ls, 4.2 * ls, pal.base, 56, by + bry * 0.02);
-      else p.taper(50, by - bry * 0.3, 58 + sw * 4, by + 5, 5.6 * ls, 4.2 * ls, pal.base);
+      // The near arm rests by stance (ready: fist up; proud: down the side; hunched: hanging forward), swings
+      // against the legs when walking, and blends toward a strike, a raised cast or a guard.
+      {
+        const restX = 58 - sw * 4;
+        const rest = o.ko ? [restX, by + 5, (50 + restX) / 2, (by - bry * 0.3 + by + 5) / 2]
+          : ph.stance === 1 ? [62, by - bry * 0.4, 60, by + bry * 0.12]
+          : ph.stance === 2 ? [46 - sw * 3, by + bry * 0.38, 51, by + bry * 0.05]
+          : ph.stance === 3 ? [58 - sw * 4, by + bry * 0.32, 56, by + bry * 0.02]
+          : [restX, by + 5, (50 + restX) / 2 + 1, (by - bry * 0.3 + by + 5) / 2];
+        const [ex, ey, cx, cy] = blendArm(rest, [66, by - bry * 0.45, 60, by - bry * 0.05], [60, by - bry * 1.05, 59, by - bry * 0.4], [61, by - bry * 0.42, 59, by + bry * 0.1]);
+        p.taper(50, by - bry * 0.3, ex, ey, 5.6 * ls, 4.4 * ls, pal.base, cx, cy);
+      }
       p.g = 'body';
       break;
     }
@@ -1300,19 +1422,20 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hip = by + bry * 0.3;
       const fx = 46 + brx * 0.55, rx = 46 - brx * 0.6;
       p.g = 'back';
-      leg(fx + 4, hip, fx + 4 - sw * 6 + ft, 87.8, 7.5 * ls, 5 * ls, far, undefined, undefined, -0.7);
-      freePaw(fx + 4 - sw * 6 + ft, 89.3, 5.2 * ls, far);
-      leg(rx + 5, hip, rx + 5 + sw * 6 - ft, 87.8, 8.5 * ls, 5 * ls, far, rx + 5 - 3 * ls + sw * 3, 80, -1);
-      freePaw(rx + 5 + sw * 6 - ft, 89.3, 5.2 * ls, far);
+      leg(fx + 4, hip, fx + 4 - sw * 6 + ft, 87.8, 7.5 * ls, 5 * ls, far, undefined, undefined, -0.7, liftB);
+      freePaw(fx + 4 - sw * 6 + ft, 89.3, 5.2 * ls, far, liftB);
+      leg(rx + 5, hip, rx + 5 + sw * 6 - ft, 87.8, 8.5 * ls, 5 * ls, far, rx + 5 - 3 * ls + sw * 3, 80, -1, liftA);
+      freePaw(rx + 5 + sw * 6 - ft, 89.3, 5.2 * ls, far, liftA);
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
       // A front paw swipes forward on an attack.
-      const pawX = fx - 2 + sw * 6 + reach * 12 + ft, pawY = 87.8 - reach * 9;
-      leg(fx - 2, hip, pawX, pawY, 8.5 * ls, 5.6 * ls, pal.base, undefined, undefined, -0.7);
-      freePaw(pawX, pawY + 1.5, 5.8 * ls, pal.base);
+      // A front paw swipes forward on an attack, and lifts off the ground when rearing up.
+      const pawX = fx - 2 + sw * 6 + reach * 12 + raise * 4 + ft, pawY = 87.8 - reach * 9 - raise * 6;
+      leg(fx - 2, hip, pawX, pawY, 8.5 * ls, 5.6 * ls, pal.base, undefined, undefined, -0.7, liftA);
+      freePaw(pawX, pawY + 1.5, 5.8 * ls, pal.base, liftA);
       // The hind leg is thick at the haunch and bends back at the hock.
-      leg(rx - 1, hip - 1, rx - 1 - sw * 6 - ft, 87.8, 11.5 * ls, 5.6 * ls, pal.base, rx - 1 - 4 * ls - sw * 3, 80, -1);
-      freePaw(rx - 1 - sw * 6 - ft, 89.3, 5.8 * ls, pal.base);
+      leg(rx - 1, hip - 1, rx - 1 - sw * 6 - ft, 87.8, 11.5 * ls, 5.6 * ls, pal.base, rx - 1 - 4 * ls - sw * 3, 80, -1, liftB);
+      freePaw(rx - 1 - sw * 6 - ft, 89.3, 5.8 * ls, pal.base, liftB);
       p.taper(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 13 * b, 9 * b, pal.base);
       p.ell(46, by, brx, bry, pal.base);
       // A deeper chest and a rounded rump break up the plain oval.
@@ -1333,7 +1456,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.g = 'back';
       for (let i = 0; i < 3; i++) {
         const lx = thx - 7 + i * 6, s2 = (i % 2 === 0 ? sw : -sw) * 4;
-        leg(lx + 2, by + 2, lx + (i - 1) * (9 + ft) + 3 - s2, 90, 3.6 * ls, 1.8 * ls, far, lx + (i - 1) * 8 + 3, by - 4, 0);
+        leg(lx + 2, by + 2, lx + (i - 1) * (9 + ft) + 3 - s2, 90, 3.6 * ls, 1.8 * ls, far, lx + (i - 1) * 8 + 3, by - 4, 0, i % 2 === 0 ? liftB * 0.7 : liftA * 0.7);
       }
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
@@ -1344,19 +1467,19 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       shadeForm(p, thx, by - 1, thr, thr * 0.9);
       for (let i = 0; i < 3; i++) {
         const lx = thx - 8 + i * 6, s2 = (i % 2 === 0 ? -sw : sw) * 4;
-        leg(lx, by + 3, lx + (i - 1) * (10 + ft) - s2, 90, 4.2 * ls, 2 * ls, pal.dark, lx + (i - 1) * 9, by - 6, 0);
+        leg(lx, by + 3, lx + (i - 1) * (10 + ft) - s2, 90, 4.2 * ls, 2 * ls, pal.dark, lx + (i - 1) * 9, by - 6, 0, i % 2 === 0 ? liftA * 0.7 : liftB * 0.7);
       }
       break;
     }
     case 'serpent': {
       const hr = 11.5 * hs, w = 12.5 * b;
       const wv = o.walking ? Math.sin(phase * TAU) * 3 : breathe;
-      const hx = 68 + sp.hdx, hy = 40 + breathe * 0.5 + sp.hdy;
+      const hx = 68 + sp.hdx + reach * (sp.hdx > 5 ? 1 : 4) - raise * 2, hy = 40 + breathe * 0.5 + sp.hdy - raise * 5 + reach * 2;
       p.tf = null;
       a = { back: [24.5, 79.25 + wv * 0.125 - w * 0.3, 0], hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'body';
-      drawTail(p, a, ph, k * 0.8, 0);
+      drawTailShape(p, a, ph, k * 0.8, 0);
       // The body is one ribbon: thin at the tail, full through the coils, a little slimmer at the neck.
       const ctrl = [[14, 85 - wv], [24, 74 + wv], [36, 84 - wv * 0.5], [50, 92 + wv * 0.4], [58, 78], [63, 66], [58 + sp.hdx * 0.25, 56 + sp.hdy * 0.35], [56 + sp.hdx * 0.6, 48 + sp.hdy * 0.7], [hx - 3, hy + 5]];
       const pts: number[][] = [], ws: number[] = [];
@@ -1387,14 +1510,17 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.g = 'body';
       // Every swimmer has a fluke; the tail gene adds to it.
       const fl = sw * 4 + breathe * 2;
+      p.part = 'tail';
+      p.pivots.tail = p.at(a.tx + 3, by);
       p.path(`M${f(a.tx + 3)} ${f(by)}L${f(a.tx - 12 * b)} ${f(by - 11 * b + fl)}Q${f(a.tx - 7 * b)} ${f(by)} ${f(a.tx - 12 * b)} ${f(by + 11 * b + fl)}Z`, pal.accent);
       if (ph.el2 && (ph.tail === 'stub' || ph.tail === 'fan')) tailTip(p, a.tx - 9 * b, by - 9 * b + fl, ph.el2, 0.8 * k);
-      if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTail(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
+      if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTailShape(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
+      p.part = 'main';
       p.ell(48, by, brx, bry, pal.base);
       drawPattern(p, a, ph, st.cue);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
-      p.ell(48 + brx * 0.05, by + bry * 0.55, 8 * ls, 4 * ls, shade(pal.base, -0.08), { rot: 28 + sw * 14 });
+      p.ell(48 + brx * 0.05, by + bry * 0.55, 8 * ls, 4 * ls, shade(pal.base, -0.08), { rot: 28 + sw * 14 - raise * 20 + reach * 10 });
       p.g = 'body';
       break;
     }
@@ -1405,7 +1531,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       lean(50, cy + r);
       a = { back: ellFrame(50, cy, r, r * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - r * 0.35, hr, bx: 50, by: cy + r * 0.45, brx: r * 0.8, bry: r * 0.75, tx: 44, ty: cy + r * 1.25, tdir: -0.9, wx: 43, wy: cy - r * 0.1, backx: 40, backy: cy - r * 0.55 };
       drawWing(p, a, ph, k, flap, true);
-      const wv = Math.sin(phase * TAU) * 1.6;
+      const wv = o.rig && !o.walking ? 0 : Math.sin(phase * TAU) * 1.6;
       p.g = 'back';
       p.ell(50 - r * 0.75, cy + r * 0.6 - wv, 3.4 * ls, 3 * ls, far);
       p.g = 'body';
@@ -1413,9 +1539,13 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       drawPattern(p, a, ph, st.cue);
       shadeForm(p, 50, cy + r * 0.1, r * 0.86, r * 0.8);
       if (ph.tail !== 'stub') drawTail(p, { ...a, tx: 50 - r * 0.5, ty: cy + r * 1.2, tdir: -0.6 }, ph, k * 0.7, wv);
-      p.ell(50 + r * 0.95, cy + r * 0.45 + wv, 3.6 * ls, 3.2 * ls, pal.base);
+      // The near nub of an arm: forward to strike, up to cast.
+      p.ell(50 + r * 0.95 + reach * 4, cy + r * 0.45 + wv - raise * r * 0.7 - reach * 2, 3.6 * ls, 3.2 * ls, pal.base);
     }
   }
+  // A roar throws the head back; a guard tucks it in.
+  if (o.pose === 'roar') a = { ...a, hx: a.hx - 1, hy: a.hy - 2.5 };
+  else if (guard > 0.5) a = { ...a, hx: a.hx - 1, hy: a.hy + 1.5 };
 
   drawWing(p, a, ph, k, flap, false);
   p.g = 'body';
@@ -1438,7 +1568,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       star(p, 50 + Math.cos(ang) * 40, 54 + Math.sin(ang) * 32, 2.6, pal.glow, 0.9);
     }
   }
-  return p.shapes();
+  return p;
 }
 
 /** An egg, tinted by what will hatch: a hint, not the whole story. */

@@ -1,7 +1,7 @@
 // Visual effects for fights: projectiles, beams, impact bursts, support sparkles and dust puffs.
 // Each effect runs its own native-driver animation and removes itself when done.
 import React, { memo, useEffect, useRef } from 'react';
-import { Animated, Easing, View } from 'react-native';
+import { Animated, Easing, Text, View } from 'react-native';
 import Svg, { Circle, Ellipse, G, Path, Polygon } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
 
@@ -33,7 +33,13 @@ export type FxSpec =
   /** A whirl of wind around a rolling attacker. */
   | { id: number; kind: 'whirl'; el: ElementId; x: number; y: number; r: number }
   /** The whole field flashes. */
-  | { id: number; kind: 'flash'; color: string };
+  | { id: number; kind: 'flash'; color: string }
+  /** Healing: a soft ring and plus signs floating up. */
+  | { id: number; kind: 'heal'; x: number; y: number; s: number; color: string }
+  /** A shield bubble forming around a creature. */
+  | { id: number; kind: 'shieldUp'; x: number; y: number; s: number }
+  /** A stat going up (arrows rising) or down (arrows sinking). */
+  | { id: number; kind: 'stat'; x: number; y: number; s: number; color: string; up: boolean };
 
 /** An effect before it has been given an id. */
 export type FxNew = FxSpec extends infer T ? (T extends FxSpec ? Omit<T, 'id'> : never) : never;
@@ -440,6 +446,117 @@ const Flash = memo(function Flash({ s, done, W, H }: { s: Extract<FxSpec, { kind
   return <Animated.View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, backgroundColor: s.color, opacity: t.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 0.5, 0] }) }} />;
 });
 
+const Heal = memo(function Heal({ s, done }: { s: Extract<FxSpec, { kind: 'heal' }>; done: () => void }) {
+  const t = useRun(900, done, Easing.out(Easing.quad));
+  const R = s.s * 0.5, j = rand(s.id + 7);
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y + R * 0.55 - R * 0.3, width: R * 2, height: R * 0.6, borderRadius: R, borderWidth: 3, borderColor: s.color,
+        opacity: t.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.9, 0] }), transform: [{ scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1.3] }) }] }} />
+      {Array.from({ length: 6 }, (_, i) => {
+        const dx = (j() - 0.5) * R * 1.5, t0 = i * 0.08, r = 5 + j() * 4;
+        const tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.6)], outputRange: [0, 1], extrapolate: 'clamp' });
+        return (
+          <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x + dx - r, top: s.y + R * 0.3 - r, width: r * 2, height: r * 2,
+            opacity: tt.interpolate({ inputRange: [0, 0.15, 0.7, 1], outputRange: [0, 1, 1, 0] }),
+            transform: [{ translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, -R * 1.5] }) }, { scale: tt.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.4, 1.1, 0.8] }) }] }}>
+            <Svg width={r * 2} height={r * 2} viewBox="-10 -10 20 20"><Path d="M-3 -9 H3 V-3 H9 V3 H3 V9 H-3 V3 H-9 V-3 H-3Z" fill={i % 2 ? '#ffffff' : s.color} stroke="#1d4a2c" strokeWidth={1.2} /></Svg>
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+});
+
+const ShieldUp = memo(function ShieldUp({ s, done }: { s: Extract<FxSpec, { kind: 'shieldUp' }>; done: () => void }) {
+  const t = useRun(700, done, Easing.out(Easing.back(1.6)));
+  const R = s.s * 0.52;
+  const hex = Array.from({ length: 6 }, (_, i) => { const a = (i / 6) * Math.PI * 2 + Math.PI / 6; return `${(Math.cos(a) * R * 0.42).toFixed(1)},${(Math.sin(a) * R * 0.42).toFixed(1)}`; }).join(' ');
+  return (
+    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2,
+      opacity: t.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0, 1, 0.9, 0] }), transform: [{ scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }}>
+      <Svg width={R * 2} height={R * 2} viewBox={`${-R} ${-R} ${R * 2} ${R * 2}`}>
+        <Circle r={R - 2} fill="#9fe8ff" fillOpacity={0.18} stroke="#bff3ff" strokeWidth={2.5} />
+        <Polygon points={hex} fill="none" stroke="#e6fbff" strokeWidth={1.6} opacity={0.8} />
+        {[0, 1, 2, 3, 4, 5].map(i => { const a = (i / 6) * Math.PI * 2; return <Path key={i} d={`M${(Math.cos(a) * R * 0.42).toFixed(1)} ${(Math.sin(a) * R * 0.42).toFixed(1)} L${(Math.cos(a) * (R - 2)).toFixed(1)} ${(Math.sin(a) * (R - 2)).toFixed(1)}`} stroke="#e6fbff" strokeWidth={1.2} opacity={0.6} />; })}
+        <Ellipse cx={-R * 0.35} cy={-R * 0.45} rx={R * 0.25} ry={R * 0.12} fill="#ffffff" opacity={0.7} transform="rotate(-30)" />
+      </Svg>
+    </Animated.View>
+  );
+});
+
+const Stat = memo(function Stat({ s, done }: { s: Extract<FxSpec, { kind: 'stat' }>; done: () => void }) {
+  const t = useRun(800, done, Easing.out(Easing.quad));
+  const R = s.s * 0.45;
+  return (
+    <>
+      {[-0.55, 0, 0.55].map((dx, i) => {
+        const t0 = i * 0.12, tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.65)], outputRange: [0, 1], extrapolate: 'clamp' });
+        const w = 12, h = 16;
+        return (
+          <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x + dx * R - w / 2, top: s.y + (s.up ? R * 0.4 : -R * 0.6) - h / 2, width: w, height: h,
+            opacity: tt.interpolate({ inputRange: [0, 0.2, 0.75, 1], outputRange: [0, 1, 1, 0] }),
+            transform: [{ translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, (s.up ? -1 : 1) * R * 0.9] }) }, { scaleY: s.up ? 1 : -1 }] }}>
+            <Svg width={w} height={h} viewBox="-6 -8 12 16"><Path d="M0 -7.5 L5.5 -1 H2 V7.5 H-2 V-1 H-5.5Z" fill={s.color} stroke="#1b1420" strokeWidth={1.1} strokeLinejoin="round" /></Svg>
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+});
+
+/** Lasting signs of a creature's conditions, drawn over it while they last: flames, bubbles, dizzy stars, ice, a shield. */
+export const StatusFx = memo(function StatusFx({ statuses, shield, size }: { statuses: string[]; shield: boolean; size: number }) {
+  const t = useRef(new Animated.Value(0)).current;
+  const any = shield || statuses.length > 0;
+  useEffect(() => {
+    if (!any) return;
+    t.setValue(0);
+    const l = Animated.loop(Animated.timing(t, { toValue: 1, duration: 1800, easing: Easing.linear, useNativeDriver: true }));
+    l.start();
+    return () => l.stop();
+  }, [any, t]);
+  if (!any) return null;
+  const S = size, has = (k: string) => statuses.includes(k);
+  const cyc = (off: number, n = 1) => t.interpolate({ inputRange: [0, 1], outputRange: [off, off + n] });
+  const buff = has('atkUp') ? '#ff7a59' : has('defUp') ? '#6fb7ff' : has('haste') ? '#ffd34d' : has('boost') ? '#b48cff' : has('regen') ? '#5ad17a' : null;
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: S, height: S }}>
+      {buff ? (
+        <Animated.View style={{ position: 'absolute', left: S * 0.18, top: S * 0.84, width: S * 0.64, height: S * 0.12, borderRadius: S, borderWidth: 2, borderColor: buff,
+          opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.35, 0.85, 0.35] }), transform: [{ scaleX: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.92, 1.05, 0.92] }) }] }} />
+      ) : null}
+      {shield ? (
+        <Animated.View style={{ position: 'absolute', left: S * 0.12, top: S * 0.2, width: S * 0.76, height: S * 0.76, borderRadius: S, borderWidth: 2, borderColor: '#bff3ff', backgroundColor: 'rgba(159,232,255,0.12)',
+          opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 0.85, 0.55] }) }} />
+      ) : null}
+      {has('freeze') ? <View style={{ position: 'absolute', left: S * 0.2, top: S * 0.3, width: S * 0.6, height: S * 0.6, borderRadius: S * 0.2, backgroundColor: 'rgba(170,230,255,0.35)', borderWidth: 1.5, borderColor: '#e6fbff' }} /> : null}
+      {has('burn') ? [0, 1].map(i => (
+        <Animated.View key={'b' + i} style={{ position: 'absolute', left: S * (0.36 + i * 0.22), top: S * (0.5 + i * 0.08), width: S * 0.12, height: S * 0.18,
+          opacity: cyc(i * 0.5, 4).interpolate({ inputRange: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], outputRange: [0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9] }),
+          transform: [{ scaleY: cyc(i * 0.5, 4).interpolate({ inputRange: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], outputRange: [1, 0.8, 1.1, 0.85, 1, 0.8, 1.1, 0.85, 1, 0.8, 1] }) }] }}>
+          <Svg width={S * 0.12} height={S * 0.18} viewBox="-6 -10 12 18"><Path d="M0 -9 Q6 -2 4 3 Q2 8 0 8 Q-2 8 -4 3 Q-6 -2 0 -9Z" fill="#ff7a2a" /><Path d="M0 -3 Q3 1 2 4 Q0 7 -2 4 Q-3 1 0 -3Z" fill="#ffd34d" /></Svg>
+        </Animated.View>
+      )) : null}
+      {has('poison') ? [0, 1, 2].map(i => {
+        const tt = cyc(i / 3).interpolate({ inputRange: [0, 1, 2], outputRange: [0, 1, 0] , extrapolate: 'clamp' });
+        const ph = cyc(i / 3);
+        const p01 = ph.interpolate({ inputRange: [0, 1, 1.0001, 2], outputRange: [0, 1, 0, 1] });
+        void tt;
+        return (
+          <Animated.View key={'p' + i} style={{ position: 'absolute', left: S * (0.32 + i * 0.16), top: S * 0.55, width: S * 0.07, height: S * 0.07, borderRadius: S, backgroundColor: '#b45cff', borderWidth: 1, borderColor: '#5a2380',
+            opacity: p01.interpolate({ inputRange: [0, 0.15, 0.8, 1], outputRange: [0, 1, 0.8, 0] }), transform: [{ translateY: p01.interpolate({ inputRange: [0, 1], outputRange: [0, -S * 0.4] }) }] }} />
+        );
+      }) : null}
+      {has('stun') ? (
+        <Animated.View style={{ position: 'absolute', left: S * 0.3, top: S * 0.06, width: S * 0.4, height: S * 0.4, transform: [{ scaleY: 0.35 }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '720deg'] }) }] }}>
+          {[0, 1, 2].map(i => { const a = (i / 3) * Math.PI * 2; return <Text key={i} style={{ position: 'absolute', left: S * 0.2 + Math.cos(a) * S * 0.18 - 6, top: S * 0.2 + Math.sin(a) * S * 0.18 - 8, fontSize: 13, color: '#ffe066' }}>★</Text>; })}
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+});
+
 export const FxLayer = memo(function FxLayer({ items, onDone, W, H }: { items: FxSpec[]; onDone: (id: number) => void; W: number; H: number }) {
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H }}>
@@ -463,6 +580,9 @@ export const FxLayer = memo(function FxLayer({ items, onDone, W, H }: { items: F
           case 'breath': return <Breath key={s.id} s={s} done={done} W={W} H={H} />;
           case 'whirl': return <Whirl key={s.id} s={s} done={done} />;
           case 'flash': return <Flash key={s.id} s={s} done={done} W={W} H={H} />;
+          case 'heal': return <Heal key={s.id} s={s} done={done} />;
+          case 'shieldUp': return <ShieldUp key={s.id} s={s} done={done} />;
+          case 'stat': return <Stat key={s.id} s={s} done={done} />;
         }
       })}
     </View>

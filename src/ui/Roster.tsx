@@ -7,7 +7,7 @@ import { Creature, PedNode, STAGE_NAMES, buildLabel, slotRarities, stageLevels, 
 import { NAME_MAX, expandRoster, release, releaseValue, renameCreature, rosterExpandCost, useScan } from '../game/economy';
 import { PART_KEYS, PART_LABELS, SKELETON_NAMES, STANCE_NAMES, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
-import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, MoveRow, P, SexMark, Stars, TypeChips, st } from './kit';
+import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, TypeChips, st } from './kit';
 import { useGame } from './store';
 
 function PedCard({ n, label, size }: { n?: PedNode; label: string; size: number }) {
@@ -48,7 +48,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
       <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: 50 }}>
         <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
           <View style={{ alignItems: 'center' }}>
-            <CreatureView ph={ph} stage={stage} size={W * 0.55} />
+            <LiveCreature ph={ph} stage={stage} size={W * 0.55} />
             {editing != null ? (
               <View style={[st.row, { marginVertical: 4 }]}>
                 <TextInput

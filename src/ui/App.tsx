@@ -10,7 +10,7 @@ import { Run } from '../game/run';
 import { TUT } from '../game/save';
 import { AdventureScreen } from './Adventure';
 import { BattleScreen } from './Battle';
-import { Btn, C, Card, CreatureView, H, P, Stars, TypeChips, st } from './kit';
+import { Btn, C, Card, CreatureView, H, LiveCreature, P, Stars, TypeChips, st } from './kit';
 import { MoreScreen } from './More';
 import { BreedScreen, NurseryScreen } from './Nursery';
 import { RosterScreen } from './Roster';
@@ -47,7 +47,7 @@ function StarterPick() {
         return (
           <Card key={s.name} onPress={() => setSel(i)} style={{ borderColor: sel === i ? C.gold : C.line, borderWidth: sel === i ? 2 : 1 }}>
             <View style={st.row}>
-              <CreatureView ph={ph} stage={0} size={W * 0.26} />
+              <LiveCreature ph={ph} stage={0} size={W * 0.26} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: C.text, fontSize: 18, fontWeight: '800' }}>{s.name}</Text>
                 <TypeChips ph={ph} />

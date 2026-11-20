@@ -7,7 +7,7 @@ import { Creature, Egg, STAGE_NAMES, stageLevels, stageOf, typeLabel } from '../
 import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, doBreed, forecast, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
 import { SKELETON_NAMES, express, starRating } from '../game/genome';
 import { TUT } from '../game/save';
-import { Bar, Btn, C, Card, CreatureTile, CreatureView, EggView, H, P, SexMark, Stars, TypeChips, st } from './kit';
+import { Bar, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, P, SexMark, Stars, TypeChips, st } from './kit';
 import { CreatureDetail } from './Roster';
 import { fmtTime, rng, useGame, useNow } from './store';
 
@@ -118,7 +118,7 @@ function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
             {phase === 'creature' ? (
               <>
                 <Animated.View style={{ opacity: pop, transform: [{ scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }}>
-                  <CreatureView ph={ph} stage={stageOf(c)} size={W * 0.6} />
+                  <LiveCreature ph={ph} stage={stageOf(c)} size={W * 0.6} />
                 </Animated.View>
                 <View style={st.row}>
                   <Text style={{ color: C.text, fontSize: 24, fontWeight: '900' }}>{c.name}</Text>

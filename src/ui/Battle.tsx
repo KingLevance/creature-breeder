@@ -16,7 +16,7 @@ import { express, starRating } from '../game/genome';
 import { FightResult, Loot, Run, finishFight, startBattle } from '../game/run';
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
-import { FxLayer, FxNew, FxSpec, isBeam } from './Fx';
+import { FxLayer, FxNew, FxSpec, StatusFx, isBeam } from './Fx';
 import { Bar, Btn, C, CreatureView, EggView, LiveCreature, P, Stars, readable, st } from './kit';
 import type { Pose } from '../render/creature';
 import { rng, useGame } from './store';
@@ -31,6 +31,11 @@ const snap = (b: Battle): UV[] => b.units.map(u => ({ hp: u.hp, shield: u.shield
 const STATUS_TAG: Record<StatusKind, string> = {
   burn: 'BRN', poison: 'PSN', stun: 'STN', freeze: 'FRZ', slow: 'SPD-', haste: 'SPD+', atkUp: 'ATK+', atkDown: 'ATK-', defUp: 'DEF+',
   defDown: 'DEF-', evade: 'EVA', dodge: 'DGE', regen: 'RGN', counter: 'CTR', hidden: 'HID', link: 'LNK', boost: 'BST', wound: 'WND',
+};
+const STATUS_COLOR: Record<StatusKind, string> = {
+  atkUp: '#ff7a59', defUp: '#6fb7ff', haste: '#ffd34d', evade: '#9fe8ff', dodge: '#9fe8ff', regen: '#5ad17a', counter: '#ff9f5a',
+  hidden: '#b9b3cc', link: '#ff8fc7', boost: '#b48cff', burn: '#ff7a2a', poison: '#b45cff', stun: '#f3e05a', freeze: '#9fe8ff',
+  slow: '#7aa8ff', atkDown: '#ff7a59', defDown: '#6fb7ff', wound: '#d9534f',
 };
 const STATUS_WORD: Record<StatusKind, string> = {
   burn: 'Burned', poison: 'Poisoned', stun: 'Stunned', freeze: 'Frozen', slow: 'Slowed', haste: 'Faster', atkUp: 'Attack up', atkDown: 'Attack down',
@@ -189,7 +194,6 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   }, [setAct]);
   const nextId = useRef(0);
   const ua = useRef<Record<number, UA>>({});
-  const breath = useRef(new Animated.Value(0)).current;
   const travel = useRef(new Animated.Value(0)).current;
   /** The whole field shakes on heavy blows. */
   const quake = useRef(new Animated.Value(0)).current;
@@ -212,14 +216,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
   useEffect(() => {
     live.current = true;
-    // Breathing: a slow squash and stretch from the feet, shared by everyone but offset between neighbours.
-    const loop = Animated.loop(Animated.sequence([
-      Animated.timing(breath, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
-      Animated.timing(breath, { toValue: 0, duration: 1100, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
-    ]));
-    loop.start();
-    return () => { live.current = false; loop.stop(); };
-  }, [breath]);
+    return () => { live.current = false; };
+  }, []);
 
   const addFloat = useCallback((uid: number, text: string, color: string, big?: boolean) => {
     setFloats(fs => [...fs.slice(-14), { id: ++nextId.current, uid, text, color, big }]);
@@ -301,6 +299,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     let statusSound = false;
     let lastStyle = '';
     let lastBig = false;
+    let launch = false;
     for (const e of events) {
       if (!live.current) return;
       switch (e.t) {
@@ -318,6 +317,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           lastStyle = e.style; lastBig = big;
           if (e.style === 'melee' && targets[0]) {
             const pt = place(targets[0]);
+            const u0 = b.units[e.u];
             const tx = pt.x - dir * (pt.sz * 0.42 + pa.sz * 0.36) - pa.x;
             const ty = pt.feet - pa.feet + 2;
             melee = e.u;
@@ -369,8 +369,20 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               case 'slash':
                 await runTo();
                 await windUp();
-                await strike(24, 90);
-                addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 3, s: pt.sz * 0.95 });
+                if (Math.random() < 0.5) {
+                  await strike(24, 90);
+                  addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 3, s: pt.sz * 0.95 });
+                } else {
+                  // A crossing X: one cut each way.
+                  await strike(18, 80);
+                  addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 1, s: pt.sz * 1.1 });
+                  setAct(e.u, { pose: 'cast' });
+                  sfx('swing');
+                  await run(Animated.parallel([tm(a.lean, -6, 70), tm(a.ox, tx + dir * 4, 70)]));
+                  setAct(e.u, { pose: 'attack' });
+                  await run(Animated.parallel([tm(a.lean, 20, 80, Easing.out(Easing.quad)), tm(a.ox, tx + dir * 22, 80)]));
+                  addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir: -dir, n: 1, s: pt.sz * 1.1 });
+                }
                 break;
               case 'bite':
                 await runTo();
@@ -430,10 +442,36 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 addFx({ kind: 'charge', el: e.el, x: pt.x, y: pt.midY });
                 await run(Animated.parallel([tm(a.ox, tx + dir * 14, 130), tm(a.blink, 1, 170)]));
                 break;
-              default:
+              default: {
                 await runTo();
-                await windUp();
-                await strike();
+                const v = Math.random();
+                if (v < 0.25) {
+                  // Headbutt: rear back, then drive in head first.
+                  await run(Animated.parallel([tm(a.lean, -20, 150 * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.84, 150 * T()), tm(a.ox, tx - dir * 8, 150 * T())]));
+                  setAct(e.u, { pose: 'roar' });
+                  sfx('swing');
+                  await run(Animated.parallel([tm(a.lean, 32, 90, Easing.out(Easing.quad)), tm(a.stretch, 1.2, 90), tm(a.ox, tx + dir * 18, 90, Easing.out(Easing.quad))]));
+                } else if (v < 0.5) {
+                  // Uppercut: crouch, then spring up through the target and launch it.
+                  await run(Animated.parallel([tm(a.stretch, 0.8, 130 * T()), tm(a.lean, -6, 130 * T()), tm(a.ox, tx - dir * 2, 130 * T())]));
+                  setAct(e.u, { pose: 'cast' });
+                  sfx('swing');
+                  await run(Animated.parallel([tm(a.oy, ty - pa.sz * 0.2, 100, Easing.out(Easing.quad)), tm(a.stretch, 1.2, 100), tm(a.lean, 12, 100), tm(a.ox, tx + dir * 12, 100)]));
+                  launch = true;
+                  tm(a.oy, ty, 220, Easing.in(Easing.quad)).start();
+                } else if (v < 0.7 && u0.ph.tail !== 'stub') {
+                  // Tail swipe: a quick spin on the spot, the tail sweeping through the target.
+                  sfx('swing');
+                  for (let i = 0; i < 4; i++) { setAct(e.u, { turned: i % 2 === 0 }); await sleep(55); }
+                  addFx({ kind: 'whirl', el: e.el, x: pa.x + tx + dir * pa.sz * 0.15, y: pa.feet + ty - pa.sz * 0.25, r: pa.sz * 0.5 });
+                  addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.feet - pt.sz * 0.22, dir, n: 1, s: pt.sz * 1.2 });
+                  setAct(e.u, { turned: false, pose: 'attack' });
+                  await run(Animated.parallel([tm(a.ox, tx + dir * 12, 80), tm(a.lean, 10, 80)]));
+                } else {
+                  await windUp();
+                  await strike();
+                }
+              }
             }
           } else if (e.style === 'ranged') {
             sfx(castSfx(e.el));
@@ -552,7 +590,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             }
           } else {
             sfx(e.heal ? 'heal' : castSfx(e.el) === 'magic' ? 'magic' : 'buff');
-            flashPose(e.u, 'cast', 450);
+            flashPose(e.u, e.heal || !targets.some(t => t.side === b.units[e.u].side) ? 'cast' : 'roar', 500);
             Animated.sequence([
               Animated.timing(a.oy, { toValue: -12, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
               Animated.timing(a.oy, { toValue: 0, duration: 160, easing: Easing.in(Easing.quad), useNativeDriver: ND }),
@@ -579,9 +617,15 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             jolt(e.u, t.side === 0 ? -1 : 1, e.mult > 1 || lastBig ? 14 : 8);
           } else if (e.from >= 0) addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
           if (e.from >= 0 && (e.mult > 1 || e.n > t.max.hp * 0.3)) shakeField(e.mult > 1 ? 6 : 4);
+          if (launch && t.alive) {
+            launch = false;
+            const ta = A(e.u);
+            Animated.sequence([tm(ta.oy, -pt.sz * 0.3, 160, Easing.out(Easing.quad)), tm(ta.oy, 0, 200, Easing.in(Easing.quad)), tm(ta.oy, -pt.sz * 0.06, 90, Easing.out(Easing.quad)), tm(ta.oy, 0, 90, Easing.in(Easing.quad))]).start();
+          }
+          if (e.shield > 0 && t.alive) addFx({ kind: 'shieldUp', x: pt.x, y: pt.midY, s: pt.sz });
           sfx(e.mult > 1 || e.n > t.max.hp * 0.3 ? 'hitBig' : 'hit');
           const a = A(e.u);
-          if (t.alive) flashPose(e.u, 'hurt', 320);
+          if (t.alive) flashPose(e.u, e.shield >= e.n ? 'guard' : 'hurt', 320);
           Animated.sequence([
             Animated.timing(a.lean, { toValue: -10, duration: 60, useNativeDriver: ND }),
             Animated.spring(a.lean, { toValue: 0, friction: 4, tension: 140, useNativeDriver: ND }),
@@ -599,6 +643,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         case 'miss': {
           addFloat(e.u, 'Dodged', '#9fe8ff');
           sfx('miss');
+          flashPose(e.u, 'guard', 450);
           const a = A(e.u);
           const dir = b.units[e.u].side === 0 ? -1 : 1;
           Animated.sequence([
@@ -612,11 +657,31 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           await sleep(200 * T());
           break;
         }
-        case 'heal': if (e.n > 0) { patch(e.u, v => ({ ...v, hp: v.hp + e.n })); addFloat(e.u, `+${e.n}`, C.good); await sleep(120 * T()); } break;
-        case 'shield': if (e.n > 0) { patch(e.u, v => ({ ...v, shield: v.shield + e.n })); addFloat(e.u, 'Shield', '#9fe8ff'); sfx('shield'); await sleep(110 * T()); } break;
+        case 'heal': if (e.n > 0) {
+          patch(e.u, v => ({ ...v, hp: v.hp + e.n }));
+          addFloat(e.u, `+${e.n}`, C.good);
+          const p2 = place(b.units[e.u]);
+          addFx({ kind: 'heal', x: p2.x, y: p2.midY, s: p2.sz, color: C.good });
+          flashPose(e.u, 'happy', 650);
+          await sleep(120 * T());
+        } break;
+        case 'shield': if (e.n > 0) {
+          patch(e.u, v => ({ ...v, shield: v.shield + e.n }));
+          addFloat(e.u, 'Shield', '#9fe8ff');
+          sfx('shield');
+          const p2 = place(b.units[e.u]);
+          addFx({ kind: 'shieldUp', x: p2.x, y: p2.midY, s: p2.sz });
+          flashPose(e.u, 'guard', 600);
+          await sleep(110 * T());
+        } break;
         case 'status':
           patch(e.u, v => (v.statuses.includes(e.k) ? v : { ...v, statuses: [...v.statuses, e.k] }));
           addFloat(e.u, STATUS_WORD[e.k], isBuff(e.k) ? '#9fe8a0' : '#f3a5ff');
+          {
+            const p2 = place(b.units[e.u]);
+            addFx({ kind: 'stat', x: p2.x, y: p2.midY, s: p2.sz, color: STATUS_COLOR[e.k], up: isBuff(e.k) });
+            if (isBuff(e.k)) flashPose(e.u, 'roar', 450);
+          }
           if (!statusSound && !isBuff(e.k) && b.units[e.u].side !== attackerSide) { statusSound = true; sfx('debuff'); }
           await sleep(80 * T());
           break;
@@ -663,8 +728,22 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     if (res.chest) setTimeout(() => sfx('chest'), 900);
     if (res.xp.some(x => x.newStage != null)) setTimeout(() => sfx('grow'), 1400);
     else if (res.xp.some(x => x.levels > 0)) setTimeout(() => sfx('levelup'), 1400);
-    setResult(res);
-  }, [mutate, theRun]);
+    if (res.won && theRun.kind !== 'raid') {
+      // The winners cheer and hop before the results come up.
+      b.units.filter(u => u.side === 0 && u.alive).forEach((u, i) => {
+        const a = A(u.uid);
+        setTimeout(() => {
+          flashPose(u.uid, 'happy', 1300);
+          Animated.sequence([
+            tm(a.oy, -place(u).sz * 0.22, 170, Easing.out(Easing.quad)), tm(a.oy, 0, 170, Easing.in(Easing.quad)),
+            tm(a.oy, -place(u).sz * 0.14, 140, Easing.out(Easing.quad)), tm(a.oy, 0, 140, Easing.in(Easing.quad)),
+          ]).start();
+          Animated.sequence([tm(a.stretch, 0.85, 90), tm(a.stretch, 1.1, 170), Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 160, useNativeDriver: ND })]).start();
+        }, i * 90);
+      });
+      setTimeout(() => setResult(res), 1100);
+    } else setResult(res);
+  }, [mutate, theRun, flashPose, place]);
 
   const step = useCallback(async () => {
     const b = bRef.current!;
@@ -814,8 +893,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   transform: [
                     { translateY: pos.sz * 0.42 },
                     { rotate: a.lean.interpolate({ inputRange: [-90, 90], outputRange: u.side === 0 ? ['-90deg', '90deg'] : ['90deg', '-90deg'] }) },
-                    { scaleX: Animated.multiply(a.stretch, v.alive ? breath.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [1, 0.985] : [0.985, 1] }) : 1) },
-                    { scaleY: Animated.multiply(a.stretch.interpolate({ inputRange: [0.5, 1, 1.5], outputRange: [1.4, 1, 0.8] }), v.alive ? breath.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [1, 1.035] : [1.035, 1] }) : 1) },
+                    { scaleX: a.stretch },
+                    { scaleY: a.stretch.interpolate({ inputRange: [0.5, 1, 1.5], outputRange: [1.4, 1, 0.8] }) },
                     { translateY: -pos.sz * 0.42 },
                   ],
                 }}>
@@ -830,7 +909,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                     { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
                   ],
                 }}>
-                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive} pose={acts[u.uid]?.pose} turned={acts[u.uid]?.turned} />
+                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
+                  {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} /> : null}
                 </Animated.View>
                 </Animated.View>
                 {showBars ? (
