@@ -359,12 +359,20 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
       if (!far) p.ell(x - 9 * k, y - 2 * k - up * 0.5, 10 * k, 4.2 * k, c.light, { rot: 12 + flap * 8, op: 0.6 });
       break;
     case 'flipper': {
-      // A paddle that hangs from the shoulder and sweeps back, like a seal's or a penguin's.
+      // A pectoral fin: narrow where it joins the shoulder, fanning out behind into a scalloped edge with ribs,
+      // in the wing colour so it reads as a fin and not a horn.
       const sx = a.flatBack ? a.bx + a.brx * 0.42 + (far ? 4 : 0) : x + 4, sy = a.flatBack ? a.by - a.bry * 0.3 + (far ? -1 : 0) : y + 2;
-      const tipx = sx - 7 * k + flap * 2, tipy = sy + 14 * k - up * 0.4;
-      const col2 = far ? c.dark : shade(c.base, -0.07);
-      p.taper(sx, sy, tipx, tipy, 7.5 * k, 2.6 * k, col2, sx + 1.5 * k, sy + 8 * k);
-      if (!far) p.line(`M${f(sx - 1.5 * k)} ${f(sy + 2 * k)}Q${f(sx - 1 * k)} ${f(sy + 8 * k)} ${f(tipx + 1.2 * k)} ${f(tipy - 1.2 * k)}`, shade(c.base, 0.1), 1.1 * k);
+      const lift = up * 0.35;
+      const ax = sx - 14 * k, ay = sy + 1 * k - lift, ex = sx - 5.5 * k, ey = sy + 13 * k - lift * 0.6;
+      p.path(`M${f(sx + 1.5 * k)} ${f(sy - 1.5 * k)}Q${f(sx - 5 * k)} ${f(sy - 4.5 * k - lift)} ${f(ax)} ${f(ay)}`
+        + `Q${f(sx - 11 * k)} ${f(sy + 3 * k - lift)} ${f(sx - 11.5 * k)} ${f(sy + 6 * k - lift)}`
+        + `Q${f(sx - 8 * k)} ${f(sy + 7 * k - lift)} ${f(sx - 9 * k)} ${f(sy + 10 * k - lift)}`
+        + `Q${f(sx - 6 * k)} ${f(sy + 10 * k - lift)} ${f(ex)} ${f(ey)}`
+        + `Q${f(sx - 0.5 * k)} ${f(sy + 8 * k)} ${f(sx - 0.5 * k)} ${f(sy + 2.5 * k)}Z`, col);
+      const rib = far ? shade(c.accentDark, -0.12) : c.accentDark;
+      for (const [rx, ry] of [[ax + 2 * k, ay + 0.6 * k], [sx - 10.5 * k, sy + 5.5 * k - lift], [sx - 8.5 * k, sy + 9.2 * k - lift], [ex + 0.6 * k, ey - 1.6 * k]]) {
+        p.line(`M${f(sx - 0.5 * k)} ${f(sy + 0.8 * k)}L${f(rx)} ${f(ry)}`, rib, 0.8 * k + 0.2);
+      }
       break;
     }
     case 'fin':
