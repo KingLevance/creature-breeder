@@ -38,7 +38,7 @@ function mix(a: string, b: string, t: number): string {
   return '#' + ch(16) + ch(8) + ch(0);
 }
 
-export interface Palette { base: string; light: string; dark: string; glow: string; accent: string; accentDark: string; out: string }
+export interface Palette { base: string; light: string; dark: string; glow: string; accent: string; accentDark: string; out: string; mark: string; markGlow: string }
 
 export function paletteFor(ph: Pheno): Palette {
   const e = ELEMENTS[ph.el1];
@@ -57,7 +57,10 @@ export function paletteFor(ph: Pheno): Palette {
   };
   const base = tone(e.base);
   const acc = ph.el2 ? ELEMENTS[ph.el2].base : tone(e.light);
-  return { base, light: tone(e.light), dark: tone(e.dark), glow: e.glow, accent: acc, accentDark: shade(acc, -0.18), out: shade(tone(e.dark), -0.14) };
+  // A second element shows in the markings (spots, stripes, bands, stars) and in the tail tip.
+  const e2 = ph.el2 ? ELEMENTS[ph.el2] : null;
+  return { base, light: tone(e.light), dark: tone(e.dark), glow: e.glow, accent: acc, accentDark: shade(acc, -0.18), out: shade(tone(e.dark), -0.14),
+    mark: e2 ? e2.dark : tone(e.dark), markGlow: e2 ? e2.glow : e.glow };
 }
 
 // ---------- Drawing helpers
@@ -132,6 +135,8 @@ const STAGE = [
 ];
 
 interface Anchors {
+  /** Bodies with a horizontal back (four- and many-legged, swimmers), where things can sit on top. */
+  flatBack?: boolean;
   hx: number; hy: number; hr: number;
   bx: number; by: number; brx: number; bry: number;
   tx: number; ty: number; tdir: number;
@@ -181,7 +186,7 @@ function drawTail(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
   const ex = tx - len * Math.cos(tdir), ey = ty - len * Math.sin(tdir) + sway;
   const kx = tx - len * 0.6 * Math.cos(tdir) / Math.cos(a.tdir || 0.01), ky = ty + 4 * k;
   const w = ph.tail === 'whip' ? 2.4 : 5 * Math.max(0.6, k);
-  if (ph.tail === 'stub') { p.ell(tx - 2, ty, 4.5 * Math.max(0.7, k), 3.6 * Math.max(0.7, k), c.base); return; }
+  if (ph.tail === 'stub') { p.ell(tx - 2, ty, 4.5 * Math.max(0.7, k), 3.6 * Math.max(0.7, k), c.base); if (ph.el2) tailTip(p, tx - 5, ty, ph.el2, Math.max(0.6, k * 0.75)); return; }
   if (ph.tail === 'stinger') {
     const sx = tx - 6 * k, sy = ty - 20 * k + sway;
     p.limb(tx, ty, sx, sy, w, c.base, tx - 16 * k, ty - 8 * k);
@@ -189,10 +194,40 @@ function drawTail(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
     return;
   }
   p.limb(tx, ty, ex, ey, w, c.base, kx, ky);
+  if (ph.el2) { tailTip(p, ex, ey, ph.el2, Math.max(0.75, k)); return; }
   if (ph.tail === 'tuft') p.ell(ex, ey, 5 * k, 4.4 * k, c.accent);
   if (ph.tail === 'club') p.ell(ex, ey, 6 * k, 5.4 * k, c.dark);
   if (ph.tail === 'fan') p.poly([[ex + 2, ey], [ex - 8 * k, ey - 8 * k], [ex - 10 * k, ey], [ex - 8 * k, ey + 7 * k]], c.accent);
   if (ph.tail === 'plume') flame(p, ex - 1, ey - 1, 5.5 * k, c.accent, c.glow);
+}
+
+/** A dual-type creature's tail ends in a piece of its second element. Drawn around (x, y), about 10 units across. */
+function tailTip(p: Pen, x: number, y: number, el: ElementId, k: number) {
+  const e = ELEMENTS[el];
+  const s = k;
+  const P = (pts: number[][]) => pts.map(([a, b]) => [x + a * s, y + b * s]);
+  switch (el) {
+    case 'ember': flame(p, x - 1, y - 1, 5.5 * s, e.base, e.glow); break;
+    case 'tide': p.path(`M${f(x)} ${f(y - 8 * s)}Q${f(x + 6 * s)} ${f(y)} ${f(x)} ${f(y + 4 * s)}Q${f(x - 6 * s)} ${f(y)} ${f(x)} ${f(y - 8 * s)}Z`, e.base); p.dot(x - 1.5 * s, y - 0.5 * s, 1.4 * s, e.glow); break;
+    case 'verdant': p.path(`M${f(x + 1)} ${f(y)}Q${f(x - 4 * s)} ${f(y - 9 * s)} ${f(x - 9 * s)} ${f(y - 8 * s)}Q${f(x - 7 * s)} ${f(y + 1 * s)} ${f(x + 1)} ${f(y)}Z`, e.base); p.line(`M${f(x)} ${f(y)}L${f(x - 7 * s)} ${f(y - 6.5 * s)}`, e.dark, 0.9); break;
+    case 'spark': p.poly(P([[1, 0], [-3, -5], [-1, -5], [-5, -11], [2, -4], [0, -4], [3, 1]]), e.base); break;
+    case 'frost': p.poly(P([[-1, 1], [-4, -8], [0, -3]]), e.light); p.poly(P([[0, 1], [2, -10], [4, -1]]), e.glow); break;
+    case 'brawn': p.ell(x - 1 * s, y, 5 * s, 4.5 * s, e.dark); p.line(`M${f(x - 3 * s)} ${f(y - 3 * s)}L${f(x - 3 * s)} ${f(y + 3 * s)}`, e.light, 1.2); break;
+    case 'venom': p.path(`M${f(x - 2 * s)} ${f(y - 4 * s)}Q${f(x + 5 * s)} ${f(y - 3 * s)} ${f(x + 2 * s)} ${f(y + 3 * s)}Q${f(x)} ${f(y + 8 * s)} ${f(x - 2 * s)} ${f(y + 3 * s)}Q${f(x - 6 * s)} ${f(y - 2 * s)} ${f(x - 2 * s)} ${f(y - 4 * s)}Z`, e.base); p.dot(x - 0.5 * s, y + 4.5 * s, 1.2 * s, e.glow); break;
+    case 'terra': p.poly(P([[-6, 1], [-5, -4], [0, -6], [4, -3], [4, 2], [-1, 4]]), e.dark); p.dot(x - 2 * s, y - 2 * s, 1.1 * s, '#b3aa98'); break;
+    case 'gale': p.path(`M${f(x + 1)} ${f(y)}Q${f(x - 3 * s)} ${f(y - 10 * s)} ${f(x - 8 * s)} ${f(y - 11 * s)}Q${f(x - 7 * s)} ${f(y - 3 * s)} ${f(x + 1)} ${f(y)}Z`, e.light); p.line(`M${f(x)} ${f(y)}Q${f(x - 4 * s)} ${f(y - 6 * s)} ${f(x - 7 * s)} ${f(y - 10 * s)}`, e.dark, 0.8); break;
+    case 'mind': p.poly(P([[0, -6], [4, 0], [0, 6], [-4, 0]]), e.base); p.poly(P([[0, -3], [2, 0], [0, 3], [-2, 0]]), e.glow, { line: false }); break;
+    case 'swarm': p.ell(x - 2 * s, y, 4 * s, 3 * s, e.base); p.ell(x - 6 * s, y - 1 * s, 3 * s, 2.4 * s, e.dark); p.poly(P([[-8, -2], [-12, -3], [-8, 0]]), e.dark); break;
+    case 'stone': p.poly(P([[-6, 2], [-6, -3], [-2, -6], [3, -4], [4, 1], [0, 4]]), e.base); p.poly(P([[-3, -3], [0, -5], [1, -2]]), e.light, { line: false }); break;
+    case 'spirit': p.path(`M${f(x)} ${f(y)}Q${f(x - 6 * s)} ${f(y - 2 * s)} ${f(x - 5 * s)} ${f(y - 8 * s)}Q${f(x - 2 * s)} ${f(y - 5 * s)} ${f(x - 1 * s)} ${f(y - 10 * s)}Q${f(x + 4 * s)} ${f(y - 4 * s)} ${f(x)} ${f(y)}Z`, e.light, { op: 0.85 }); break;
+    case 'wyrm': p.poly(P([[1, 0], [-3, -6], [-9, -2], [-5, 0], [-9, 3], [-3, 5]]), e.base); break;
+    case 'shade': p.path(`M${f(x)} ${f(y)}q${f(-6 * s)} ${f(-2 * s)} ${f(-4 * s)} ${f(-8 * s)}q${f(2 * s)} ${f(3 * s)} ${f(5 * s)} ${f(2 * s)}q${f(-1 * s)} ${f(3 * s)} ${f(-1 * s)} ${f(6 * s)}Z`, e.dark); p.dot(x - 2 * s, y - 4 * s, 1 * s, e.glow); break;
+    case 'forge': p.ell(x - 1 * s, y, 5 * s, 4 * s, e.base); p.dot(x - 3 * s, y - 1 * s, 0.9 * s, e.dark); p.dot(x + 1 * s, y - 1 * s, 0.9 * s, e.dark); break;
+    case 'glimmer': star(p, x - 1 * s, y - 2 * s, 6 * s, e.glow); star(p, x - 1 * s, y - 2 * s, 3 * s, e.base); break;
+    case 'radiant': p.dot(x - 1 * s, y - 1 * s, 6 * s, e.glow, 0.45); p.ell(x - 1 * s, y - 1 * s, 3.6 * s, 3.6 * s, e.base); break;
+    case 'void': p.ell(x - 1 * s, y, 4.5 * s, 4.5 * s, e.dark); p.dot(x - 2.5 * s, y - 1.5 * s, 0.8 * s, e.glow); p.dot(x + 0.5 * s, y + 1 * s, 0.6 * s, e.glow); break;
+    default: p.ell(x - 1 * s, y, 4.5 * s, 4 * s, e.light);
+  }
 }
 
 function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
@@ -385,11 +420,11 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
   switch (ph.pattern) {
     case 'belly': p.ell(bx + brx * 0.1, by + bry * 0.38, brx * 0.68, bry * 0.5, c.light, { line: false }); break;
     case 'spots':
-      p.dot(bx - brx * 0.4, by - bry * 0.25, bry * 0.2, c.dark, 0.7); p.dot(bx + brx * 0.05, by - bry * 0.45, bry * 0.15, c.dark, 0.7);
-      p.dot(bx - brx * 0.1, by + bry * 0.2, bry * 0.17, c.dark, 0.7); p.dot(bx + brx * 0.45, by - bry * 0.1, bry * 0.13, c.dark, 0.7);
+      p.dot(bx - brx * 0.4, by - bry * 0.25, bry * 0.2, c.mark, 0.7); p.dot(bx + brx * 0.05, by - bry * 0.45, bry * 0.15, c.mark, 0.7);
+      p.dot(bx - brx * 0.1, by + bry * 0.2, bry * 0.17, c.mark, 0.7); p.dot(bx + brx * 0.45, by - bry * 0.1, bry * 0.13, c.mark, 0.7);
       break;
     case 'stripes':
-      for (const t of [-0.45, -0.05, 0.35]) p.path(`M${f(bx + brx * t)} ${f(by - bry * 0.8)}Q${f(bx + brx * (t + 0.14))} ${f(by - bry * 0.3)} ${f(bx + brx * (t - 0.02))} ${f(by + bry * 0.05)}`, 'none', { stroke: c.dark, sw: 2.2, op: 0.8 });
+      for (const t of [-0.45, -0.05, 0.35]) p.path(`M${f(bx + brx * t)} ${f(by - bry * 0.8)}Q${f(bx + brx * (t + 0.14))} ${f(by - bry * 0.3)} ${f(bx + brx * (t - 0.02))} ${f(by + bry * 0.05)}`, 'none', { stroke: c.mark, sw: 2.2, op: 0.8 });
       break;
     case 'bands':
       // Each band is a slice of the body ellipse, so its ends follow the body's curve instead of poking out.
@@ -406,7 +441,7 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
       }
       break;
     case 'stars':
-      star(p, bx - brx * 0.35, by - bry * 0.2, bry * 0.26, c.glow); star(p, bx + brx * 0.2, by + bry * 0.15, bry * 0.2, c.glow); star(p, bx + brx * 0.1, by - bry * 0.5, bry * 0.15, c.glow);
+      star(p, bx - brx * 0.35, by - bry * 0.2, bry * 0.26, c.markGlow); star(p, bx + brx * 0.2, by + bry * 0.15, bry * 0.2, c.markGlow); star(p, bx + brx * 0.1, by - bry * 0.5, bry * 0.15, c.markGlow);
       break;
   }
 }
@@ -444,8 +479,14 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       p.poly([[hx + hr * 0.45, hy + hr * 0.5], [hx + hr * 0.55, hy + hr * 0.5 + 4 * s], [hx + hr * 0.68, hy + hr * 0.48]], '#ffffff');
       break;
     case 'terra': {
-      // A mound of earth on the back with a sprout and a couple of pebbles in it.
-      const mx = backx + 1 * s, my = backy + 2.5;
+      // A mound of earth with a sprout and a couple of pebbles, sitting on the body's top surface. Upright and
+      // long bodies have no flat back, so it sits on top of the head instead.
+      let mx: number, my: number;
+      if (a.flatBack) {
+        mx = bx - brx * 0.2;
+        const t = (mx - bx) / brx;
+        my = by - bry * Math.sqrt(Math.max(0, 1 - t * t)) + 2.2 * s;
+      } else { mx = hx - hr * 0.15; my = hy - hr * 0.78 + 2 * s; }
       p.path(`M${f(mx - 10 * s)} ${f(my)}Q${f(mx - 8 * s)} ${f(my - 7 * s)} ${f(mx)} ${f(my - 7.5 * s)}Q${f(mx + 8 * s)} ${f(my - 7 * s)} ${f(mx + 10 * s)} ${f(my)}Z`, e.dark);
       p.dot(mx - 4 * s, my - 2.5 * s, 1.5 * s + 0.3, '#9c9384');
       p.dot(mx + 4.5 * s, my - 1.8 * s, 1.2 * s + 0.3, '#b3aa98');
@@ -520,9 +561,10 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
 
   p.g = 'aura';
   if (o.stage >= 3) {
-    // Ancient and legendary creatures get an aura, layered behind the same parts.
-    p.ell(50, 56, 44, 38, pal.glow, { line: false, op: o.stage === 4 ? 0.3 : 0.2 });
-    p.ring(50, 56, 40, 34, pal.glow, 1.2, 0.55);
+    // Ancient and legendary creatures glow from the ground up, in their element's colour.
+    const e = ELEMENTS[ph.el1];
+    p.ell(50, 91, 34 * b, 6, e.base, { line: false, op: o.stage === 4 ? 0.45 : 0.32 });
+    p.ell(50, 91, 22 * b, 3.6, e.light, { line: false, op: 0.4 });
   }
   if (o.shadow !== false) p.ell(50, 92, 24 * b, 4, '#000000', { line: false, op: 0.18 });
 
@@ -555,7 +597,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const by = 63, brx = 23 * b, bry = 13.5 * b;
       const hr = 12 * hs;
       const hx = 48 + brx * 0.82, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4;
-      a = { hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
+      a = { flatBack: true, hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       const hip = by + bry * 0.5;
       const fx = 46 + brx * 0.55, rx = 46 - brx * 0.6;
@@ -582,7 +624,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const abx = 34, arx = 17 * b, ary = 12 * b;
       const thx = 34 + arx + 9 * b, thr = 11.5 * b;
       const hx = thx + thr + hr * 0.45, hy = by - 6 + breathe * 0.3;
-      a = { hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
+      a = { flatBack: true, hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'back';
       for (let i = 0; i < 3; i++) {
@@ -612,7 +654,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.stroke(d, w, pal.base);
       if (ph.pattern === 'belly') p.line(`M30 ${f(86 - wv * 0.4)}Q48 ${f(95 + wv * 0.4)} 57 80`, pal.light, w * 0.35);
       else if (ph.pattern !== 'plain' && ph.pattern !== 'mask') {
-        const col = ph.pattern === 'stars' ? pal.glow : ph.pattern === 'bands' ? pal.accentDark : pal.dark;
+        const col = ph.pattern === 'stars' ? pal.markGlow : ph.pattern === 'bands' ? pal.accentDark : pal.mark;
         for (const [x, y] of [[24, 79], [36, 84], [48, 87], [58, 76], [60, 62]]) {
           if (ph.pattern === 'stars') star(p, x, y, w * 0.25, col); else p.dot(x, y, w * (ph.pattern === 'spots' ? 0.2 : 0.26), col, 0.75);
         }
@@ -622,12 +664,13 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
     case 'aquatic': {
       const by = 58 + breathe, brx = 25 * b, bry = 15 * b;
       const hr = 12 * hs;
-      a = { hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
+      a = { flatBack: true, hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'body';
       // Every swimmer has a fluke; the tail gene adds to it.
       const fl = sw * 4 + breathe * 2;
       p.path(`M${f(a.tx + 3)} ${f(by)}L${f(a.tx - 12 * b)} ${f(by - 11 * b + fl)}Q${f(a.tx - 7 * b)} ${f(by)} ${f(a.tx - 12 * b)} ${f(by + 11 * b + fl)}Z`, pal.accent);
+      if (ph.el2 && (ph.tail === 'stub' || ph.tail === 'fan')) tailTip(p, a.tx - 9 * b, by - 9 * b + fl, ph.el2, 0.8 * k);
       if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTail(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
       p.ell(48, by, brx, bry, pal.base);
       drawPattern(p, a, ph);
@@ -658,8 +701,15 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   drawHead(p, a, ph, k, o.ko, o.pose);
   p.g = 'body';
   drawCues(p, a, ph.el1, st.cue, phase, false);
-  if (ph.el2) drawCues(p, a, ph.el2, st.cue, phase, true);
   p.g = 'fx';
+  if (o.stage >= 3) {
+    // Motes drifting up through the idle cycle.
+    const e = ELEMENTS[ph.el1];
+    for (let i = 0; i < (o.stage === 4 ? 5 : 3); i++) {
+      const t = (phase + i / 3) % 1;
+      p.dot(26 + ((i * 37) % 50), 88 - t * 60, 1.4 + (i % 2) * 0.6, i % 2 ? e.light : e.base, 0.85 * (1 - t));
+    }
+  }
   if (o.stage === 4) {
     for (let i = 0; i < 5; i++) {
       const ang = phase * TAU + (i * TAU) / 5;

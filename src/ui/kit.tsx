@@ -18,10 +18,13 @@ function ShapeNodes({ shapes }: { shapes: Shape[] }) {
   return (
     <>
       {shapes.map((s, i) => {
-        const common = { fill: s.fill ?? 'none', stroke: s.stroke, strokeWidth: s.sw, opacity: s.op, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+        // Every prop is always given an explicit value. When a pose changes, the same native shape is reused for a
+        // different part, and react-native-svg keeps a prop's old value if it is just left out (that's how a
+        // rotated paw from an attack stuck around and looked like a broken leg).
+        const common = { fill: s.fill ?? 'none', stroke: s.stroke ?? 'none', strokeWidth: s.sw ?? 0, opacity: s.op ?? 1, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
         if (s.t === 'path') return <Path key={i} {...common} d={s.d} />;
         if (s.t === 'circle') return <Circle key={i} {...common} cx={s.cx} cy={s.cy} r={s.r} />;
-        return <Ellipse key={i} {...common} cx={s.cx} cy={s.cy} rx={s.rx} ry={s.ry} transform={s.rot ? `rotate(${s.rot} ${s.cx} ${s.cy})` : undefined} />;
+        return <Ellipse key={i} {...common} cx={s.cx} cy={s.cy} rx={s.rx} ry={s.ry} transform={`rotate(${s.rot ?? 0} ${s.cx} ${s.cy})`} />;
       })}
     </>
   );
