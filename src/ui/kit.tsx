@@ -354,9 +354,9 @@ export const Stars = memo(function Stars({ n, size = 13 }: { n: number; size?: n
 export function ElChip({ el, small }: { el: ElementId; small?: boolean }) {
   const e = ELEMENTS[el];
   return (
-    <View style={[st.chip, { borderColor: e.dark, overflow: 'hidden' }, small && { paddingHorizontal: 6, paddingVertical: 0 }]}>
-      <Grad colors={[e.light, e.base]} />
-      <Text style={[st.chipText, small && { fontSize: 10.5 }, { color: readable(e.base) }]}>{e.name}</Text>
+    <View style={[st.chip, { backgroundColor: e.base, borderColor: e.dark, overflow: 'hidden' }, small && { paddingHorizontal: 7, paddingVertical: 0 }]}>
+      <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: '50%', backgroundColor: 'rgba(255,255,255,0.18)' }} />
+      <Text style={[st.chipText, small && { fontSize: 10.5 }, { color: readable(e.base) }, readable(e.base) === '#ffffff' ? { textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 } : null]}>{e.name}</Text>
     </View>
   );
 }

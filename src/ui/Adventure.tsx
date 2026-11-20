@@ -8,7 +8,7 @@ import { express } from '../game/genome';
 import { Run, areaOpen, bossPreview, lootTable, startAreaRun, startTutorialFight } from '../game/run';
 import { TUT } from '../game/save';
 import { Breathing, Btn, C, Card, CreatureView, ElChip, H, P, mixHex, st } from './kit';
-import { F, FadeIn, Grad, Icon } from './look';
+import { F, FadeIn, Grad, Icon, Measured } from './look';
 import { TeamPicker } from './Roster';
 import { rng, useGame } from './store';
 
@@ -16,7 +16,8 @@ import { rng, useGame } from './store';
 function Landscape({ a, id }: { a: AreaDef; id: string }) {
   const far = mixHex(a.ground, a.sky[1], 0.45);
   return (
-    <Svg width="100%" height="100%" viewBox="0 0 300 100" preserveAspectRatio="xMidYMid slice" style={{ position: 'absolute' }}>
+    <Measured fallback={a.sky[1]}>{(w, h) => (
+    <Svg width={w} height={h} viewBox="0 0 300 100" preserveAspectRatio="xMidYMid slice">
       <Defs>
         <LinearGradient id={id} x1="0" y1="0" x2="0" y2="1"><Stop offset="0" stopColor={a.sky[0]} /><Stop offset="1" stopColor={a.sky[1]} /></LinearGradient>
       </Defs>
@@ -27,6 +28,7 @@ function Landscape({ a, id }: { a: AreaDef; id: string }) {
       <Path d="M0 78 Q60 62 120 74 T230 68 T300 72 V100 H0Z" fill={a.ground} />
       {a.els.slice(0, 4).map((e, i) => <Circle key={e} cx={30 + i * 52} cy={86 - (i % 2) * 6} r={2.2} fill={ELEMENTS[e].light} opacity={0.9} />)}
     </Svg>
+    )}</Measured>
   );
 }
 

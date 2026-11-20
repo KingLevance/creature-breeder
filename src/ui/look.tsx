@@ -1,7 +1,7 @@
 // The game's look: fonts, gradients, glossy buttons and panels, icons, a living background and entrance animations.
 // Everything here is plain React Native and react-native-svg, so it ships over the air.
 import * as Haptics from 'expo-haptics';
-import React, { memo, useEffect, useMemo, useRef } from 'react';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View, ViewStyle } from 'react-native';
 import Svg, { Circle, Defs, Ellipse, LinearGradient, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 
@@ -22,34 +22,69 @@ export function haptic(kind: 'light' | 'medium' | 'select' = 'light') {
 let gradId = 0;
 const useGradId = () => useMemo(() => `hg${++gradId}`, []);
 
+/** Splits a colour into an opaque colour and its alpha. iOS ignores alpha inside gradient stops, so it goes in
+ *  stopOpacity instead. Handles #rrggbbaa and rgba(). */
+export function splitAlpha(c: string): [string, number] {
+  const m = c.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
+  if (m) return [`rgb(${m[1]},${m[2]},${m[3]})`, Number(m[4])];
+  if (/^#[0-9a-f]{8}$/i.test(c)) return [c.slice(0, 7), parseInt(c.slice(7), 16) / 255];
+  return [c, 1];
+}
+
+/**
+ * Fills its parent and hands its children the real size in points. Vector drawings sized in percent don't
+ * always follow their parent on iOS (a pill sized by its text could end up half-painted), so anything that
+ * must fill a box is drawn at the measured size instead.
+ */
+export function Measured({ style, children, fallback }: { style?: ViewStyle | ViewStyle[]; children: (w: number, h: number) => React.ReactNode; fallback?: string }) {
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  return (
+    <View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, style as ViewStyle, !box && fallback ? { backgroundColor: fallback } : null]}
+      onLayout={e => { const { width: w, height: h } = e.nativeEvent.layout; setBox(b => (b && Math.abs(b.w - w) < 0.5 && Math.abs(b.h - h) < 0.5 ? b : { w, h })); }}>
+      {box && box.w > 0 && box.h > 0 ? children(box.w, box.h) : null}
+    </View>
+  );
+}
+
 /** A gradient filling its parent. */
 export const Grad = memo(function Grad({ colors, radius = 0, horizontal, style, opacity = 1 }: { colors: string[]; radius?: number; horizontal?: boolean; style?: ViewStyle; opacity?: number }) {
   const id = useGradId();
   return (
-    <Svg pointerEvents="none" style={[StyleSheet.absoluteFill, style]} width="100%" height="100%">
-      <Defs>
-        <LinearGradient id={id} x1="0" y1="0" x2={horizontal ? '1' : '0'} y2={horizontal ? '0' : '1'}>
-          {colors.map((c, i) => <Stop key={i} offset={colors.length === 1 ? 0 : i / (colors.length - 1)} stopColor={c} />)}
-        </LinearGradient>
-      </Defs>
-      <Rect x="0" y="0" width="100%" height="100%" rx={radius} ry={radius} fill={`url(#${id})`} opacity={opacity} />
-    </Svg>
+    <Measured style={style} fallback={colors[colors.length - 1]}>
+      {(w, h) => (
+        <Svg width={w} height={h}>
+          <Defs>
+            <LinearGradient id={id} x1="0" y1="0" x2={horizontal ? '1' : '0'} y2={horizontal ? '0' : '1'}>
+              {colors.map((c, i) => { const [col, a] = splitAlpha(c); return <Stop key={i} offset={colors.length === 1 ? 0 : i / (colors.length - 1)} stopColor={col} stopOpacity={a} />; })}
+            </LinearGradient>
+          </Defs>
+          <Rect x={0} y={0} width={w} height={h} rx={radius} ry={radius} fill={`url(#${id})`} opacity={opacity} />
+        </Svg>
+      )}
+    </Measured>
   );
 });
 
 /** A soft round glow filling its parent, brightest in the middle. */
 export const Glow = memo(function Glow({ color, opacity = 0.6, cx = '50%', cy = '50%', r = '50%', style }: { color: string; opacity?: number; cx?: string; cy?: string; r?: string; style?: ViewStyle }) {
   const id = useGradId();
+  const [col, a] = splitAlpha(color);
   return (
-    <Svg pointerEvents="none" style={[StyleSheet.absoluteFill, style]} width="100%" height="100%">
-      <Defs>
-        <RadialGradient id={id} cx={cx} cy={cy} r={r} fx={cx} fy={cy}>
-          <Stop offset="0" stopColor={color} stopOpacity={opacity} />
-          <Stop offset="1" stopColor={color} stopOpacity={0} />
-        </RadialGradient>
-      </Defs>
-      <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${id})`} />
-    </Svg>
+    <Measured style={style}>
+      {(w, h) => (
+        <Svg width={w} height={h}>
+          <Defs>
+            <RadialGradient id={id} cx={cx} cy={cy} r={r} fx={cx} fy={cy}>
+              <Stop offset="0" stopColor={col} stopOpacity={opacity * a} />
+              <Stop offset="1" stopColor={col} stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <Rect x={0} y={0} width={w} height={h} fill={`url(#${id})`} />
+        </Svg>
+      )}
+    </Measured>
   );
 });
 
