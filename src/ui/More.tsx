@@ -8,6 +8,7 @@ import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, ElChip, H, P, st } from './kit';
 import { TeamPicker } from './Roster';
 import { rng, useGame } from './store';
+import { versionLabel } from './updates';
 
 export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
   const { save, mutate, reset } = useGame();
@@ -85,6 +86,7 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
             </View>
           ) : <Btn kind="ghost" label="Start over (erase save)" onPress={() => setWipe(true)} />}
         </Card>
+        <P dim style={{ textAlign: 'center', marginBottom: 20 }}>{versionLabel()}</P>
       </ScrollView>
       {pick ? (
         <TeamPicker

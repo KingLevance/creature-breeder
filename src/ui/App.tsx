@@ -14,6 +14,7 @@ import { MoreScreen } from './More';
 import { BreedScreen, NurseryScreen } from './Nursery';
 import { RosterScreen } from './Roster';
 import { GameProvider, rng, useGame } from './store';
+import { UpdateGate } from './updates';
 
 type Tab = 'run' | 'roster' | 'nursery' | 'breed' | 'more';
 const TABS: { id: Tab; label: string; icon: string }[] = [
@@ -114,9 +115,11 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
-        <GameProvider fallback={<View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><H>Hatchlore</H></View>}>
-          <Shell />
-        </GameProvider>
+        <UpdateGate>
+          <GameProvider fallback={<View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><H>Hatchlore</H></View>}>
+            <Shell />
+          </GameProvider>
+        </UpdateGate>
       </SafeAreaView>
     </SafeAreaProvider>
   );

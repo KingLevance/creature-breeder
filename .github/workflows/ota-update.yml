@@ -1,0 +1,47 @@
+# Publishes an over-the-air update (EAS Update) to the "production" channel whenever app code changes on main, so the
+# installed app picks it up on its next launch. Only JavaScript and assets travel this way: a change to native code
+# or app.json needs a new IPA (the "iOS sideload IPA" workflow). Needs the EXPO_TOKEN repository secret.
+name: OTA update
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'assets/**'
+      - 'index.ts'
+      - 'package.json'
+      - 'package-lock.json'
+
+concurrency:
+  group: ota-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install node modules
+        run: npm ci
+
+      - name: Check the game rules
+        run: npm test && npm run typecheck
+
+      - name: Publish the update
+        run: |
+          MSG=$(git log -1 --pretty=%s)
+          eas update --channel production --platform ios --message "$MSG" --non-interactive

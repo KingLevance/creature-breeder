@@ -32,6 +32,23 @@
           "imageWidth": 220
         }
       ]
-    ]
+    ],
+    "owner": "levances-team",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/822a8ced-8c11-4a75-9401-c1d94d9a314f",
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0,
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "822a8ced-8c11-4a75-9401-c1d94d9a314f"
+      }
+    }
   }
 }

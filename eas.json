@@ -1,0 +1,14 @@
+{
+  "cli": {
+    "appVersionSource": "local"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "channel": "production"
+    },
+    "production": {
+      "channel": "production"
+    }
+  }
+}
