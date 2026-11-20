@@ -248,23 +248,20 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     ]));
     const p = place(u);
     addFx({ kind: 'puff', x: p.x, y: p.feet - 6 });
-    if (u.side === 1) {
-      await sleep(180 * T());
-      sfx('poof');
-      addFx({ kind: 'puff', x: p.x, y: p.feet - p.sz * 0.3, color: ELEMENTS[u.ph.el1].light });
-      Animated.timing(a.fade, { toValue: 0, duration: 420, useNativeDriver: ND }).start();
-    } else {
-      Animated.timing(a.fade, { toValue: 0.4, duration: 400, useNativeDriver: ND }).start();
-    }
+    // Everyone who faints dissolves in a puff. Fallen teammates leave a ghost marker for revive moves.
+    await sleep(180 * T());
+    sfx('poof');
+    addFx({ kind: 'puff', x: p.x, y: p.feet - p.sz * 0.3, color: ELEMENTS[u.ph.el1].light });
+    Animated.timing(a.fade, { toValue: 0, duration: 420, useNativeDriver: ND }).start();
+    if (u.side === 0) setLeftBehind(l => (l.includes(u.uid) ? l : [...l, u.uid]));
   }, [addFx, place]);
 
   const reviveAnim = useCallback(async (u: Unit) => {
     const a = A(u.uid);
     const p = place(u);
     sfx('revive');
-    // Left behind earlier: it comes back to its old spot under a beam of light.
-    const wasBehind = leftBehind.includes(u.uid);
-    if (wasBehind) {
+    // It comes back to its spot under a beam of light.
+    {
       a.fade.setValue(0); a.behind.setValue(0); a.ox.setValue(0); a.down.setValue(1);
       setLeftBehind(l => l.filter(x => x !== u.uid));
       addFx({ kind: 'beam', el: 'radiant', x1: p.x, y1: -20, x2: p.x, y2: p.feet, dur: 520 });
@@ -277,7 +274,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       Animated.timing(a.down, { toValue: 0, duration: 350 * T(), easing: Easing.out(Easing.back(1.5)), useNativeDriver: ND }),
       Animated.timing(a.ox, { toValue: 0, duration: 350 * T(), useNativeDriver: ND }),
     ]));
-  }, [addFx, place, leftBehind]);
+  }, [addFx, place]);
 
   const play = useCallback(async (events: Ev[]) => {
     const b = bRef.current!;
@@ -521,8 +518,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       const a = A(u.uid);
       a.ox.setValue(0); a.oy.setValue(0); a.shake.setValue(0); a.blink.setValue(1); a.squash.setValue(0); a.lean.setValue(0); a.stretch.setValue(1);
       a.down.setValue(u.alive ? 0 : 1);
-      a.fade.setValue(u.alive ? 1 : u.side === 0 ? 0.4 : 0);
-      a.behind.setValue(!u.alive && u.side === 0 ? -1 : 0);
+      a.fade.setValue(u.alive ? 1 : 0);
+      a.behind.setValue(0);
     }
     setLeftBehind(b.units.filter(u => !u.alive && u.side === 0).map(u => u.uid));
     setView(snap(b)); setOrder(turnOrder(b, 8)); setResult(null); setFloats([]); setFx([]); setActs({});

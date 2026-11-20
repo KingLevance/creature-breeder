@@ -363,8 +363,13 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
   p.g = 'face';
   drawEyes(p, hx, hy, r, ph, ko, pose);
-  const open = pose === 'attack' || pose === 'cast' || pose === 'hurt';
-  if (open) {
+  const open = !ko && (pose === 'attack' || pose === 'cast' || pose === 'hurt');
+  if (ko) {
+    // Knocked out: a dazed, wavy mouth instead of a smile.
+    const mx = ph.head === 'beak' || ph.head === 'long' ? hx + r * 0.75 : ph.head === 'snout' ? hx + r * 0.75 : hx + r * 0.5;
+    const my = hy + r * 0.5, w = r * 0.22;
+    p.line(`M${f(mx - w * 1.5)} ${f(my)}q${f(w * 0.37)} ${f(-w * 0.45)} ${f(w * 0.75)} 0q${f(w * 0.37)} ${f(w * 0.45)} ${f(w * 0.75)} 0q${f(w * 0.37)} ${f(-w * 0.45)} ${f(w * 0.75)} 0q${f(w * 0.37)} ${f(w * 0.45)} ${f(w * 0.75)} 0`, c.out, Math.max(1, r * 0.09));
+  } else if (open) {
     // Open mouth: a roar for attacks and casts, a gasp when hurt.
     const mx = ph.head === 'beak' ? hx + r * 1.0 : ph.head === 'long' ? hx + r * 1.0 : ph.head === 'snout' ? hx + r * 0.95 : hx + r * 0.55;
     const my = ph.head === 'beak' ? hy + r * 0.5 : hy + r * 0.48;
