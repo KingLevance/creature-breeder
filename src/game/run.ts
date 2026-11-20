@@ -5,7 +5,7 @@ import { ELEMENT_IDS, ElementId } from './data/elements';
 import { Battle, Unit, UnitMods, contribution, createBattle, makeUnit } from './battle';
 import { Creature, Egg, MAX_LEVEL, XpResult, addXp, makeCreature, newId, stageLevels, xpToNext } from './creature';
 import { levelTo, tutorialEgg } from './economy';
-import { Genome, Rng, Skeleton, SKELETONS, WildOpts, boostPotential, clamp, eggFromEnemy, express, pick, rint, wildGenome } from './genome';
+import { Genome, Rng, Skeleton, SKELETONS, WildOpts, boostPotential, clamp, eggFromEnemy, express, mulberry32, pick, rint, wildGenome } from './genome';
 import { Save, TUT, byId, dayKey, weekKey } from './save';
 
 export interface FightDef {
@@ -60,6 +60,11 @@ function bossGenome(rng: Rng, a: AreaDef): Genome {
   g.el2 = a.boss.el2 ? [a.boss.el2, a.boss.el2] : ['none', 'none'];
   g.build = [-1, -1];
   return g;
+}
+
+/** A fixed look at an area's boss, for the campaign map. */
+export function bossPreview(a: AreaDef): Genome {
+  return bossGenome(mulberry32(a.id * 7919 + 1), a);
 }
 
 function areaFights(rng: Rng, a: AreaDef): FightDef[] {

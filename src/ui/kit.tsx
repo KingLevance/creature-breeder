@@ -8,6 +8,7 @@ import { Creature, STAGE_NAMES, stageOf, typeLabel } from '../game/creature';
 import { Pheno, express, rareCarrierCount, starRating } from '../game/genome';
 import { tap } from './audio';
 import { Pose, Rig, Shape, creatureOpacity, drawCreature, drawCreatureRig, drawEgg, poseWeights } from '../render/creature';
+import { F, Glow, Grad, Icon, IconName, ND as LOOK_ND, PANEL, haptic, pulse, shadow, useLoop, usePress } from './look';
 
 export const C = {
   bg: '#171226', panel: '#231b3a', panel2: '#2e2450', line: '#43366b', text: '#f4efff', dim: '#a99fc9',
@@ -252,38 +253,110 @@ export const EggView = memo(function EggView({ ph, size, wobble = 0 }: { ph: Phe
   );
 });
 
-export function Btn({ label, onPress, disabled, kind = 'main', small, style }: { label: string; onPress: () => void; disabled?: boolean; kind?: 'main' | 'ghost' | 'gold' | 'danger'; small?: boolean; style?: ViewStyle }) {
-  const bg = disabled ? '#3a3256' : kind === 'gold' ? C.gold : kind === 'danger' ? C.bad : kind === 'ghost' ? 'transparent' : C.accent;
-  const fg = disabled ? C.dim : kind === 'gold' ? '#2a1d00' : C.text;
+const BTN = {
+  main: { grad: ['#ac9dff', '#7357ee'], lip: '#42309c', fg: '#ffffff' },
+  gold: { grad: ['#ffe58a', '#f6b52e'], lip: '#b4721a', fg: '#3d2400' },
+  danger: { grad: ['#ff9a9a', '#e0485a'], lip: '#8c2434', fg: '#ffffff' },
+  ghost: { grad: ['#3d3270', '#2c2354'], lip: '#191130', fg: '#e4dcff' },
+  off: { grad: ['#3a3256', '#2e2746'], lip: '#1c1630', fg: '#8e84ad' },
+};
+export function Btn({ label, onPress, disabled, kind = 'main', small, style, icon }: { label: string; onPress: () => void; disabled?: boolean; kind?: 'main' | 'ghost' | 'gold' | 'danger'; small?: boolean; style?: ViewStyle; icon?: React.ReactNode }) {
+  const k = disabled ? BTN.off : BTN[kind];
+  const press = useRef(new Animated.Value(0)).current;
+  const lip = small ? 3 : 4, r = small ? 11 : 15;
+  const spring = (to: number) => Animated.spring(press, { toValue: to, speed: to ? 60 : 22, bounciness: to ? 0 : 9, useNativeDriver: LOOK_ND }).start();
   return (
-    <Pressable onPress={disabled ? undefined : () => { tap(); onPress(); }} style={({ pressed }) => [st.btn, small && st.btnSmall, { backgroundColor: bg, borderColor: kind === 'ghost' ? C.line : bg, opacity: pressed ? 0.75 : 1 }, style]}>
-      <Text style={[st.btnText, small && { fontSize: 13 }, { color: fg }]}>{label}</Text>
+    <Pressable
+      disabled={disabled}
+      onPress={() => { tap(); haptic(); onPress(); }}
+      onPressIn={() => spring(1)} onPressOut={() => spring(0)}
+      style={[!disabled && kind !== 'ghost' ? shadow(k.lip, 8, 0.45, 3) : null, style]}>
+      <View style={{ borderRadius: r, backgroundColor: k.lip, paddingBottom: lip }}>
+        <Animated.View style={{ borderRadius: r, overflow: 'hidden', transform: [{ translateY: press.interpolate({ inputRange: [0, 1], outputRange: [0, lip - 1] }) }] }}>
+          <Grad colors={k.grad} />
+          <View pointerEvents="none" style={{ position: 'absolute', left: 3, right: 3, top: 2, height: '42%', borderRadius: r - 2, backgroundColor: 'rgba(255,255,255,0.18)' }} />
+          <View style={[{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, small ? { paddingVertical: 6, paddingHorizontal: 12 } : { paddingVertical: 11, paddingHorizontal: 16 }]}>
+            {icon}
+            <Text numberOfLines={1} style={{ fontFamily: F.bold, fontSize: small ? 14 : 17, color: k.fg, letterSpacing: 0.3, textShadowColor: k.fg === '#ffffff' ? 'rgba(0,0,0,0.3)' : 'transparent', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 }}>{label}</Text>
+          </View>
+        </Animated.View>
+      </View>
     </Pressable>
   );
 }
 
-export function Card({ children, style, onPress }: { children: React.ReactNode; style?: ViewStyle; onPress?: () => void }) {
-  if (onPress) return <Pressable onPress={onPress} style={({ pressed }) => [st.card, style, pressed && { opacity: 0.8 }]}>{children}</Pressable>;
-  return <View style={[st.card, style]}>{children}</View>;
+const OUTER_KEYS = new Set(['margin', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'marginHorizontal', 'marginVertical', 'opacity', 'flex', 'width', 'alignSelf', 'position', 'left', 'right', 'top', 'bottom']);
+function splitStyle(style?: ViewStyle | (ViewStyle | false | null | undefined)[]): [ViewStyle, ViewStyle] {
+  const flat = StyleSheet.flatten(style) ?? {};
+  const outer: any = {}, inner: any = {};
+  for (const [k, v] of Object.entries(flat)) (OUTER_KEYS.has(k) ? outer : inner)[k] = v;
+  return [outer, inner];
 }
-
-export const H = ({ children }: { children: React.ReactNode }) => <Text style={st.h}>{children}</Text>;
-export const P = ({ children, dim, style }: { children: React.ReactNode; dim?: boolean; style?: any }) => <Text style={[st.p, dim && { color: C.dim }, style]}>{children}</Text>;
-
-export function Stars({ n, size = 13 }: { n: number; size?: number }) {
+export function Card({ children, style, onPress, glow, tint }: { children: React.ReactNode; style?: ViewStyle | (ViewStyle | false | null | undefined)[]; onPress?: () => void; glow?: string; tint?: string }) {
+  const pr = usePress(0.975);
+  const [outer, inner] = splitStyle(style);
+  const body = (
+    <View style={[st.card, glow ? { borderColor: glow, borderWidth: 1.5 } : null, inner]}>
+      <Grad colors={tint ? [mixHex(PANEL[0], tint, 0.22), PANEL[1]] : PANEL} />
+      <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 1, backgroundColor: 'rgba(255,255,255,0.16)' }} />
+      {children}
+    </View>
+  );
+  const wrap: ViewStyle = { marginBottom: 12, borderRadius: 18, ...shadow(glow ?? '#000', glow ? 12 : 10, glow ? 0.55 : 0.35, glow ? 0 : 4), ...outer };
+  if (!onPress) return <View style={wrap}>{body}</View>;
   return (
-    <Text style={{ fontSize: size, letterSpacing: 1 }}>
-      <Text style={{ color: C.gold }}>{'★'.repeat(n)}</Text>
-      <Text style={{ color: '#4a416b' }}>{'★'.repeat(5 - n)}</Text>
-    </Text>
+    <Pressable onPress={() => { haptic('select'); onPress(); }} onPressIn={pr.onPressIn} onPressOut={pr.onPressOut}>
+      <Animated.View style={[wrap, { transform: [{ scale: pr.scale }] }]}>{body}</Animated.View>
+    </Pressable>
   );
 }
+/** Mix two #rrggbb colours. */
+export function mixHex(a: string, b: string, t: number) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (sh: number) => Math.round(((pa >> sh) & 255) * (1 - t) + ((pb >> sh) & 255) * t);
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+
+export const H = ({ children, style }: { children: React.ReactNode; style?: any }) => <Text style={[st.h, style]}>{children}</Text>;
+/** A section heading with a small coloured icon badge. */
+export function Title({ icon, color = C.accent, children, right }: { icon: IconName; color?: string; children: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      <View style={[{ width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' }, shadow(color, 6, 0.5, 0)]}>
+        <Grad colors={[mixHex(color, '#ffffff', 0.25), mixHex(color, '#000000', 0.25)]} />
+        <View><Icon name={icon} size={18} color="#ffffff" accent={mixHex(color, '#000000', 0.4)} /></View>
+      </View>
+      <Text style={[st.h, { marginBottom: 0, flex: 1 }]}>{children}</Text>
+      {right}
+    </View>
+  );
+}
+export const P = ({ children, dim, style }: { children: React.ReactNode; dim?: boolean; style?: any }) => <Text style={[st.p, dim && { color: C.dim }, style]}>{children}</Text>;
+
+const STAR_D = 'M12 2.5 L14.8 8.6 L21.5 9.3 L16.5 13.8 L17.9 20.5 L12 17.1 L6.1 20.5 L7.5 13.8 L2.5 9.3 L9.2 8.6Z';
+export const Stars = memo(function Stars({ n, size = 13 }: { n: number; size?: number }) {
+  return (
+    <View style={{ flexDirection: 'row', gap: Math.max(1, size * 0.08) }}>
+      {[0, 1, 2, 3, 4].map(i => (
+        <Svg key={i} width={size} height={size} viewBox="0 0 24 24">
+          {i < n ? (
+            <>
+              <Path d={STAR_D} fill="#f7b52e" stroke="#a8670f" strokeWidth={1.6} strokeLinejoin="round" />
+              <Path d="M12 5.5 L13.9 9.8 L18 10.3 L12 12.5 L6 10.3 L10.1 9.8Z" fill="#ffe58a" />
+            </>
+          ) : <Path d={STAR_D} fill="#2c2450" stroke="#4d4380" strokeWidth={1.6} strokeLinejoin="round" />}
+        </Svg>
+      ))}
+    </View>
+  );
+});
 
 export function ElChip({ el, small }: { el: ElementId; small?: boolean }) {
   const e = ELEMENTS[el];
   return (
-    <View style={[st.chip, { backgroundColor: e.base, borderColor: e.dark }, small && { paddingHorizontal: 5, paddingVertical: 1 }]}>
-      <Text style={[st.chipText, small && { fontSize: 10 }, { color: readable(e.base) }]}>{e.name}</Text>
+    <View style={[st.chip, { borderColor: e.dark, overflow: 'hidden' }, small && { paddingHorizontal: 6, paddingVertical: 0 }]}>
+      <Grad colors={[e.light, e.base]} />
+      <Text style={[st.chipText, small && { fontSize: 10.5 }, { color: readable(e.base) }]}>{e.name}</Text>
     </View>
   );
 }
@@ -301,37 +374,73 @@ export function readable(hex: string): string {
   return lum > 0.6 ? '#1b1420' : '#ffffff';
 }
 
-export const SexMark = ({ sex }: { sex: 'M' | 'F' }) => <Text style={{ color: sex === 'M' ? C.male : C.female, fontWeight: '800', fontSize: 14 }}>{sex === 'M' ? '♂' : '♀'}</Text>;
+export const SexMark = ({ sex }: { sex: 'M' | 'F' }) => <Text style={{ color: sex === 'M' ? C.male : C.female, fontFamily: F.bold, fontSize: 14 }}>{sex === 'M' ? '♂' : '♀'}</Text>;
 
 export function Bar({ frac, color, height = 6, back = '#120d20' }: { frac: number; color: string; height?: number; back?: string }) {
+  const grow = useRef(new Animated.Value(0)).current;
+  const f = Math.max(0, Math.min(1, frac));
+  useEffect(() => { Animated.timing(grow, { toValue: f, duration: 550, easing: Easing.out(Easing.cubic), useNativeDriver: LOOK_ND }).start(); }, [f, grow]);
   return (
-    <View style={{ height, backgroundColor: back, borderRadius: height / 2, overflow: 'hidden' }}>
-      <View style={{ width: `${Math.max(0, Math.min(1, frac)) * 100}%`, height, backgroundColor: color, borderRadius: height / 2 }} />
+    <View style={{ height, backgroundColor: back, borderRadius: height / 2, overflow: 'hidden', borderWidth: height >= 6 ? 1 : 0, borderColor: 'rgba(0,0,0,0.35)' }}>
+      <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '100%', borderRadius: height / 2, overflow: 'hidden', transformOrigin: 'left', transform: [{ scaleX: grow }] }}>
+        <Grad colors={[mixHex(color, '#ffffff', 0.35), color]} />
+        {height >= 5 ? <View style={{ position: 'absolute', left: 2, right: 2, top: 1, height: Math.max(1, height * 0.28), borderRadius: height, backgroundColor: 'rgba(255,255,255,0.3)' }} /> : null}
+      </Animated.View>
     </View>
   );
 }
 
-/** A roster tile: portrait, name, level, stars, type. */
+/** A creature that breathes gently: cheap enough for a whole grid of them. */
+export const Breathing = memo(function Breathing({ children, size }: { children: React.ReactNode; size: number }) {
+  const t = useLoop(useMemo(() => 2400 + Math.random() * 1000, []));
+  const fy = size * 0.4;
+  return (
+    <Animated.View style={{ transform: [{ translateY: fy }, { scaleY: pulse(t, 1, 1.03) }, { scaleX: pulse(t, 1, 0.988) }, { translateY: -fy }] }}>
+      {children}
+    </Animated.View>
+  );
+});
+
+/** A roster tile: the creature on a little lit stage in its element's colour, with name, level, stars and type. */
 export const CreatureTile = memo(function CreatureTile({ c, onPress, selected, badge, dimmed, width }: { c: Creature; onPress?: () => void; selected?: boolean; badge?: string; dimmed?: boolean; width: number }) {
   const ph = useMemo(() => express(c.g), [c.g]);
   const stage = stageOf(c);
   const carrier = rareCarrierCount(c.g) > 0;
+  const stars = starRating(c.g);
+  const e = ELEMENTS[ph.el1];
+  const pr = usePress(0.95);
+  const shine = useLoop(2600, stars >= 4);
+  const art = width - 14;
   return (
-    <Pressable onPress={onPress} style={[st.tile, { width, opacity: dimmed ? 0.45 : 1, borderColor: selected ? C.gold : C.line, borderWidth: selected ? 2 : 1 }]}>
-      <View style={{ alignItems: 'center' }}>
-        <CreatureView ph={ph} stage={stage} size={width - 26} />
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-        <Text numberOfLines={1} style={[st.p, { fontWeight: '700', flexShrink: 1 }]}>{c.name}</Text>
-        <SexMark sex={c.sex} />
-        {carrier ? <Text style={{ color: C.accent2, fontSize: 11 }}>◆</Text> : null}
-      </View>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text style={{ color: C.dim, fontSize: 11 }}>Lv {c.level} {STAGE_NAMES[stage]}</Text>
-        <Stars n={starRating(c.g)} size={10} />
-      </View>
-      <TypeChips ph={ph} small />
-      {badge ? <View style={st.badge}><Text style={{ color: '#1b1420', fontSize: 10, fontWeight: '800' }}>{badge}</Text></View> : null}
+    <Pressable onPress={onPress ? () => { haptic('select'); onPress(); } : undefined} onPressIn={pr.onPressIn} onPressOut={pr.onPressOut}>
+      <Animated.View style={[{ width, opacity: dimmed ? 0.45 : 1, borderRadius: 16, transform: [{ scale: pr.scale }] }, shadow(selected ? C.gold : '#000', selected ? 12 : 8, selected ? 0.6 : 0.3, selected ? 0 : 3)]}>
+        <View style={[st.tile, { borderColor: selected ? C.gold : 'rgba(255,255,255,0.08)', borderWidth: selected ? 2 : 1 }]}>
+          <Grad colors={[mixHex(PANEL[0], e.base, 0.28), PANEL[1]]} />
+          {stars >= 4 ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderRadius: 15, borderWidth: 1.5, borderColor: stars >= 5 ? '#ffd34d' : '#c2b0ff', opacity: pulse(shine, 0.25, 0.9) }]} /> : null}
+          <View style={{ width: art, height: art * 0.92, alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-end' }}>
+            <Glow color={e.light} opacity={0.5} cy="58%" r="48%" />
+            <View style={{ position: 'absolute', bottom: art * 0.05, width: art * 0.62, height: art * 0.12, borderRadius: art, backgroundColor: 'rgba(0,0,0,0.28)' }} />
+            <View style={{ position: 'absolute', bottom: -art * 0.04 }}>
+              <Breathing size={art}>
+                <CreatureView ph={ph} stage={stage} size={art} shadow={false} />
+              </Breathing>
+            </View>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+            <Text numberOfLines={1} style={{ color: C.text, fontFamily: F.semi, fontSize: 14, flexShrink: 1 }}>{c.name}</Text>
+            <SexMark sex={c.sex} />
+            {carrier ? <Text style={{ color: C.accent2, fontSize: 11 }}>◆</Text> : null}
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <View style={{ backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1 }}>
+              <Text style={{ color: '#e9e1ff', fontFamily: F.semi, fontSize: 10.5 }}>Lv {c.level} · {STAGE_NAMES[stage]}</Text>
+            </View>
+          </View>
+          <Stars n={stars} size={10} />
+          <TypeChips ph={ph} small />
+          {badge ? <View style={st.badge}><Text style={{ color: '#3d2400', fontSize: 10, fontFamily: F.bold }}>{badge}</Text></View> : null}
+        </View>
+      </Animated.View>
     </Pressable>
   );
 });
@@ -339,10 +448,13 @@ export const CreatureTile = memo(function CreatureTile({ c, onPress, selected, b
 export function MoveRow({ mv, cd, compact }: { mv: MoveDef; cd?: number; compact?: boolean }) {
   const e = ELEMENTS[mv.el];
   return (
-    <View style={[st.move, { borderLeftColor: e.base }]}>
+    <View style={[st.move, { borderLeftColor: e.base, overflow: 'hidden' }]}>
+      <Grad colors={[mixHex('#2e2450', e.base, 0.16), '#2a2148']} horizontal />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Text style={[st.p, { fontWeight: '700', flex: 1 }]} numberOfLines={1}>{mv.name}</Text>
-        <Text style={{ color: RARITY_COLORS[mv.rarity], fontSize: 10, fontWeight: '700' }}>{RARITY_NAMES[mv.rarity]}</Text>
+        <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 15, flex: 1 }} numberOfLines={1}>{mv.name}</Text>
+        <View style={{ borderRadius: 8, paddingHorizontal: 6, paddingVertical: 1, borderWidth: 1, borderColor: RARITY_COLORS[mv.rarity] }}>
+          <Text style={{ color: RARITY_COLORS[mv.rarity], fontSize: 10, fontFamily: F.semi }}>{RARITY_NAMES[mv.rarity]}</Text>
+        </View>
       </View>
       {compact ? null : <Text style={{ color: C.dim, fontSize: 11 }}>{mv.desc}{mv.cd ? `  · cooldown ${mv.cd}` : ''}</Text>}
       {cd ? <Text style={{ color: C.bad, fontSize: 11 }}>Ready in {cd}</Text> : null}
@@ -355,14 +467,14 @@ export const describeCreature = (c: Creature) => `${typeLabel(express(c.g))} · 
 export const st = StyleSheet.create({
   btn: { paddingVertical: 11, paddingHorizontal: 16, borderRadius: 12, alignItems: 'center', borderWidth: 1 },
   btnSmall: { paddingVertical: 7, paddingHorizontal: 11, borderRadius: 9 },
-  btnText: { fontSize: 15, fontWeight: '800' },
-  card: { backgroundColor: C.panel, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: C.line, marginBottom: 10 },
-  h: { color: C.text, fontSize: 18, fontWeight: '800', marginBottom: 6 },
+  btnText: { fontSize: 16, fontFamily: F.bold },
+  card: { backgroundColor: C.panel, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
+  h: { color: C.text, fontSize: 21, fontFamily: F.bold, marginBottom: 6, letterSpacing: 0.2 },
   p: { color: C.text, fontSize: 13, lineHeight: 18 },
-  chip: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, borderWidth: 1 },
-  chipText: { fontSize: 11, fontWeight: '800' },
-  tile: { backgroundColor: C.panel, borderRadius: 12, padding: 6, gap: 2 },
-  badge: { position: 'absolute', top: 4, left: 4, backgroundColor: C.gold, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
-  move: { backgroundColor: C.panel2, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 8, borderLeftWidth: 4, marginBottom: 5 },
+  chip: { paddingHorizontal: 9, paddingVertical: 2, borderRadius: 10, borderWidth: 1 },
+  chipText: { fontSize: 11.5, fontFamily: F.semi },
+  tile: { backgroundColor: C.panel, borderRadius: 16, padding: 7, gap: 3, overflow: 'hidden' },
+  badge: { position: 'absolute', top: 6, left: 6, backgroundColor: C.gold, borderRadius: 7, paddingHorizontal: 6, paddingVertical: 1 },
+  move: { backgroundColor: C.panel2, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 10, borderLeftWidth: 4, marginBottom: 6 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });

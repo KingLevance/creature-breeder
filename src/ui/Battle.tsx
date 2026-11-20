@@ -17,7 +17,8 @@ import { FightResult, Loot, Run, finishFight, startBattle } from '../game/run';
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
 import { FxLayer, FxNew, FxSpec, StatusFx, isBeam } from './Fx';
-import { Bar, Btn, C, CreatureView, EggView, LiveCreature, P, Stars, readable, st } from './kit';
+import { Bar, Btn, C, CreatureView, EggView, LiveCreature, P, Stars, mixHex, readable, st } from './kit';
+import { F, FadeIn, Glow, Grad, Icon, haptic, shadow } from './look';
 import type { Pose } from '../render/creature';
 import { rng, useGame } from './store';
 
@@ -148,7 +149,7 @@ export function LootView({ title, loot }: { title: string; loot: Loot }) {
   if (!text && !loot.eggs.length) return null;
   return (
     <View style={{ marginTop: 8 }}>
-      <Text style={{ color: C.gold, fontWeight: '800', fontSize: 13 }}>{title}</Text>
+      <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 15 }}>{title}</Text>
       {text ? <P>{text}</P> : null}
       {loot.eggs.length ? (
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
@@ -294,6 +295,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     const b = bRef.current!;
     let moveEl: ElementId = 'plain';
     let melee: number | null = null;
+    /** Where the melee attacker struck from, so it can bounce off the hit. */
+    let meleeAt = { tx: 0, dir: 1 };
+    let followed = false;
     let attackerX: number | null = null;
     let attackerSide = -1;
     let statusSound = false;
@@ -321,6 +325,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             const tx = pt.x - dir * (pt.sz * 0.42 + pa.sz * 0.36) - pa.x;
             const ty = pt.feet - pa.feet + 2;
             melee = e.u;
+            meleeAt = { tx, dir };
+            followed = false;
             const runTo = async (ms = 300) => {
               setAct(e.u, { moving: true });
               await run(Animated.parallel([tm(a.ox, tx, ms * T(), Easing.inOut(Easing.quad)), tm(a.oy, ty, ms * T(), Easing.inOut(Easing.quad)), tm(a.lean, 8, 200 * T())]));
@@ -421,6 +427,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 // Blink across in a blur and cut straight through, stopping on the far side.
                 await run(Animated.parallel([tm(a.lean, -10, 120 * T()), tm(a.stretch, 0.86, 120 * T())]));
                 const past = pt.x + dir * pt.sz * 0.55 - pa.x;
+                meleeAt = { tx: past + dir * 16, dir };
                 sfx('swing');
                 addFx({ kind: 'streak', el: e.el, x1: pa.x, x2: pt.x + dir * pt.sz * 0.55, y: pa.midY + ty * 0.5, h: pa.sz * 0.6 });
                 setAct(e.u, { pose: 'attack' });
@@ -611,6 +618,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           addFloat(e.u, `-${e.n}${e.mult > 1 ? '!' : ''}`, e.mult > 1 ? '#ffd34d' : e.mult < 1 ? '#b9b3cc' : '#ff7b7b', e.mult > 1);
           if (e.mult > 1) addFloat(e.u, e.mult >= 4 ? 'Devastating' : 'Hits hard', '#ffd34d');
           else if (e.mult < 1) addFloat(e.u, 'Hits weakly', '#b9b3cc');
+          if (e.from >= 0 && lastStyle === 'melee' && melee != null && !followed) {
+            // Follow-through: the attacker rebounds off the hit and settles, instead of freezing mid-strike.
+            followed = true;
+            const am = A(melee), mu = melee;
+            setTimeout(() => setActs(m => (m[mu]?.pose === 'attack' || m[mu]?.pose === 'roar' || m[mu]?.pose === 'cast' ? { ...m, [mu]: { ...m[mu], pose: undefined } } : m)), 90);
+            Animated.parallel([
+              Animated.spring(am.ox, { toValue: meleeAt.tx - meleeAt.dir * 10, friction: 6, tension: 90, useNativeDriver: ND }),
+              Animated.sequence([tm(am.lean, -7, 120, Easing.out(Easing.quad)), Animated.spring(am.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND })]),
+              Animated.spring(am.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND }),
+              tm(am.blink, 1, 120),
+            ]).start();
+          }
           if (e.from >= 0 && lastStyle === 'melee') {
             addFx({ kind: 'impact', el: moveEl, x: pt.x - (t.side === 0 ? -1 : 1) * pt.sz * 0.12, y: pt.midY, big: e.mult > 1 || lastBig });
             addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY });
@@ -637,7 +656,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           Animated.sequence([
             Animated.timing(a.blink, { toValue: 0.45, duration: 50, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 90, useNativeDriver: ND }),
           ]).start();
-          await sleep((lastStyle === 'melee' ? 250 : 200) * T());
+          await sleep((lastStyle === 'melee' ? 190 : 200) * T());
           break;
         }
         case 'miss': {
@@ -702,17 +721,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       const m = melee;
       if (bRef.current!.units[m].alive) {
         a.spin.setValue(0);
-        await run(Animated.parallel([
-          Animated.timing(a.lean, { toValue: 0, duration: 150, useNativeDriver: ND }),
-          Animated.timing(a.stretch, { toValue: 1, duration: 150, useNativeDriver: ND }),
-          Animated.timing(a.blink, { toValue: 1, duration: 150, useNativeDriver: ND }),
-        ]));
+        // Turn with a little squash so the flip reads as a turn, then run home leaning into it.
         setAct(m, { pose: undefined, turned: true, moving: true });
+        Animated.sequence([tm(a.stretch, 0.9, 70), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 160, useNativeDriver: ND })]).start();
+        tm(a.blink, 1, 120).start();
         await run(Animated.parallel([
-          Animated.timing(a.ox, { toValue: 0, duration: 320 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
-          Animated.timing(a.oy, { toValue: 0, duration: 320 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+          Animated.timing(a.ox, { toValue: 0, duration: 340 * T(), easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }),
+          Animated.timing(a.oy, { toValue: 0, duration: 340 * T(), easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }),
+          Animated.sequence([tm(a.lean, 6, 120 * T(), Easing.out(Easing.quad)), tm(a.lean, 0, 220 * T(), Easing.inOut(Easing.quad))]),
         ]));
+        // Arrive: turn back to face the fight and settle.
         setAct(m, { turned: false, moving: false });
+        Animated.sequence([tm(a.stretch, 0.88, 70), Animated.spring(a.stretch, { toValue: 1, friction: 3.5, tension: 150, useNativeDriver: ND })]).start();
       } else setAct(m, null);
     }
     if (live.current) { setView(snap(b)); setOrder(turnOrder(b, 8)); }
@@ -809,6 +829,13 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     });
   }, [D, mutate, step, theRun, travel]);
 
+  // With auto battle on, the run rolls straight on to the next fight after a moment to see the rewards.
+  useEffect(() => {
+    if (!result || result.runOver || !save.auto) return;
+    const t = setTimeout(() => { if (live.current) enterChamber(); }, 1800);
+    return () => clearTimeout(t);
+  }, [result, save.auto, enterChamber]);
+
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
@@ -829,10 +856,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <Grad colors={['#2a2054', '#160f2c', '#0f0a1e']} />
       <View style={[st.row, { paddingHorizontal: 12, paddingVertical: 6, justifyContent: 'space-between' }]}>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: C.text, fontWeight: '800', fontSize: 15 }} numberOfLines={1}>{theRun.title}</Text>
-          <Text style={{ color: C.dim, fontSize: 11 }}>
+          <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 18 }} numberOfLines={1}>{theRun.title}</Text>
+          <Text style={{ color: C.dim, fontSize: 12, fontFamily: F.med }}>
             {theRun.kind === 'tower' ? `Floor ${theRun.floor}` : theRun.kind === 'raid' && b ? `Actions left: ${Math.max(0, theRun.actionLimit - b.actions[0])}` : theRun.fights.length > 1 ? `Fight ${theRun.idx + 1} of ${theRun.fights.length}` : ''}
             {fight?.boss ? '  ·  Boss' : ''}
           </Text>
@@ -970,7 +998,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         {me && b ? (
           <>
             <View style={[st.row, { marginBottom: 6 }]}>
-              <Text style={{ color: C.gold, fontWeight: '800', fontSize: 14, flex: 1 }} numberOfLines={1}>{me.name}'s turn</Text>
+              <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 17, flex: 1 }} numberOfLines={1}>{me.name}'s turn</Text>
               <Text style={{ color: C.dim, fontSize: 11 }}>{sel ? (needsPick(sel) ? 'Tap a highlighted target' : '') : 'Pick a move'}</Text>
             </View>
             <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
@@ -980,9 +1008,13 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 const e = ELEMENTS[mv.el];
                 const on = sel?.id === mv.id;
                 return (
-                  <Pressable key={mv.id} disabled={!ok} onPress={() => { sfx('select'); setSel(mv); }} style={{ width: (W - 26) / 2, backgroundColor: on ? C.panel2 : C.panel, borderRadius: 10, borderWidth: on ? 2 : 1, borderColor: on ? C.gold : C.line, borderLeftWidth: 6, borderLeftColor: e.base, padding: 7, opacity: ok ? 1 : 0.45 }}>
-                    <Text style={{ color: C.text, fontWeight: '800', fontSize: 13 }} numberOfLines={1}>{mv.name}</Text>
-                    <Text style={{ color: C.dim, fontSize: 10 }} numberOfLines={1}>{cd > 0 ? `Ready in ${cd}` : !ok ? 'Not usable' : mv.id === 'strike' ? 'Typeless' : e.name}{mv.cd && cd <= 0 ? ` · cd ${mv.cd}` : ''}</Text>
+                  <Pressable key={mv.id} disabled={!ok} onPress={() => { sfx('select'); haptic('select'); setSel(mv); }} style={({ pressed }) => [{ width: (W - 26) / 2, borderRadius: 14, borderWidth: on ? 2 : 1, borderColor: on ? C.gold : 'rgba(255,255,255,0.1)', overflow: 'hidden', opacity: ok ? 1 : 0.45, transform: [{ scale: pressed ? 0.96 : 1 }] }, on ? shadow(C.gold, 10, 0.6, 0) : null]}>
+                    <Grad colors={[mixHex('#352a60', e.base, on ? 0.45 : 0.3), '#231b40']} />
+                    <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 5, backgroundColor: e.base }} />
+                    <View style={{ padding: 8, paddingLeft: 12 }}>
+                    <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 15 }} numberOfLines={1}>{mv.name}</Text>
+                    <Text style={{ color: C.dim, fontSize: 10.5 }} numberOfLines={1}>{cd > 0 ? `Ready in ${cd}` : !ok ? 'Not usable' : mv.id === 'strike' ? 'Typeless' : e.name}{mv.cd && cd <= 0 ? ` · cd ${mv.cd}` : ''}</Text>
+                    </View>
                   </Pressable>
                 );
               })}
@@ -1001,8 +1033,12 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
       {result ? (
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000a', justifyContent: 'center', padding: 16 }}>
-          <View style={[st.card, { maxHeight: winH * 0.8 }]}>
-            <Text style={{ color: result.won ? C.gold : C.bad, fontSize: 22, fontWeight: '900', textAlign: 'center' }}>
+          <FadeIn dy={30}>
+          <View style={[st.card, { maxHeight: winH * 0.8, borderColor: result.won ? C.gold + 'aa' : C.bad + 'aa', borderWidth: 1.5 }, shadow(result.won ? C.gold : C.bad, 18, 0.5, 0)]}>
+            <Grad colors={['#3a2e6b', '#221a42']} />
+            <Glow color={result.won ? C.gold : C.bad} opacity={0.35} cy="0%" r="70%" />
+            <View style={{ alignItems: 'center', marginBottom: 2 }}><Icon name={result.won ? 'crown' : 'skull'} size={34} color={result.won ? C.gold : C.bad} accent="#2b2054" /></View>
+            <Text style={{ color: result.won ? C.gold : C.bad, fontSize: 30, fontFamily: F.bold, textAlign: 'center', textShadowColor: (result.won ? C.gold : C.bad) + '88', textShadowRadius: 12 }}>
               {theRun.kind === 'raid' ? 'Raid attempt over' : result.won ? (result.cleared && theRun.kind === 'area' ? 'Area cleared!' : 'Victory') : 'Defeated'}
             </Text>
             {result.note ? <P style={{ textAlign: 'center', marginTop: 4 }}>{result.note}</P> : null}
@@ -1013,7 +1049,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 return (
                   <View key={x.cid} style={{ marginBottom: 5 }}>
                     <Text style={{ color: C.text, fontSize: 13 }}>
-                      <Text style={{ fontWeight: '800' }}>{c.name}</Text>  +{x.xp} XP{x.levels ? <Text style={{ color: C.good }}>  Lv {c.level - x.levels} → {c.level}</Text> : null}
+                      <Text style={{ fontFamily: F.semi, fontSize: 15 }}>{c.name}</Text>  +{x.xp} XP{x.levels ? <Text style={{ color: C.good, fontFamily: F.semi }}>  Lv {c.level - x.levels} → {c.level}</Text> : null}
                     </Text>
                     {x.newStage != null ? <Text style={{ color: C.gold, fontSize: 12, fontWeight: '700' }}>Grew into {x.newStage === 3 ? 'an' : 'a'} {STAGE_NAMES[x.newStage]}!</Text> : null}
                     {x.learned.map(m => <Text key={m.id} style={{ color: C.accent2, fontSize: 12 }}>Learned {m.name}</Text>)}
@@ -1029,7 +1065,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 ? <Btn style={{ flex: 2 }} kind="gold" label={theRun.kind === 'tower' ? `Floor ${theRun.floor}` : theRun.fights[theRun.idx]?.boss ? 'Face the boss' : 'Next fight'} onPress={enterChamber} />
                 : <Btn style={{ flex: 1 }} kind="gold" label="Done" onPress={leave} />}
             </View>
+            {!result.runOver && save.auto ? <P dim style={{ textAlign: 'center', marginTop: 6, fontSize: 12 }}>Auto is on: carrying on in a moment. Tap Leave to stop here.</P> : null}
           </View>
+          </FadeIn>
         </View>
       ) : null}
     </View>

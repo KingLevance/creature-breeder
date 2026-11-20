@@ -7,7 +7,8 @@ import { Creature, PedNode, STAGE_NAMES, buildLabel, slotRarities, stageLevels, 
 import { NAME_MAX, expandRoster, release, releaseValue, renameCreature, rosterExpandCost, useScan } from '../game/economy';
 import { PART_KEYS, PART_LABELS, SKELETON_NAMES, STANCE_NAMES, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
-import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, TypeChips, st } from './kit';
+import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
+import { Backdrop, F, FadeIn, Glow } from './look';
 import { useGame } from './store';
 
 function PedCard({ n, label, size }: { n?: PedNode; label: string; size: number }) {
@@ -46,9 +47,18 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: 50 }}>
+        <Backdrop tint={ELEMENTS[ph.el1].base} H={900} />
         <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
           <View style={{ alignItems: 'center' }}>
-            <LiveCreature ph={ph} stage={stage} size={W * 0.55} />
+            <FadeIn dy={24}>
+              <View style={{ width: W - 28, height: W * 0.58, alignItems: 'center', justifyContent: 'flex-end' }}>
+                <Glow color={ELEMENTS[ph.el1].light} opacity={0.6} cy="62%" r="52%" />
+                {ph.el2 ? <Glow color={ELEMENTS[ph.el2].light} opacity={0.35} cx="72%" cy="38%" r="36%" /> : null}
+                <View style={{ position: 'absolute', bottom: W * 0.035, width: W * 0.5, height: W * 0.09, borderRadius: W, backgroundColor: 'rgba(10,6,22,0.55)', borderWidth: 2, borderColor: ELEMENTS[ph.el1].light + '66' }} />
+                <View style={{ position: 'absolute', bottom: W * 0.055, width: W * 0.36, height: W * 0.05, borderRadius: W, backgroundColor: ELEMENTS[ph.el1].light + '33' }} />
+                <LiveCreature ph={ph} stage={stage} size={W * 0.55} />
+              </View>
+            </FadeIn>
             {editing != null ? (
               <View style={[st.row, { marginVertical: 4 }]}>
                 <TextInput
@@ -66,7 +76,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
               </View>
             ) : (
               <Pressable onPress={() => setEditing(c.name)} style={st.row} hitSlop={8}>
-                <Text style={{ color: C.text, fontSize: 22, fontWeight: '900' }}>{c.name}</Text>
+                <Text style={{ color: C.text, fontSize: 30, fontFamily: F.bold, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }}>{c.name}</Text>
                 <SexMark sex={c.sex} />
                 <Text style={{ color: C.dim, fontSize: 16 }}>✎</Text>
               </Pressable>
@@ -78,8 +88,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
 
           <Card style={{ marginTop: 12 }}>
             <View style={[st.row, { justifyContent: 'space-between' }]}>
-              <H>Level {c.level} · {STAGE_NAMES[stage]}</H>
-              <P dim>{c.level >= 100 ? 'Max' : `${c.xp} / ${xpToNext(c.level)} XP`}</P>
+              <Title icon="star" color="#f6b52e" right={<P dim>{c.level >= 100 ? 'Max' : `${c.xp} / ${xpToNext(c.level)} XP`}</P>}>Level {c.level} · {STAGE_NAMES[stage]}</Title>
             </View>
             <Bar frac={c.level >= 100 ? 1 : c.xp / xpToNext(c.level)} color={C.accent} />
             <P dim style={{ marginTop: 6 }}>Teen at {lv[1]} · Adult at {lv[2]} · Ancient at {lv[3]} · Legendary at 100</P>
@@ -87,7 +96,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
           </Card>
 
           <Card>
-            <H>Stats</H>
+            <Title icon="bolt" color="#ff7a59">Stats</Title>
             {STAT_KEYS.map(k => (
               <View key={k} style={[st.row, { marginBottom: 4 }]}>
                 <Text style={{ color: C.dim, width: 62, fontSize: 12 }}>{STAT_LABELS[k]}</Text>
@@ -99,7 +108,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
           </Card>
 
           <Card>
-            <H>Moves</H>
+            <Title icon="sword" color="#8f7cff">Moves</Title>
             <P dim style={{ marginBottom: 6 }}>One slot per life stage. You can see how rare a slot is, but not the move until it unlocks.</P>
             {rar.map((r, i) => {
               const id2 = c.moves[i];
@@ -118,7 +127,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
 
           <Card>
             <View style={[st.row, { justifyContent: 'space-between' }]}>
-              <H>Genes</H>
+              <Title icon="dna" color="#4fc3a1">Genes</Title>
               {carriers > 0 && !c.scanned ? <Text style={{ color: C.accent2, fontSize: 12, fontWeight: '700' }}>◆ Carries something rare</Text> : null}
             </View>
             {!c.scanned ? <P dim style={{ marginBottom: 6 }}>You see what shows. Each trait also has a hidden second gene. A scan lens reveals them all.</P> : null}
@@ -139,7 +148,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
           </Card>
 
           <Card>
-            <H>Pedigree</H>
+            <Title icon="heart" color="#ff7fae">Pedigree</Title>
             {c.mom || c.dad ? (
               <>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>

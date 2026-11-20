@@ -5,7 +5,8 @@ import { ELEMENTS } from '../game/data/elements';
 import { SHOP, buy } from '../game/economy';
 import { RAID_ACTIONS, RAID_TRIES, Run, raidState, rivalName, startArenaRun, startRaidRun, startTowerRun } from '../game/run';
 import { TUT } from '../game/save';
-import { Bar, Btn, C, Card, ElChip, H, P, st } from './kit';
+import { Bar, Btn, C, Card, ElChip, H, P, Title, st } from './kit';
+import { FadeIn } from './look';
 import { TeamPicker } from './Roster';
 import { rng, useGame } from './store';
 import { versionLabel } from './updates';
@@ -29,7 +30,7 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
         {locked ? <P dim style={{ marginBottom: 8 }}>These open once you finish the tutorial.</P> : null}
 
         <Card style={{ opacity: locked ? 0.5 : 1 }}>
-          <H>Rivals</H>
+          <Title icon="crown" color="#f6b52e">Rivals</Title>
           <P dim>Fight another breeder's team of the same size as yours. These rivals are computer-run for now: real player-versus-player needs an online server, which this build doesn't have yet.</P>
           <View style={[st.row, { justifyContent: 'space-between', marginTop: 6 }]}>
             <Text style={{ color: C.gold, fontWeight: '800' }}>Rating {save.arena.rating}</Text>
@@ -39,7 +40,7 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
         </Card>
 
         <Card style={{ opacity: locked ? 0.5 : 1 }}>
-          <H>Raid: {raid.boss.name}</H>
+          <Title icon="skull" color="#b06cff">Raid: {raid.boss.name}</Title>
           <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4 }}><ElChip el={raid.boss.el} small /><ElChip el={raid.boss.el2} small /></View>
           <P dim>A boss too big to beat in one go. You get {RAID_ACTIONS} actions per attempt and {RAID_TRIES} attempts a day; damage adds up over the week. Local for now, so only your own damage counts.</P>
           <View style={{ marginTop: 6 }}>
@@ -50,13 +51,13 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
         </Card>
 
         <Card style={{ opacity: locked ? 0.5 : 1 }}>
-          <H>Endless Tower</H>
+          <Title icon="tower" color="#5fb2ff">Endless Tower</Title>
           <P dim>Floor after floor with rewards on each, and a warden with a chest every fifth floor. Leave with what you've earned at any time, or climb until your team falls.</P>
           <P style={{ marginTop: 4 }}>Best floor: {save.tower.best}</P>
           <Btn style={{ marginTop: 8 }} label="Climb" disabled={locked} onPress={() => setPick('tower')} />
         </Card>
 
-        <H>Essence shop</H>
+        <Title icon="gem" color="#8f6cff">Essence shop</Title>
         <P dim style={{ marginBottom: 6 }}>Releasing a creature gives essence. You have {save.essence}.</P>
         {SHOP.map(item => (
           <Card key={item.id}>
@@ -70,14 +71,14 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
           </Card>
         ))}
 
-        <H>Bag</H>
+        <Title icon="bag" color="#e8a24f">Bag</Title>
         <Card>
           <P>Gold {save.gold} · Essence {save.essence}</P>
           <P>Dust {save.dust} · Shards {save.shard} · Cores {save.core} · Scan lenses {save.scans}</P>
           <P dim style={{ marginTop: 4 }}>Hatched {save.counts.hatched} · Bred {save.counts.bred} · Fights {save.counts.fights}</P>
         </Card>
 
-        <H>Settings</H>
+        <Title icon="compass" color="#7a8bb0">Settings</Title>
         <Card>
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
             <Btn style={{ flex: 1 }} kind={save.sound ? 'main' : 'ghost'} label={save.sound ? 'Sound on' : 'Sound off'} onPress={() => mutate(s => { s.sound = !s.sound; })} />

@@ -1,13 +1,14 @@
 // Incubators, eggs and breeding. Also the hatch reveal: stars first, then the creature.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { SfxName, sfx } from './audio';
 import { Creature, Egg, STAGE_NAMES, stageLevels, stageOf, typeLabel } from '../game/creature';
 import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, doBreed, forecast, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
 import { SKELETON_NAMES, express, starRating } from '../game/genome';
 import { TUT } from '../game/save';
-import { Bar, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, P, SexMark, Stars, TypeChips, st } from './kit';
+import { Bar, Breathing, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, P, SexMark, Stars, Title, TypeChips, mixHex, st } from './kit';
+import { F, FadeIn, Glow, Grad, Icon, IconName, ND, haptic, pulse, shadow, useLoop, usePress } from './look';
 import { CreatureDetail } from './Roster';
 import { fmtTime, rng, useGame, useNow } from './store';
 
@@ -137,14 +138,56 @@ function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
   );
 }
 
+/** An egg that rocks gently now and then, as if something inside is stirring. */
+function Rocking({ children, strength = 1 }: { children: React.ReactNode; strength?: number }) {
+  const t = useLoop(useMemo(() => 2600 + Math.random() * 1800, []));
+  const rot = t.interpolate({ inputRange: [0, 0.62, 0.7, 0.78, 0.86, 0.94, 1], outputRange: ['0deg', '0deg', `${6 * strength}deg`, `${-5 * strength}deg`, `${3 * strength}deg`, '0deg', '0deg'] });
+  return <Animated.View style={{ transform: [{ translateY: 20 }, { rotate: rot }, { translateY: -20 }] }}>{children}</Animated.View>;
+}
+
 function EggCard({ egg, onPress, selected }: { egg: Egg; onPress?: () => void; selected?: boolean }) {
   const ph = useMemo(() => express(egg.g), [egg.g]);
   return (
-    <Card onPress={onPress} style={{ width: 96, alignItems: 'center', marginBottom: 0, padding: 6, borderColor: selected ? C.gold : C.line, borderWidth: selected ? 2 : 1 }}>
-      <EggView ph={ph} size={60} />
+    <Card onPress={onPress} glow={selected ? C.gold : undefined} style={{ width: 98, alignItems: 'center', marginBottom: 0, padding: 7 }}>
+      <View style={{ width: 70, height: 70, alignItems: 'center', justifyContent: 'center' }}>
+        <Glow color={selected ? '#ffd34d' : '#c2b0ff'} opacity={selected ? 0.5 : 0.25} />
+        <Rocking strength={0.7}><EggView ph={ph} size={62} /></Rocking>
+      </View>
       <Stars n={starRating(egg.g)} size={11} />
-      <Text style={{ color: C.dim, fontSize: 10 }}>{egg.origin === 'bred' ? 'Bred' : 'Wild'}{egg.mutations ? ' · mutated' : ''}</Text>
+      <Text style={{ color: C.dim, fontSize: 10.5, fontFamily: F.med }}>{egg.origin === 'bred' ? 'Bred' : 'Wild'}{egg.mutations ? ' · mutated' : ''}</Text>
     </Card>
+  );
+}
+
+/** An incubator: the egg sits in a glowing cradle ringed by its progress. */
+function IncubatorArt({ ph, frac, ready, wobble }: { ph?: ReturnType<typeof express>; frac: number; ready: boolean; wobble: number }) {
+  const S = 92, R = 40, circ = 2 * Math.PI * R;
+  const t = useLoop(1600, ready);
+  return (
+    <View style={{ width: S, height: S, alignItems: 'center', justifyContent: 'center' }}>
+      {ready ? <Animated.View style={[{ position: 'absolute', width: S, height: S, opacity: pulse(t, 0.5, 1), transform: [{ scale: pulse(t, 0.95, 1.08) }] }]}><Glow color="#ffd34d" opacity={0.7} /></Animated.View> : <Glow color="#8f7cff" opacity={ph ? 0.35 : 0.15} />}
+      <Svg width={S} height={S} style={{ position: 'absolute' }}>
+        <Circle cx={S / 2} cy={S / 2} r={R} stroke="rgba(255,255,255,0.1)" strokeWidth={6} fill="rgba(10,6,22,0.35)" strokeDasharray={ph ? undefined : '4 6'} />
+        {ph ? <Circle cx={S / 2} cy={S / 2} r={R} stroke={ready ? '#ffd34d' : '#a898ff'} strokeWidth={6} fill="none" strokeLinecap="round" strokeDasharray={`${circ}`} strokeDashoffset={circ * (1 - Math.max(0.02, Math.min(1, frac)))} transform={`rotate(-90 ${S / 2} ${S / 2})`} /> : null}
+      </Svg>
+      {ph ? <View style={{ transform: [{ rotate: `${wobble * 8}deg` }] }}><Rocking strength={ready ? 0 : 0.6}><EggView ph={ph} size={60} /></Rocking></View> : <Icon name="egg" size={34} color="rgba(255,255,255,0.18)" accent="rgba(0,0,0,0)" />}
+    </View>
+  );
+}
+
+/** A friendly empty state: a big icon in a soft glow and a line of help. */
+function Empty({ icon, color, title, text }: { icon: IconName; color: string; title: string; text: string }) {
+  return (
+    <FadeIn>
+      <Card style={{ alignItems: 'center', paddingVertical: 20 }}>
+        <View style={{ width: 84, height: 84, alignItems: 'center', justifyContent: 'center', marginBottom: 6 }}>
+          <Glow color={color} opacity={0.55} />
+          <View><Icon name={icon} size={46} color={color} accent="#2b2054" /></View>
+        </View>
+        <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 18, marginBottom: 2 }}>{title}</Text>
+        <P dim style={{ textAlign: 'center' }}>{text}</P>
+      </Card>
+    </FadeIn>
   );
 }
 
@@ -159,8 +202,8 @@ export function NurseryScreen() {
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 14 }}>
-        <H>Incubators</H>
-        {save.incubators.length === 0 ? <P dim>You'll get your first incubator after your first fight.</P> : null}
+        <Title icon="egg" color="#ffb35c">Incubators</Title>
+        {save.incubators.length === 0 ? <Empty icon="egg" color="#ffb35c" title="No incubator yet" text="You'll get your first incubator after your first fight." /> : null}
         {save.incubators.map((inc, i) => {
           const up = INC_UPGRADE[inc.tier + 1];
           const left = inc.egg ? inc.readyAt - now : 0;
@@ -168,20 +211,19 @@ export function NurseryScreen() {
           const ready = !!inc.egg && left <= 0;
           const cost = inc.egg ? speedUpCost(save, inc, now) : 0;
           return (
-            <Card key={i} style={{ borderColor: ready ? C.gold : C.line }}>
+            <FadeIn key={i} delay={i * 70}>
+            <Card glow={ready ? C.gold : undefined} tint={ready ? '#f5c542' : undefined}>
               <View style={st.row}>
-                <View style={{ width: 70, alignItems: 'center' }}>
-                  {inc.egg ? <EggView ph={express(inc.egg.g)} size={66} wobble={ready ? Math.sin(now / 200) : 0} /> : <Text style={{ fontSize: 30, color: C.line }}>◯</Text>}
-                </View>
+                <IncubatorArt ph={inc.egg ? express(inc.egg.g) : undefined} frac={inc.egg ? 1 - left / total : 0} ready={ready} wobble={ready ? Math.sin(now / 200) : 0} />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: C.text, fontWeight: '800' }}>Incubator {i + 1} · Tier {inc.tier}</Text>
+                  <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 17 }}>Incubator {i + 1} <Text style={{ color: C.dim, fontFamily: F.med, fontSize: 13 }}>· Tier {inc.tier}</Text></Text>
                   {inc.egg ? (
                     <>
                       <Stars n={starRating(inc.egg.g)} />
-                      {ready ? <P style={{ color: C.gold }}>Ready to hatch!</P> : (
+                      {ready ? <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 16, marginTop: 2 }}>Ready to hatch!</Text> : (
                         <>
-                          <Bar frac={1 - left / total} color={C.accent} />
-                          <P dim>{fmtTime(left)} left</P>
+                          <View style={{ marginTop: 4 }}><Bar frac={1 - left / total} color="#a898ff" height={8} /></View>
+                          <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13, marginTop: 3 }}>{fmtTime(left)} left</Text>
                         </>
                       )}
                     </>
@@ -196,13 +238,14 @@ export function NurseryScreen() {
               </View>
               {inc.egg && !ready && cost > 0 ? <P dim style={{ marginTop: 4 }}>Each speed-up in a day costs more than the last.</P> : null}
             </Card>
+            </FadeIn>
           );
         })}
         {save.incubators.length > 0 && nextSlot != null ? <Btn kind="ghost" label={`Buy another incubator (${nextSlot} gold)`} disabled={save.gold < nextSlot} onPress={() => mutate(s => { buyIncubator(s); })} /> : null}
 
         <View style={{ height: 16 }} />
-        <H>Eggs {save.eggs.length}/20</H>
-        {save.eggs.length === 0 ? <P dim>No eggs. Enemies sometimes drop them, boss chests often do, and you can breed two adults.</P> : (
+        <Title icon="sparkle" color="#c2b0ff" right={<Text style={{ color: C.dim, fontFamily: F.semi }}>{save.eggs.length}/20</Text>}>Eggs</Title>
+        {save.eggs.length === 0 ? <Empty icon="egg" color="#c2b0ff" title="No eggs yet" text="Enemies sometimes drop them, boss chests often do, and you can breed two adults." /> : (
           <>
             <P dim style={{ marginBottom: 8 }}>Stars show how good the hatchling's genes are. The colour hints at its element.</P>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -238,26 +281,43 @@ export function BreedScreen() {
   const choose = (c: Creature) => (c.sex === 'F' ? setMom(c.id) : setDad(c.id));
   const tutorial = save.tutorial < TUT.DONE;
   const Slot = ({ c, label, sex }: { c?: Creature; label: string; sex: 'F' | 'M' }) => (
-    <Pressable onPress={() => setPicking(sex)} style={{ flex: 1, alignItems: 'center', backgroundColor: C.panel2, borderRadius: 12, padding: 8, borderWidth: 1, borderColor: c ? C.line : C.gold }}>
-      <Text style={{ color: C.dim, fontSize: 11 }}>{label}</Text>
+    <Pressable onPress={() => { haptic('select'); setPicking(sex); }} style={[{ flex: 1, borderRadius: 18, overflow: 'hidden', borderWidth: 1.5, borderColor: c ? 'rgba(255,255,255,0.1)' : (sex === 'F' ? C.female : C.male) + 'aa' }, shadow(sex === 'F' ? C.female : C.male, 10, c ? 0.2 : 0.45, 0)]}>
+      <Grad colors={[mixHex('#352a60', sex === 'F' ? C.female : C.male, 0.25), '#241b44']} />
+      <View style={{ alignItems: 'center', padding: 8 }}>
+      <View style={{ backgroundColor: 'rgba(10,6,22,0.45)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 1 }}><Text style={{ color: sex === 'F' ? C.female : C.male, fontSize: 12, fontFamily: F.semi }}>{label}</Text></View>
       {c ? (
         <>
-          <CreatureView ph={express(c.g)} stage={stageOf(c)} size={84} />
-          <Text style={{ color: C.text, fontWeight: '800' }}>{c.name}</Text>
+          <View style={{ width: 96, height: 92, alignItems: 'center', justifyContent: 'flex-end' }}>
+            <Glow color={sex === 'F' ? C.female : C.male} opacity={0.35} cy="65%" />
+            <Breathing size={92}><CreatureView ph={express(c.g)} stage={stageOf(c)} size={92} /></Breathing>
+          </View>
+          <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }}>{c.name}</Text>
           <Stars n={starRating(c.g)} size={11} />
           <Text style={{ color: C.dim, fontSize: 10 }}>Bred {c.bred} time{c.bred === 1 ? '' : 's'}</Text>
           <Btn small kind="ghost" label="Pedigree" onPress={() => setDetail(c.id)} />
         </>
-      ) : <Text style={{ color: C.gold, marginVertical: 30, fontWeight: '700' }}>Tap to choose</Text>}
+      ) : (
+        <View style={{ alignItems: 'center', marginVertical: 18 }}>
+          <View style={{ width: 62, height: 62, borderRadius: 31, borderWidth: 2, borderStyle: 'dashed', borderColor: (sex === 'F' ? C.female : C.male) + 'aa', alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
+            <Text style={{ color: sex === 'F' ? C.female : C.male, fontSize: 32, fontFamily: F.bold, marginTop: -3 }}>+</Text>
+          </View>
+          <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14 }}>Tap to choose</Text>
+        </View>
+      )}
+      </View>
     </Pressable>
   );
+  const beat = useLoop(1100);
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 14 }}>
-        <H>Breeding</H>
+        <Title icon="heart" color="#ff7fae">Breeding</Title>
         <P dim style={{ marginBottom: 8 }}>Each parent passes one of its two genes for every trait. The egg can look like either parent, a mix, or show something both were hiding.</P>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
           <Slot c={mom} label="Mother ♀" sex="F" />
+          <Animated.View style={{ position: 'absolute', left: '50%', marginLeft: -17, zIndex: 2, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2050', borderWidth: 2, borderColor: '#ff7fae', transform: [{ scale: beat.interpolate({ inputRange: [0, 0.12, 0.24, 0.36, 1], outputRange: [1, 1.2, 1, 1.12, 1] }) }] }}>
+            <View><Icon name="heart" size={18} color="#ff7fae" /></View>
+          </Animated.View>
           <Slot c={dad} label="Father ♂" sex="M" />
         </View>
 
