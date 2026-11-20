@@ -657,11 +657,12 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
           const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
           p.path(`M${f(x0 + nx * w / 2)} ${f(y0 + ny * w / 2)}Q${f(x0 + dx * 0.5 + nx * w * (0.75 + bend))} ${f(y0 + dy * 0.5 + ny * w * (0.75 + bend))} ${f(x1)} ${f(y1)}Q${f(x0 + dx * 0.45 - nx * w * (0.75 - bend))} ${f(y0 + dy * 0.45 - ny * w * (0.75 - bend))} ${f(x0 - nx * w / 2)} ${f(y0 - ny * w / 2)}Z`, col, { line: false });
         };
+        // They stay clear of the belly patch: along the spine on long bodies, up the back edge on upright ones.
         const flames: [number, number, number, number, number, number][] = a.flatBack
           // from the shoulder, streaming back: [u0, w0, u1, w1, width, bend]
-          ? [[0.5, -0.1, -0.5, -0.55, 0.5, 0.25], [0.5, 0.1, -0.72, -0.05, 0.55, -0.15], [0.45, 0.3, -0.35, 0.42, 0.42, 0.2]]
-          // from the hips, rising up the back
-          : [[-0.62, 0.42, -0.42, -0.58, 0.58, 0.25], [-0.25, 0.38, -0.02, -0.78, 0.62, -0.2], [0.12, 0.3, 0.32, -0.32, 0.42, 0.2]];
+          ? [[0.55, -0.42, -0.5, -0.72, 0.42, 0.25], [0.55, -0.25, -0.78, -0.32, 0.38, -0.15], [0.45, -0.58, -0.1, -0.86, 0.3, 0.2]]
+          // from the back edge, licking up and forward
+          : [[-0.78, 0.3, -0.52, -0.2, 0.42, 0.2], [-0.82, -0.04, -0.38, -0.62, 0.46, -0.15], [-0.66, -0.45, -0.18, -0.92, 0.36, 0.2]];
         const size = a.flatBack ? bry : brx;
         for (const [u0, w0, u1, w1, wd, bd] of flames) { const [x0, y0] = body(u0, w0), [x1, y1] = body(u1, w1); tongue(x0, y0, x1, y1, size * wd, bd, dark); }
         for (const [u0, w0, u1, w1, wd, bd] of flames) {
