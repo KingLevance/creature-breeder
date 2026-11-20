@@ -153,6 +153,7 @@ export const RAID_BOSSES: { name: string; el: ElementId; el2: ElementId; skel: S
   { name: 'Stormcrown', el: 'spark', el2: 'wyrm', skel: 'floater' },
   { name: 'The Drowned Bell', el: 'tide', el2: 'spirit', skel: 'aquatic' },
 ];
+export const RAID_ATK = 0.3;
 export const RAID_TRIES = 3;
 export const RAID_ACTIONS = 30;
 export const RAID_TIERS = [2, 5, 10, 18, 30];
@@ -163,7 +164,7 @@ export function raidState(s: Save, now: number) {
   if (s.raid.day !== day) { s.raid.day = day; s.raid.tries = 0; }
   const boss = RAID_BOSSES[Number(week.slice(1)) % RAID_BOSSES.length];
   const top = Math.max(1, ...s.creatures.map(c => c.level));
-  const level = clamp(top + 3, 8, MAX_LEVEL);
+  const level = clamp(top, 5, MAX_LEVEL);
   const segment = Math.round((40 + 9 * level) * 5);
   return { boss, level, segment, triesLeft: RAID_TRIES - s.raid.tries, tiers: RAID_TIERS.map(t => t * segment) };
 }
@@ -177,7 +178,7 @@ export function startRaidRun(rng: Rng, s: Save, team: string[], now: number): Ru
   g.skel = [st.boss.skel, st.boss.skel]; g.el1 = [st.boss.el, st.boss.el]; g.el2 = [st.boss.el2, st.boss.el2]; g.leg = [1, 1];
   const boss = makeCreature(rng, g, st.level, 'wild', 4);
   boss.name = st.boss.name;
-  const run = baseRun('raid', st.boss.name, team, [{ enemies: [boss], mods: [{ boss: true, hpMul: 500, atkMul: 0.9, stage: 4 }], boss: true, level: st.level }]);
+  const run = baseRun('raid', st.boss.name, team, [{ enemies: [boss], mods: [{ boss: true, hpMul: 500, atkMul: RAID_ATK, stage: 4 }], boss: true, level: st.level }]);
   run.sky = ['#1a1030', '#7a3b6e']; run.ground = '#2a1838';
   run.actionLimit = RAID_ACTIONS;
   return run;

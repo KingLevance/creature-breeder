@@ -1,5 +1,5 @@
 // Breeding, incubators, the shop and the roster. Every function changes the save it is given.
-import { ELEMENTS } from './data/elements';
+import { ELEMENTS, ElementId } from './data/elements';
 import { Creature, Egg, addXp, hatch, newId, pedNode, stageLevels, stageOf, typeLabel, xpToNext } from './creature';
 import { Genome, Rng, Skeleton, boostPotential, breed, express, starRating, starterGenome } from './genome';
 import { Incubator, Save, TUT, byId, dayKey } from './save';
@@ -12,7 +12,16 @@ export const STARTERS: { name: string; g: Genome; blurb: string }[] = [
   { name: 'Ripplefin', blurb: 'A steady swimmer. Hard to knock out.', g: starterGenome('tide', 'aquatic', { head: 'round', tail: 'fan', horns: 'none', wings: 'fin', pattern: 'spots' }) },
   { name: 'Mossback', blurb: 'A leafy quadruped. Can heal.', g: starterGenome('verdant', 'quad', { head: 'eared', tail: 'tuft', horns: 'antlers', pattern: 'belly' }) },
 ];
-for (const s of STARTERS) s.g.growth = [3, 3]; // starters grow up fast, so breeding comes within a few fights
+// Starters grow up fast, so breeding comes within a few fights. Each also hides a recessive element and
+// carries wings it doesn't show, so the very first breeding can already surprise you.
+const STARTER_HIDDEN: ElementId[] = ['spark', 'frost', 'venom'];
+STARTERS.forEach((s, i) => {
+  s.g.growth = [3, 3];
+  s.g.el1 = [s.g.el1[0], STARTER_HIDDEN[i]];
+  s.g.hp = [3, 5]; s.g.atk = [4, 3]; s.g.def = [3, 4]; s.g.spd = [3, 5];
+  if (s.g.wings[0] === 'none') s.g.wings = ['none', 'bat'];
+  s.g.pattern = [s.g.pattern[0], 'stripes'];
+});
 
 export function pickStarter(rng: Rng, s: Save, idx: number): Creature {
   const st = STARTERS[idx];
@@ -33,7 +42,12 @@ export function tutorialEgg(s: Save): Egg {
   const skel: Skeleton = el === 'verdant' ? 'multi' : el === 'tide' ? 'biped' : 'quad';
   const g = starterGenome(pickEl, skel, pickEl === 'gale' ? { head: 'beak', wings: 'feather', tail: 'fan', horns: 'none' } : pickEl === 'swarm' ? { head: 'round', wings: 'insect', horns: 'antenna', tail: 'stinger', eyes: 'multi' } : { head: 'blunt', tail: 'club', horns: 'nubs' });
   g.growth = [3, 3];
-  g.atk = [4, 3]; g.spd = [4, 3];
+  // It hides the same recessive element as the starter, so their child shows it one time in four.
+  if (starter) g.el1 = [pickEl, starter.g.el1[1]];
+  g.skel = [skel, 'floater'];
+  if (g.wings[0] === 'none') g.wings = ['none', 'bat'];
+  g.atk = [4, 5]; g.spd = [4, 3]; g.hp = [5, 3]; g.def = [4, 4];
+  g.slots = [[0, 0], [1, 0], [1, 1], [1, 2]];
   return { id: newId('e'), g, origin: 'wild', mutations: 0 };
 }
 

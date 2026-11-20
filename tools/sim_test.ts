@@ -136,6 +136,7 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
   ok(res.won && res.cleared && s.cleared === 1, 'first area cleared');
   ok(stageOf(starter) === 2 && stageOf(second) === 2 && s.tutorial === TUT.BREED, 'both are adults after the first run');
   ok(breedProblem(s, starter, second, now) === null, 'the pair can breed');
+  ok(forecast(rng, starter.g, second.g, 600).types.length >= 3, 'the first breeding has several possible outcomes');
   const egg = doBreed(rng, s, starter.id, second.id, { dust: false, shard: false, core: false }, now)!;
   ok(!!egg && !!egg.mom && !!egg.dad && s.tutorial === TUT.HATCH2, 'breeding makes an egg with a pedigree');
   const slot = s.incubators.findIndex(i => !i.egg);
