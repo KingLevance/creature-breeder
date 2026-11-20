@@ -30,10 +30,25 @@ function ShapeNodes({ shapes }: { shapes: Shape[] }) {
   );
 }
 
+/** Drawn frames per creature. Idle and walk cycles repeat the same dozen frames, so each is drawn once. */
+const frameCache = new WeakMap<Pheno, Map<string, Shape[]>>();
+function drawCached(ph: Pheno, stage: number, phase: number, walking?: boolean, shadow?: boolean, ko?: boolean, pose?: Pose): Shape[] {
+  let m = frameCache.get(ph);
+  if (!m) { m = new Map(); frameCache.set(ph, m); }
+  const key = `${stage}|${phase.toFixed(3)}|${walking ? 1 : 0}|${shadow === false ? 0 : 1}|${ko ? 1 : 0}|${pose ?? 'idle'}`;
+  let sh = m.get(key);
+  if (!sh) {
+    sh = drawCreature(ph, { stage, phase, walking, shadow, ko, pose });
+    if (m.size > 80) m.clear();
+    m.set(key, sh);
+  }
+  return sh;
+}
+
 interface CreatureViewProps { ph: Pheno; stage: number; size: number; phase?: number; walking?: boolean; flip?: boolean; shadow?: boolean; ko?: boolean; pose?: Pose }
 /** One creature, drawn from its visible traits. The same component feeds cards, the nursery and battles. */
 export const CreatureView = memo(function CreatureView({ ph, stage, size, phase = 0, walking, flip, shadow, ko, pose }: CreatureViewProps) {
-  const shapes = useMemo(() => drawCreature(ph, { stage, phase, walking, shadow, ko, pose }), [ph, stage, phase, walking, shadow, ko, pose]);
+  const shapes = useMemo(() => drawCached(ph, stage, phase, walking, shadow, ko, pose), [ph, stage, phase, walking, shadow, ko, pose]);
   return (
     <Svg width={size} height={size} viewBox="0 0 100 100" opacity={creatureOpacity(ph)} style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
       <ShapeNodes shapes={shapes} />

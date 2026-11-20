@@ -21,6 +21,8 @@ STARTERS.forEach((s, i) => {
   s.g.hp = [3, 5]; s.g.atk = [4, 3]; s.g.def = [3, 4]; s.g.spd = [3, 5];
   if (s.g.wings[0] === 'none') s.g.wings = ['none', 'bat'];
   s.g.pattern = [s.g.pattern[0], 'stripes'];
+  // Each starter has its own bearing: Cindertail stands proud, Ripplefin noses forward, Mossback prowls.
+  s.g.stance = [[2, 2], [1, 3], [1, 1]][i] as [number, number];
 });
 
 export function pickStarter(rng: Rng, s: Save, idx: number): Creature {

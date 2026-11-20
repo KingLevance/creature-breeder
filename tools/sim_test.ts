@@ -5,7 +5,7 @@ import { MOVE_LIST, MOVES, movePool } from '../src/game/data/moves';
 import { act, aiChoose, autoResolve, createBattle, makeUnit, nextActor, turnOrder, usable, validTargets } from '../src/game/battle';
 import { Creature, makeCreature, slotRarities, stageLevels, stageOf, statsFor } from '../src/game/creature';
 import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan } from '../src/game/economy';
-import { breed, express, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
+import { breed, express, fillGenome, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
 import { finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
 import { TUT, newSave } from '../src/game/save';
 
@@ -197,6 +197,28 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
   const n = s.creatures.length;
   ok(release(s, weak[0].id) && s.creatures.length === n - 1 && s.essence > 0, 'releasing gives essence');
   ok(STARTERS.length === 3, 'three starters');
+
+  // Markings, hue and stance: varied in the wild, inherited, and filled in for old saves.
+  {
+    const marks = [0, 0, 0], stances = [0, 0, 0, 0];
+    let hues = 0;
+    for (let i = 0; i < 2000; i++) {
+      const ph = express(wildGenome(rng, { els: ELEMENT_IDS, quality: 0.5 }));
+      marks[ph.mark ?? 0]++; stances[ph.stance ?? 0]++; if (ph.hue) hues++;
+    }
+    console.log(`     marking styles ${marks.join('/')}, stances ${stances.join('/')}, shifted hues ${hues}/2000`);
+    ok(marks.every(n => n > 300) && stances.every(n => n > 300) && hues > 1000, 'wild creatures vary in markings, stance and hue');
+    const p1 = wildGenome(rng, { els: ['ember'], quality: 0.5 }), p2 = wildGenome(rng, { els: ['ember'], quality: 0.5 });
+    p1.mark = [2, 2]; p2.mark = [2, 2]; p1.stance = [3, 3]; p2.stance = [3, 3];
+    let same = 0;
+    for (let i = 0; i < 200; i++) { const k = express(breed(rng, p1, p2, { mutation: 0 }).g); if (k.mark === 2 && k.stance === 3) same++; }
+    ok(same === 200, 'markings and stance breed true');
+    const old = wildGenome(rng, { els: ['tide'], quality: 0.5 }) as any;
+    delete old.mark; delete old.hue; delete old.stance;
+    const copy = JSON.parse(JSON.stringify(old));
+    fillGenome(old, 'abc'); fillGenome(copy, 'abc');
+    ok(old.mark && old.hue && old.stance && JSON.stringify(old) === JSON.stringify(copy), 'old saves get stable markings, hue and stance');
+  }
   JSON.parse(JSON.stringify(s));
   ok(true, 'save is plain JSON');
 }

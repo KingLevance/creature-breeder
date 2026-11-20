@@ -1,5 +1,6 @@
 // The saved game. Plain JSON so it can be stored as-is.
 import type { Creature, Egg } from './creature';
+import { fillGenome } from './genome';
 
 export const SAVE_VERSION = 1;
 
@@ -57,6 +58,10 @@ export function newSave(): Save {
 export function migrate(raw: any): Save {
   const base = newSave();
   if (!raw || typeof raw !== 'object') return base;
+  // Older saves: give every genome a marking style and hue.
+  for (const c of raw.creatures ?? []) fillGenome(c.g, c.id);
+  for (const e of raw.eggs ?? []) fillGenome(e.g, e.id);
+  for (const i of raw.incubators ?? []) if (i.egg) fillGenome(i.egg.g, i.egg.id);
   return { ...base, ...raw, arena: { ...base.arena, ...raw.arena }, raid: { ...base.raid, ...raw.raid }, tower: { ...base.tower, ...raw.tower }, counts: { ...base.counts, ...raw.counts }, speedups: { ...base.speedups, ...raw.speedups }, v: SAVE_VERSION };
 }
 

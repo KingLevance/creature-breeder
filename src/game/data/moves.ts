@@ -295,6 +295,52 @@ export function moveStyle(mv: MoveDef): MoveStyle {
   return 'support';
 }
 
+/** How a move is acted out. Presentation only: picked from the move's name and element so every move has a look. */
+export type Flair =
+  // melee
+  | 'lunge' | 'pounce' | 'slam' | 'slash' | 'bite' | 'flurry' | 'roll' | 'dash' | 'touch'
+  // ranged
+  | 'proj' | 'volley' | 'beam' | 'bolt' | 'erupt' | 'wave' | 'breath'
+  // area
+  | 'nova' | 'rain' | 'quake' | 'sweep' | 'storm'
+  | 'buff';
+
+const RANGED: Record<ElementId, Flair[]> = {
+  ember: ['proj', 'breath', 'erupt'], tide: ['proj', 'wave', 'beam'], verdant: ['volley', 'erupt'], spark: ['beam', 'bolt'],
+  frost: ['volley', 'erupt', 'breath'], brawn: ['wave', 'proj'], venom: ['proj', 'volley'], terra: ['proj', 'erupt', 'wave'],
+  gale: ['wave', 'volley'], mind: ['proj', 'beam'], swarm: ['volley'], stone: ['proj', 'erupt'], spirit: ['proj', 'volley'],
+  wyrm: ['breath', 'proj'], shade: ['proj', 'erupt'], forge: ['volley', 'proj'], glimmer: ['volley', 'beam'], plain: ['proj', 'wave'],
+  radiant: ['beam', 'bolt'], void: ['proj', 'erupt'],
+};
+const AREA: Partial<Record<ElementId, Flair>> = {
+  ember: 'rain', frost: 'rain', glimmer: 'rain', radiant: 'rain', void: 'rain',
+  terra: 'quake', stone: 'quake', brawn: 'quake', forge: 'quake', plain: 'quake',
+  tide: 'sweep', gale: 'sweep', swarm: 'sweep', venom: 'sweep', wyrm: 'sweep', spark: 'storm',
+};
+const nameHash = (s: string) => { let h = 7; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; };
+
+export function moveFlair(mv: MoveDef): Flair {
+  const style = moveStyle(mv), n = mv.name;
+  if (style === 'support') return 'buff';
+  if (style === 'area') return AREA[mv.el] ?? 'nova';
+  if (style === 'melee') {
+    if (/Bite|Fang|Nip|Snap/.test(n)) return 'bite';
+    if (/Dive|Ambush/.test(n)) return 'pounce';
+    if (/Slam|Crash|Crush|Stomp/.test(n)) return 'slam';
+    if (/Barrage|Rampage|Surge|Assault|Fury|Scuffle/.test(n) || (mv.hits ?? 1) > 1) return 'flurry';
+    if (/Sweep|Whip|Overpower/.test(n)) return 'roll';
+    if (/Shadow|Rift|Eclipse|Quick|Echo|Sky Rend/.test(n)) return 'dash';
+    if (/Slash|Rend|Claw|Lash|Edge/.test(n)) return 'slash';
+    if (/Touch/.test(n)) return 'touch';
+    return 'lunge';
+  }
+  const opts = RANGED[mv.el];
+  if ((mv.hits ?? 1) > 1 && opts.includes('volley')) return 'volley';
+  // The showiest look goes to the rarest moves.
+  if (mv.rarity >= 2 && opts.length > 1) return opts[opts.length - 1 - (nameHash(n) % 2)];
+  return opts[nameHash(n) % opts.length];
+}
+
 export const MOVE_LIST: MoveDef[] = list;
 export const MOVES: Record<string, MoveDef> = Object.fromEntries(list.map(x => [x.id, x]));
 

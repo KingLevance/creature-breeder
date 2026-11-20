@@ -2,7 +2,7 @@
 // Pure: no React, no SVG library. The app turns the shapes into react-native-svg nodes, and the
 // tools turn them into an SVG string, so the same drawing code feeds every screen.
 import { ELEMENTS, ElementId } from '../game/data/elements';
-import type { Pheno } from '../game/genome';
+import type { Pheno, Skeleton } from '../game/genome';
 
 export type Shape =
   | { t: 'path'; d: string; fill?: string; stroke?: string; sw?: number; op?: number }
@@ -42,7 +42,9 @@ export interface Palette { base: string; light: string; dark: string; glow: stri
 
 export function paletteFor(ph: Pheno): Palette {
   const e = ELEMENTS[ph.el1];
-  const tone = (c: string): string => {
+  const hue = ph.hue ?? 0;
+  const tone = (c0: string): string => {
+    const c = hue ? shade(c0, 0, 0, hue) : c0;
     switch (ph.tone) {
       case 'pale': return shade(c, 0.12, -0.15);
       case 'deep': return shade(c, -0.1, 0.12);
@@ -77,11 +79,64 @@ const OW = 2;
 
 interface Item { g: Layer; out?: Shape; fill: Shape }
 
+/** A rotation about (cx, cy) by deg degrees, then a shift. Used to lean and lower a body into its stance. */
+interface Tf { cx: number; cy: number; deg: number; c: number; s: number; dx: number; dy: number }
+function mkTf(cx: number, cy: number, deg: number, dx: number, dy: number): Tf {
+  const r = (deg * Math.PI) / 180;
+  return { cx, cy, deg, c: Math.cos(r), s: Math.sin(r), dx, dy };
+}
+function tpt(T: Tf, x: number, y: number): [number, number] {
+  const X = x - T.cx, Y = y - T.cy;
+  return [T.cx + X * T.c - Y * T.s + T.dx, T.cy + X * T.s + Y * T.c + T.dy];
+}
+const TOKEN = /[MmLlQqCcAaZz]|-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/g;
+/** Moves a path through a transform. Handles the commands the renderer writes: M L Q C A Z, absolute and relative. */
+function tfPath(d: string, T: Tf): string {
+  const tok = d.match(TOKEN) ?? [];
+  let out = '', cmd = '', i = 0;
+  const n = () => parseFloat(tok[i++]);
+  const abs = () => { const [x, y] = tpt(T, n(), n()); return f(x) + ' ' + f(y); };
+  const rel = () => { const x = n(), y = n(); return f(x * T.c - y * T.s) + ' ' + f(x * T.s + y * T.c); };
+  while (i < tok.length) {
+    if (/[A-Za-z]/.test(tok[i])) { cmd = tok[i++]; out += cmd; if (cmd === 'Z' || cmd === 'z') continue; } else out += ' ';
+    switch (cmd) {
+      case 'M': case 'L': out += abs(); break;
+      case 'm': case 'l': out += rel(); break;
+      case 'Q': out += abs() + ' ' + abs(); break;
+      case 'q': out += rel() + ' ' + rel(); break;
+      case 'C': out += abs() + ' ' + abs() + ' ' + abs(); break;
+      case 'c': out += rel() + ' ' + rel() + ' ' + rel(); break;
+      case 'A': case 'a': {
+        const rx = n(), ry = n(), rot = n(), la = n(), sw = n();
+        out += `${f(rx)} ${f(ry)} ${f(rot + T.deg)} ${la} ${sw} ` + (cmd === 'A' ? abs() : rel());
+        break;
+      }
+      default: i++;
+    }
+  }
+  return out;
+}
+function tfShape(sh: Shape, T: Tf): Shape {
+  if (sh.t === 'path') return { ...sh, d: tfPath(sh.d, T) };
+  const [cx, cy] = tpt(T, sh.cx, sh.cy);
+  if (sh.t === 'circle') return { ...sh, cx, cy };
+  return { ...sh, cx, cy, rot: (sh.rot ?? 0) + T.deg };
+}
+
 class Pen {
   items: Item[] = [];
   g: Layer = 'body';
+  /** While set, everything drawn is leaned and lowered into the creature's stance. */
+  tf: Tf | null = null;
   constructor(public pal: Palette) {}
-  private add(fill: Shape, out?: Shape) { this.items.push({ g: this.g, fill, out }); }
+  private add(fill: Shape, out?: Shape) {
+    if (this.tf) { fill = tfShape(fill, this.tf); if (out) out = tfShape(out, this.tf); }
+    this.items.push({ g: this.g, fill, out });
+  }
+  /** Where a point ends up under the current stance. */
+  at(x: number, y: number): [number, number] { return this.tf ? tpt(this.tf, x, y) : [x, y]; }
+  /** Draw something (a leg) outside the stance transform, so it can reach the ground from a moved hip. */
+  free(fn: () => void) { const t = this.tf; this.tf = null; fn(); this.tf = t; }
   ell(cx: number, cy: number, rx: number, ry: number, fill: string, o: { rot?: number; op?: number; line?: boolean } = {}) {
     const base = { t: 'ellipse' as const, cx, cy, rx: Math.max(0.1, rx), ry: Math.max(0.1, ry), rot: o.rot, op: o.op };
     if (o.line === false) return this.add({ ...base, fill });
@@ -176,6 +231,14 @@ interface Anchors {
   tx: number; ty: number; tdir: number;
   wx: number; wy: number;
   backx: number; backy: number;
+  /** A point on the back with the outward direction (angle from straight up), for things that sit on the back. */
+  back?: [number, number, number];
+}
+
+/** A point on an ellipse at angle t, with the angle of its outward normal measured from straight up. */
+function ellFrame(cx: number, cy: number, rx: number, ry: number, t: number): [number, number, number] {
+  const nx = Math.cos(t) / rx, ny = Math.sin(t) / ry;
+  return [cx + rx * Math.cos(t), cy + ry * Math.sin(t), Math.atan2(nx, -ny)];
 }
 
 export interface DrawOpts {
@@ -295,9 +358,15 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
       p.ell(x - 10 * k, y - 10 * k - up, 13 * k, 5.5 * k, c.light, { rot: 35 + flap * 12, op: far ? 0.45 : 0.7 });
       if (!far) p.ell(x - 9 * k, y - 2 * k - up * 0.5, 10 * k, 4.2 * k, c.light, { rot: 12 + flap * 8, op: 0.6 });
       break;
-    case 'flipper':
-      p.ell(x - 6 * k, y + 8 * k - up * 0.6, 5 * k, 11 * k, far ? c.dark : shade(c.base, -0.06), { rot: 24 - flap * 14 });
+    case 'flipper': {
+      // A paddle that hangs from the shoulder and sweeps back, like a seal's or a penguin's.
+      const sx = a.flatBack ? a.bx + a.brx * 0.42 + (far ? 4 : 0) : x + 4, sy = a.flatBack ? a.by - a.bry * 0.3 + (far ? -1 : 0) : y + 2;
+      const tipx = sx - 7 * k + flap * 2, tipy = sy + 14 * k - up * 0.4;
+      const col2 = far ? c.dark : shade(c.base, -0.07);
+      p.taper(sx, sy, tipx, tipy, 7.5 * k, 2.6 * k, col2, sx + 1.5 * k, sy + 8 * k);
+      if (!far) p.line(`M${f(sx - 1.5 * k)} ${f(sy + 2 * k)}Q${f(sx - 1 * k)} ${f(sy + 8 * k)} ${f(tipx + 1.2 * k)} ${f(tipy - 1.2 * k)}`, shade(c.base, 0.1), 1.1 * k);
       break;
+    }
     case 'fin':
       if (!far) p.path(`M${f(x + 6 * k)} ${f(y + 1)}Q${f(x - 2 * k)} ${f(y - 18 * k - up * 0.4)} ${f(x - 12 * k)} ${f(y - 14 * k)}Q${f(x - 8 * k)} ${f(y - 4 * k)} ${f(x - 12 * k)} ${f(y + 2)}Z`, col);
       break;
@@ -391,8 +460,11 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
     // The far eye is a little narrower, as if turned away.
     const rx = i === 1 && ph.eyes !== 'multi' ? er * 0.86 : er;
     if (ph.eyes === 'multi') {
-      p.ell(ex, ey, er, er, glowy ? c.glow : INK);
-      p.dot(ex - er * 0.25, ey - er * 0.3, er * 0.32, '#ffffff');
+      // Spider-like eyes: glossy and round, tinted with the iris colour so they read as eyes, not holes.
+      p.ell(ex, ey, er, er, glowy ? c.glow : mix(iris, INK, 0.55));
+      if (!glowy) p.dot(ex + er * 0.1, ey + er * 0.15, er * 0.55, mix(iris, INK, 0.2));
+      p.dot(ex - er * 0.28, ey - er * 0.3, er * 0.3, '#ffffff');
+      p.dot(ex + er * 0.35, ey + er * 0.4, er * 0.12, '#ffffff', 0.8);
       return;
     }
     if (glowy) {
@@ -525,6 +597,394 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
   }
 }
 
+/** Marking styles 1 and 2 for each element. Returns false when a style doesn't suit this body, so style 0 is used. */
+function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number, ph: Pheno, v: number): boolean {
+  const c = p.pal;
+  const s = s0 * 1.2;
+  const e = ELEMENTS[el];
+  const { bx, by, brx, bry } = a;
+  const H = headEllipse(ph, a.hx, a.hy, a.hr);
+  // Frame on the back: lx runs toward the head, lo points out from the body.
+  const [ox, oy, ang] = a.back ?? [a.backx, a.backy, 0];
+  const Tx = Math.cos(ang), Ty = Math.sin(ang), Nx = Math.sin(ang), Ny = -Math.cos(ang);
+  const B = (lx: number, lo: number) => [ox + lx * Tx + lo * Nx, oy + lx * Ty + lo * Ny];
+  const b = (lx: number, lo: number) => { const [x, y] = B(lx, lo); return f(x) + ' ' + f(y); };
+  const head = (deg: number, out = 0) => { const t = (deg * Math.PI) / 180; return [H.cx + (H.rx + out) * Math.cos(t), H.cy + (H.ry + out) * Math.sin(t)]; };
+  const top = (u: number) => [H.cx + H.rx * u, H.cy - H.ry * Math.sqrt(Math.max(0, 1 - u * u))];
+  const body = (u: number, w: number) => [bx + brx * u, by + bry * w];
+  const line = (pts: number[][], col: string, w: number, op?: number) => p.line('M' + pts.map(([x, y]) => f(x) + ' ' + f(y)).join('L'), col, w, op);
+  const was = p.g;
+  const done = () => { p.g = was; return true; };
+  /** A ring of fluffy puffs along the bottom-back of the head: a collar or ruff. */
+  const ruff = (col: string, col2: string) => {
+    for (let i = 0; i < 6; i++) { const [x, y] = head(95 + i * 22, 0.5); p.ell(x, y, 2.9 * s + 0.6, 2.5 * s + 0.6, i % 2 ? col : col2); }
+  };
+  /** A band that wraps the body: vertical on four-legged bodies, horizontal on upright ones. */
+  const wrap = (u: number, w: number, col: string) => {
+    const pts: string[] = [], back: string[] = [];
+    for (let k = 0; k <= 6; k++) {
+      if (a.flatBack) {
+        const tt = u - w / 2 + (w * k) / 6, h = bry * Math.sqrt(Math.max(0, 1 - tt * tt)) * 0.97;
+        pts.push(`${f(bx + brx * tt)} ${f(by - h)}`); back.unshift(`${f(bx + brx * tt)} ${f(by + h)}`);
+      } else {
+        const tt = u - w / 2 + (w * k) / 6, h = brx * Math.sqrt(Math.max(0, 1 - tt * tt)) * 0.97;
+        pts.push(`${f(bx - h)} ${f(by + bry * tt)}`); back.unshift(`${f(bx + h)} ${f(by + bry * tt + 0.8)}`);
+      }
+    }
+    p.path('M' + pts.join('L') + 'L' + back.join('L') + 'Z', col, { line: false });
+  };
+  switch (el) {
+    case 'ember':
+      if (v === 1) {
+        // Magma seams: glowing cracks across the body.
+        for (const pts of [[[-0.55, -0.45], [-0.4, -0.15], [-0.5, 0.15], [-0.32, 0.42]], [[0.05, -0.6], [0.16, -0.3], [0.02, -0.05], [0.18, 0.22]], [[0.45, -0.38], [0.34, -0.1], [0.5, 0.12]]]) {
+          const xy = pts.map(([u, w]) => body(u, w));
+          line(xy, e.dark, 3 * s + 0.6); line(xy, '#ffb347', 1.8 * s + 0.4); line(xy, '#fff1a8', 0.7 * s + 0.2);
+        }
+        return done();
+      }
+      // A crest of flames along the head.
+      [[-0.55, 3.2], [-0.15, 4.4], [0.25, 3.3]].forEach(([u, r]) => { const [x, y] = top(u); flame(p, x, y + 0.5, r * s, e.base, e.glow); });
+      return done();
+    case 'tide':
+      if (v === 1) {
+        // Feathery frills fanning out from the back of the head, like an axolotl's, plus gill slits.
+        p.g = 'back';
+        const sway = Math.sin(phase * TAU) * 0.8;
+        [[168, 7], [196, 8.5], [224, 7.5]].forEach(([deg, len], i) => {
+          const [x, y] = head(deg, -1.5), t = (deg * Math.PI) / 180;
+          const tx = x + Math.cos(t) * len * s, ty = y + Math.sin(t) * len * s - 2 * s + sway * (i - 1);
+          p.taper(x, y, tx, ty, 3 * s + 0.5, 1.6 * s + 0.3, '#f7a8c4', x + Math.cos(t) * len * 0.6 * s, y + Math.sin(t) * len * 0.6 * s - 3 * s);
+          for (let j = 1; j <= 2; j++) { const q = 0.35 + j * 0.25, fx = x + (tx - x) * q, fy = y + (ty - y) * q; p.line(`M${f(fx)} ${f(fy)}l${f(-1.2 * s)} ${f(-1.6 * s)}M${f(fx)} ${f(fy)}l${f(1.6 * s)} ${f(-1 * s)}`, '#d9668f', 0.7); }
+        });
+        p.g = 'body';
+        for (let i = 0; i < 3; i++) { const x = H.cx - H.rx * 0.45 + i * 1.9 * s, y = H.cy + H.ry * 0.38; p.line(`M${f(x)} ${f(y - 2 * s)}Q${f(x - 1 * s)} ${f(y)} ${f(x)} ${f(y + 2 * s)}`, e.dark, 0.9); }
+        return done();
+      }
+      {
+        // A spiral shell on the back.
+        const sh = '#f2d3be', sd = shade(sh, -0.22);
+        p.path(`M${b(-7.5 * s, -1.5)}Q${b(-7.5 * s, 9 * s)} ${b(0, 9.5 * s)}Q${b(7.5 * s, 9 * s)} ${b(7.5 * s, -1.5)}Z`, sh);
+        for (const [lx, lo] of [[-5, 6.5], [-2.5, 8.6], [0, 9.2], [2.5, 8.6], [5, 6.5]]) p.line(`M${b(0, 0)}L${b(lx * s, lo * s)}`, sd, 0.8);
+        p.ell(...(B(0, 0.5) as [number, number]), 2.2 * s, 1.4 * s, sd, { line: false });
+        return done();
+      }
+    case 'verdant':
+      if (v === 1) {
+        // A blossom on the head with two leaves.
+        const [x0, y0] = top(0.1), x = x0, y = y0 - 1.5 * s;
+        p.path(`M${f(x)} ${f(y + 1)}Q${f(x - 6 * s)} ${f(y - 1 * s)} ${f(x - 7 * s)} ${f(y + 3 * s)}Q${f(x - 3 * s)} ${f(y + 3 * s)} ${f(x)} ${f(y + 1)}Z`, e.base);
+        p.path(`M${f(x)} ${f(y + 1)}Q${f(x + 6 * s)} ${f(y - 1 * s)} ${f(x + 7 * s)} ${f(y + 3 * s)}Q${f(x + 3 * s)} ${f(y + 3 * s)} ${f(x)} ${f(y + 1)}Z`, e.base);
+        for (let i = 0; i < 5; i++) { const t = -Math.PI / 2 + (i * 2 * Math.PI) / 5; p.ell(x + Math.cos(t) * 3.2 * s, y - 2.4 * s + Math.sin(t) * 3.2 * s, 2.9 * s, 2 * s, '#f49ac1', { rot: (t * 180) / Math.PI }); }
+        p.dot(x, y - 2.4 * s, 1.9 * s + 0.3, '#ffd54a');
+        return done();
+      }
+      // Little mushrooms growing on the back.
+      for (const [lx, sc] of [[-3.5, 1], [3.5, 0.75]]) {
+        const k = s * sc, mx = lx * s;
+        p.path(`M${b(mx - 1.3 * k, -1)}L${b(mx - 1 * k, 4.5 * k)}L${b(mx + 1 * k, 4.5 * k)}L${b(mx + 1.3 * k, -1)}Z`, '#f3e6cf');
+        p.path(`M${b(mx - 4.2 * k, 4 * k)}Q${b(mx, 10.5 * k)} ${b(mx + 4.2 * k, 4 * k)}Z`, '#d65745');
+        for (const [dx, dy] of [[-1.8, 5.8], [1.2, 6.8], [0, 5]]) p.dot(...(B(mx + dx * k, dy * k) as [number, number]), 0.7 * k, '#fff6ea');
+      }
+      return done();
+    case 'spark':
+      if (v === 1) {
+        // Zigzag stripes across the body.
+        for (const u of [-0.45, 0, 0.42]) {
+          const lim = Math.sqrt(1 - u * u) * 0.78, pts: number[][] = [];
+          for (let i = 0; i <= 4; i++) pts.push(body(u + (i % 2 ? 0.09 : -0.05), -lim + (2 * lim * i) / 4));
+          line(pts, e.dark, 2 * s + 0.6);
+        }
+        return done();
+      }
+      {
+        // A lure: a stalk from the head ending in a glowing bulb.
+        const [x, y] = top(0.15);
+        const bxx = x + 6 * s, byy = y - 10 * s + Math.sin(phase * TAU) * 0.8;
+        p.taper(x, y + 1, bxx, byy, 1.8 * s + 0.4, 1 * s + 0.3, c.dark, x - 2 * s, y - 9 * s);
+        p.g = 'fx';
+        p.dot(bxx, byy, 4.2 * s, e.glow, 0.35);
+        p.g = 'body';
+        p.ell(bxx, byy, 2.4 * s + 0.3, 2.4 * s + 0.3, e.light);
+        p.dot(bxx - 0.8 * s, byy - 0.8 * s, 0.8 * s, '#ffffff');
+        return done();
+      }
+    case 'frost':
+      if (v === 1) {
+        // A cap of snow on the head with icicles at its edge.
+        const N = 10, up: string[] = [], dn: string[] = [];
+        for (let i = 0; i <= N; i++) {
+          const u = -0.8 + (1.4 * i) / N, [x, y] = top(u), bump = 2.6 * s * (1 + 0.25 * Math.sin(i * 1.9)) * Math.sqrt(Math.max(0, 1 - ((u + 0.1) / 0.75) ** 2));
+          up.push(`${f(x)} ${f(y - bump)}`); dn.unshift(`${f(x)} ${f(y + 1.2 * s + 0.4)}`);
+        }
+        p.path('M' + up.join('L') + 'L' + dn.join('L') + 'Z', '#f4fbff');
+        for (const u of [0.25, 0.45]) { const [x, y] = top(u); p.poly([[x - 1.1 * s, y + 1], [x, y + 4.5 * s], [x + 1.1 * s, y + 1]], '#cfefff'); }
+        return done();
+      }
+      ruff('#f4fbff', '#dff3ff');
+      return done();
+    case 'brawn':
+      if (v === 1) {
+        // A belt with a gold buckle, plus scars.
+        if (!a.flatBack && !a.back) return false;
+        if (ph.skel === 'serpent') return false;
+        wrap(a.flatBack ? 0.12 : 0.22, 0.2, '#3a2b25');
+        const [x, y] = a.flatBack ? body(0.12, 0.62) : body(0.62, 0.22);
+        p.path(`M${f(x - 2 * s)} ${f(y - 1.8 * s)}L${f(x + 2 * s)} ${f(y - 1.8 * s)}L${f(x + 2 * s)} ${f(y + 1.8 * s)}L${f(x - 2 * s)} ${f(y + 1.8 * s)}Z`, '#e8b93c');
+        p.path(`M${f(x - 0.9 * s)} ${f(y - 0.8 * s)}L${f(x + 0.9 * s)} ${f(y - 0.8 * s)}L${f(x + 0.9 * s)} ${f(y + 0.8 * s)}L${f(x - 0.9 * s)} ${f(y + 0.8 * s)}Z`, '#3a2b25', { line: false });
+        line([body(-0.5, -0.5), body(-0.25, -0.15)], e.dark, 1.2 * s);
+        return done();
+      }
+      {
+        // Bandages: a crossed plaster on the head and a wrap on the body.
+        const [x, y] = [H.cx - H.rx * 0.35, H.cy - H.ry * 0.55];
+        for (const r of [35, -35]) p.ell(x, y, 4.2 * s + 0.4, 1.5 * s + 0.3, '#f1d6b0', { rot: r });
+        wrap(a.flatBack ? -0.3 : -0.05, 0.16, '#f1e4cf');
+        const [sx, sy] = a.flatBack ? body(-0.3, -0.2) : body(-0.4, -0.05);
+        line([[sx - 1.2 * s, sy], [sx + 1.2 * s, sy]], '#c9b08e', 0.7);
+        return done();
+      }
+    case 'venom':
+      if (v === 1) {
+        // Bright warning spots.
+        for (const [u, w, r] of [[-0.45, -0.3, 2.6], [0.05, -0.5, 2], [-0.1, 0.15, 2.2], [0.42, -0.1, 1.7], [-0.55, 0.3, 1.4]]) {
+          const [x, y] = body(u, w);
+          p.ell(x, y, r * s + 0.3, r * s + 0.3, e.dark, { line: false });
+          p.dot(x, y, r * s * 0.6 + 0.2, e.glow);
+        }
+        return done();
+      }
+      // A row of quills down the back with poison-green tips.
+      [-6, -2, 2, 6].forEach((lx, i) => {
+        const h = (7.5 - Math.abs(lx) * 0.35) * s, x0 = lx * s;
+        p.poly([B(x0 - 1.6 * s, -1), B(x0 - 2.2 * s, h), B(x0 + 1.6 * s, -1)], e.base);
+        p.poly([B(x0 - 1.2 * s, h * 0.7), B(x0 - 2.2 * s, h), B(x0 - 0.2 * s, h * 0.7)], e.glow, { line: false });
+        void i;
+      });
+      return done();
+    case 'terra':
+      if (v === 1) {
+        // Patches of dried, cracked clay.
+        const clay = hexToHsl(c.base)[2] > 0.45 ? '#7a5638' : '#e8cfa6', crack = hexToHsl(c.base)[2] > 0.45 ? '#4a3220' : '#9c7a52';
+        for (const [u, w, r] of [[-0.35, -0.2, 5.2], [0.35, 0.2, 3.8]]) {
+          const [x, y] = body(u, w), pts: number[][] = [];
+          for (let i = 0; i < 9; i++) { const t = (i / 9) * TAU, rr = r * s * (0.8 + 0.25 * Math.sin(i * 2.3)); pts.push([x + Math.cos(t) * rr * 1.2, y + Math.sin(t) * rr * 0.8]); }
+          p.poly(pts, clay, { line: false, op: 0.9 });
+          line([[x - r * s * 0.7, y - 0.5], [x - r * s * 0.1, y + 0.6], [x + r * s * 0.3, y - 0.8], [x + r * s * 0.8, y + 0.3]], crack, 0.9);
+          line([[x - r * s * 0.1, y + 0.6], [x, y + r * s * 0.6]], crack, 0.9);
+        }
+        return done();
+      }
+      // A ridge of pebbles along the back.
+      [-8, -4, 0, 4, 8].forEach((lx, i) => {
+        const [x, y] = B(lx * s, 1.2 * s);
+        p.ell(x, y, (2.6 - Math.abs(lx) * 0.08) * s + 0.3, (2.1 - Math.abs(lx) * 0.06) * s + 0.3, ['#9c9384', '#b3aa98', e.light][i % 3], { rot: (ang * 180) / Math.PI });
+      });
+      return done();
+    case 'gale':
+      if (v === 1) {
+        // A wind-swept mane: long tufts blown back off the head.
+        const sway = Math.sin(phase * TAU) * 1.5;
+        [[-0.1, 15, e.light], [-0.45, 12, '#ffffff'], [0.25, 11, e.light]].forEach(([u, len, col], i) => {
+          const [x, y] = top(u as number), L = (len as number) * s;
+          p.taper(x, y + 1.5, x - L, y + 2 * s + sway * (1 + i * 0.3) - i * 1.5 * s, 4 * s + 0.5, 0.8, col as string, x - L * 0.45, y - 5 * s);
+        });
+        return done();
+      }
+      // A little cloud riding on the back.
+      for (const [lx, lo, r] of [[-5, 2.5, 3.6], [0, 4.5, 4.6], [5, 2.8, 3.4], [-1, 1, 3.6], [3, 1.2, 3.2]]) p.ell(...(B(lx * s, lo * s) as [number, number]), r * s + 0.3, r * s * 0.85 + 0.3, '#ffffff');
+      p.ell(...(B(0, 0.8 * s) as [number, number]), 6 * s, 1.6 * s, '#d8ecf6', { line: false });
+      return done();
+    case 'mind':
+      if (v === 1) {
+        // A third eye on the forehead.
+        p.g = 'face';
+        const x = H.cx + H.rx * 0.3, y = H.cy - H.ry * 0.6, w = 3.2 * s + 0.4, h = 1.8 * s + 0.3;
+        p.path(`M${f(x - w)} ${f(y)}Q${f(x)} ${f(y - h * 2)} ${f(x + w)} ${f(y)}Q${f(x)} ${f(y + h * 2)} ${f(x - w)} ${f(y)}Z`, '#ffffff');
+        p.dot(x, y, h * 0.95, e.base); p.dot(x, y, h * 0.5, INK); p.dot(x - h * 0.35, y - h * 0.35, h * 0.28, '#ffffff');
+        return done();
+      }
+      // Two orbs that orbit the head.
+      for (let i = 0; i < 2; i++) {
+        const t = phase * TAU + i * Math.PI, x = H.cx + Math.cos(t) * H.rx * 1.45, y = H.cy - H.ry * 0.85 + Math.sin(t) * H.ry * 0.35;
+        p.g = Math.sin(t) < 0 ? 'back' : 'fx';
+        p.dot(x, y, 4.2 * s + 0.5, e.base, 0.3); p.ell(x, y, 2.2 * s + 0.3, 2.2 * s + 0.3, e.base); p.dot(x - 0.7 * s, y - 0.7 * s, 0.7 * s, '#ffffff');
+      }
+      return done();
+    case 'swarm':
+      if (v === 1) {
+        // A glossy beetle shell over the back.
+        p.path(`M${b(-8 * s, -1.5)}Q${b(-8 * s, 8 * s)} ${b(1 * s, 8.5 * s)}Q${b(8 * s, 7.5 * s)} ${b(8 * s, -1.5)}Z`, e.dark);
+        p.line(`M${b(-6 * s, 1 * s)}Q${b(0, 7.6 * s)} ${b(6 * s, 1 * s)}`, shade(e.dark, 0.15), 0.8);
+        p.ell(...(B(-2.5 * s, 5.5 * s) as [number, number]), 2.6 * s, 0.9 * s, '#ffffff', { line: false, op: 0.35, rot: (ang * 180) / Math.PI });
+        return done();
+      }
+      // Tiny bugs buzzing around it.
+      p.g = 'fx';
+      for (let i = 0; i < 3; i++) {
+        const t = phase * TAU * 2 + i * 2.1, x = bx + brx * (-0.8 + i * 0.8) + Math.sin(t) * 3, y = by - bry * 1.25 - (i % 2) * 5 + Math.cos(t) * 2;
+        p.ell(x - 1.3, y - 1.6, 2.2, 1.2, '#ffffff', { line: false, op: 0.75, rot: -30 }); p.ell(x + 0.8, y - 1.7, 1.9, 1.1, '#ffffff', { line: false, op: 0.75, rot: 30 });
+        p.ell(x, y, 1.8, 1.4, e.dark); p.dot(x + 1.1, y - 0.2, 0.5, '#ffffff');
+      }
+      return done();
+    case 'stone':
+      if (v === 1) {
+        // A single big boulder on the back.
+        const pts = [[-8, -1.5], [-8.6, 4], [-5, 8.6], [1, 10], [6.6, 7.6], [8.6, 2.4], [8, -1.5]].map(([lx, lo]) => B(lx * s, lo * s));
+        p.poly(pts, e.base);
+        p.poly([[-5, 7.6], [0.5, 9], [-1, 5], [-5.5, 4.5]].map(([lx, lo]) => B(lx * s, lo * s)), e.light, { line: false });
+        p.line(`M${b(3 * s, 8.5 * s)}L${b(2 * s, 5 * s)}L${b(4 * s, 3 * s)}`, e.dark, 0.8);
+        return done();
+      }
+      // Gems set into the hide, with cracks around them.
+      for (const [u, w, col] of [[-0.35, -0.25, '#7fd6e8'], [0.25, -0.4, '#b493e0'], [0.05, 0.25, '#7fe8b0']] as [number, number, string][]) {
+        const [x, y] = body(u, w), r = 2.3 * s + 0.3;
+        p.poly([0, 1, 2, 3, 4, 5].map(i => [x + Math.cos((i * Math.PI) / 3) * r, y + Math.sin((i * Math.PI) / 3) * r * 0.85]), col);
+        p.poly([[x - r * 0.5, y - r * 0.4], [x + r * 0.2, y - r * 0.6], [x, y]], '#ffffff', { line: false, op: 0.5 });
+        line([[x + r, y], [x + r * 1.8, y + r * 0.4], [x + r * 2.2, y + r * 0.1]], e.dark, 0.6);
+      }
+      return done();
+    case 'spirit':
+      if (v === 1) {
+        // A pale ghost-flame flickering on the head.
+        const [x, y] = top(-0.05);
+        flame(p, x, y + 0.5, (5.6 + Math.sin(phase * TAU * 2) * 0.5) * s, '#7fd0ff', '#e6f8ff');
+        return done();
+      }
+      // Pale soul orbs circling.
+      for (let i = 0; i < 3; i++) {
+        const t = phase * TAU + (i * TAU) / 3, x = bx + Math.cos(t) * brx * 1.3, y = by - bry * 0.8 + Math.sin(t) * bry * 0.45;
+        p.g = Math.sin(t) < 0 ? 'back' : 'fx';
+        p.dot(x + Math.sin(t) * 3, y - Math.cos(t) * 1.2, 2 * s + 0.2, '#9fdcff', 0.4);
+        p.dot(x, y, 3.6 * s + 0.4, '#9fdcff', 0.45); p.dot(x, y, 2 * s + 0.3, '#ffffff', 0.95);
+      }
+      return done();
+    case 'wyrm':
+      if (v === 1) {
+        // Spines down the back of the head and neck.
+        [178, 198, 218, 238].forEach((deg, i) => {
+          const [a1x, a1y] = head(deg - 9), [a2x, a2y] = head(deg + 9), [tx, ty] = head(deg - 6, (7 - i * 0.9) * s);
+          p.poly([[a1x, a1y], [tx, ty], [a2x, a2y]], e.glow);
+        });
+        return done();
+      }
+      {
+        // Long whiskers from the snout, and rows of scales.
+        p.g = 'face';
+        const sway = Math.sin(phase * TAU) * 1.2;
+        const x = H.cx + H.rx * 0.82, y = H.cy + H.ry * 0.3;
+        p.taper(x, y, x - 3 * s, y + 11 * s + sway, 1.4 * s + 0.4, 0.4, e.glow, x + 6 * s, y + 4 * s);
+        p.taper(x - 1, y + 1, x - 7 * s, y + 9 * s - sway, 1.2 * s + 0.3, 0.4, e.glow, x + 3 * s, y + 6 * s);
+        p.g = 'body';
+        for (let r = 0; r < 2; r++) for (let i = 0; i < 4; i++) {
+          const [sx, sy] = body(-0.45 + i * 0.28 + r * 0.14, -0.35 + r * 0.32);
+          p.line(`M${f(sx - 1.6 * s)} ${f(sy)}Q${f(sx)} ${f(sy + 2 * s)} ${f(sx + 1.6 * s)} ${f(sy)}`, e.dark, 0.7, 0.7);
+        }
+        return done();
+      }
+    case 'shade':
+      if (v === 1) {
+        // A hood drawn over the back of the head.
+        const pts: string[] = [];
+        for (let deg = 160; deg <= 300; deg += 14) { const [x, y] = head(deg, 1); pts.push(`${f(x)} ${f(y)}`); }
+        const [px, py] = head(205, 6 * s);
+        const [ix, iy] = head(300, -H.rx * 0.35), [jx, jy] = head(160, -H.rx * 0.3);
+        p.path(`M${pts[0]}L${f(px)} ${f(py)}L${pts.slice(3).join('L')}Q${f(ix)} ${f(iy)} ${f(H.cx - H.rx * 0.1)} ${f(H.cy)}Q${f(jx)} ${f(jy)} ${pts[0]}Z`, e.dark);
+        return done();
+      }
+      // A tattered cape flowing off the back.
+      p.path(`M${b(4 * s, 0)}Q${b(-4 * s, 6 * s)} ${b(-15 * s, 1 * s)}L${b(-13 * s, -6 * s)}L${b(-10 * s, -3.5 * s)}L${b(-7.5 * s, -8 * s)}L${b(-4.5 * s, -4.5 * s)}L${b(-1.5 * s, -7 * s)}L${b(1 * s, -2 * s)}Z`, e.dark);
+      p.ell(...(B(3.5 * s, 0.5 * s) as [number, number]), 2.2 * s, 1.6 * s, e.glow, { op: 0.9 });
+      return done();
+    case 'forge':
+      if (v === 1) {
+        // A cog turning slowly on the back.
+        const [gx, gy] = B(0, 3.5 * s), r1 = 5 * s, r2 = 6.6 * s, rot = (phase * TAU) / 8, pts: number[][] = [];
+        for (let i = 0; i < 32; i++) { const t = rot + (i * TAU) / 32, r = i % 4 < 2 ? r2 : r1; pts.push([gx + Math.cos(t) * r, gy + Math.sin(t) * r]); }
+        p.poly(pts, e.base);
+        p.ell(gx, gy, 2.2 * s, 2.2 * s, e.dark);
+        p.dot(gx - 0.7 * s, gy - 0.7 * s, 0.6 * s, '#ffffff', 0.6);
+        return done();
+      }
+      {
+        // A riveted metal band and a bolt on the head.
+        wrap(a.flatBack ? -0.15 : 0.1, 0.17, '#c98b4f');
+        for (const w of [-0.5, 0, 0.5]) { const [x, y] = a.flatBack ? body(-0.15, w) : body(w, 0.1); p.dot(x, y, 0.85 * s + 0.2, '#5a3a22'); }
+        const [x, y] = top(0.05);
+        p.poly([0, 1, 2, 3, 4, 5].map(i => [x + Math.cos((i * Math.PI) / 3) * 2.4 * s, y - 0.8 * s + Math.sin((i * Math.PI) / 3) * 1.7 * s]), '#c98b4f');
+        p.line(`M${f(x - 1.3 * s)} ${f(y - 0.8 * s)}L${f(x + 1.3 * s)} ${f(y - 0.8 * s)}`, '#5a3a22', 0.9);
+        return done();
+      }
+    case 'glimmer':
+      if (v === 1) {
+        // A ribbon bow on the head.
+        const [x0, y0] = top(-0.3), x = x0, y = y0 - 0.5;
+        const pink = '#f48fb1', dk = '#c75b86';
+        p.path(`M${f(x)} ${f(y)}Q${f(x - 6 * s)} ${f(y - 6 * s)} ${f(x - 6 * s)} ${f(y)}Q${f(x - 6 * s)} ${f(y + 4 * s)} ${f(x)} ${f(y)}Z`, pink);
+        p.path(`M${f(x)} ${f(y)}Q${f(x + 6 * s)} ${f(y - 6 * s)} ${f(x + 6 * s)} ${f(y)}Q${f(x + 6 * s)} ${f(y + 4 * s)} ${f(x)} ${f(y)}Z`, pink);
+        p.ell(x, y, 1.5 * s + 0.3, 1.5 * s + 0.3, dk);
+        return done();
+      }
+      {
+        // A crescent moon on the forehead with sparkles.
+        p.g = 'face';
+        const x = H.cx + H.rx * 0.2, y = H.cy - H.ry * 0.55, r = 3.8 * s + 0.4;
+        p.path(`M${f(x)} ${f(y - r)}A${f(r)} ${f(r)} 0 1 0 ${f(x)} ${f(y + r)}A${f(r * 0.72)} ${f(r)} 0 1 1 ${f(x)} ${f(y - r)}Z`, '#ffd166', { stroke: '#b8862b', sw: 0.8 });
+        p.g = 'fx';
+        star(p, H.cx + H.rx * 1.1, H.cy - H.ry * 1.0, 2 * s, e.glow); star(p, H.cx - H.rx * 0.9, H.cy - H.ry * 1.15, 1.5 * s, e.glow);
+        return done();
+      }
+    case 'plain':
+      if (v === 1) {
+        // A cowlick: a tuft of hair curling forward.
+        const [x, y] = top(-0.1);
+        for (const [dx, h, cur] of [[-2, 4.5, -2], [0, 6, 1], [2, 4.8, 3]]) p.taper(x + dx * s, y + 1.2, x + (dx + cur) * s, y - h * s, 2.6 * s + 0.4, 0.6, c.base, x + (dx - 1.5) * s, y - h * 0.8 * s);
+        return done();
+      }
+      ruff(c.light, mix(c.light, '#ffffff', 0.4));
+      return done();
+    case 'radiant':
+      if (v === 1) {
+        // A sun sigil glowing on the chest.
+        const [x, y] = a.flatBack ? body(0.3, -0.05) : body(0.15, -0.15), r = 2.4 * s + 0.4;
+        for (let i = 0; i < 8; i++) { const t = (i * TAU) / 8; line([[x + Math.cos(t) * r * 1.3, y + Math.sin(t) * r * 1.3], [x + Math.cos(t) * r * 1.9, y + Math.sin(t) * r * 1.9]], e.dark, 0.9); }
+        p.ell(x, y, r, r, e.glow); p.dot(x, y, r * 0.5, e.base);
+        return done();
+      }
+      {
+        // A mane of sun rays fanning out behind the head.
+        p.g = 'back';
+        for (let i = 0; i < 12; i++) {
+          const t = (i * TAU) / 12, r0 = H.rx * 0.8, r1 = H.rx * 0.85 + (i % 2 ? 5 : 8) * s;
+          p.poly([[H.cx + Math.cos(t - 0.22) * r0, H.cy + Math.sin(t - 0.22) * r0 * 0.95], [H.cx + Math.cos(t) * r1, H.cy + Math.sin(t) * r1 * 0.95], [H.cx + Math.cos(t + 0.22) * r0, H.cy + Math.sin(t + 0.22) * r0 * 0.95]], i % 2 ? e.base : e.glow);
+        }
+        return done();
+      }
+    case 'void':
+      if (v === 1) {
+        // Shards of the dark drifting round the body.
+        for (let i = 0; i < 3; i++) {
+          const t = phase * TAU * 0.5 + i * 2.1, x = bx + Math.cos(t) * brx * 1.3, y = by - bry * 0.5 + Math.sin(t) * bry * 0.55, r = (3.4 - i * 0.4) * s + 0.5;
+          p.g = Math.sin(t) < 0 ? 'back' : 'fx';
+          p.poly([[x, y - r * 1.4], [x + r * 0.7, y], [x + r * 0.1, y + r * 1.2], [x - r * 0.7, y + r * 0.2]], e.dark);
+          p.dot(x + r * 0.1, y - r * 0.3, r * 0.25, e.glow);
+        }
+        return done();
+      }
+      {
+        // A rift of starlight torn into the body.
+        const [x, y] = body(-0.15, -0.1), w = 2.4 * s + 0.4, h = 6 * s + 0.5;
+        const d = `M${f(x)} ${f(y - h)}Q${f(x + w * 1.6)} ${f(y)} ${f(x)} ${f(y + h)}Q${f(x - w * 1.6)} ${f(y)} ${f(x)} ${f(y - h)}Z`;
+        p.path(d, '#0b0618', { line: false });
+        p.path(d, 'none', { stroke: e.glow, sw: 0.9 });
+        for (const [dx, dy, r] of [[-0.3, -0.5, 0.6], [0.4, 0.1, 0.5], [-0.1, 0.55, 0.45], [0.2, -0.2, 0.35]]) p.dot(x + dx * w, y + dy * h, r * s + 0.2, e.glow);
+        return done();
+      }
+  }
+  p.g = was;
+  return false;
+}
+
 /** The head's outline as an ellipse, for things that sit on or wrap around it. */
 function headEllipse(ph: Pheno, hx: number, hy: number, hr: number) {
   if (ph.head === 'long') return { cx: hx + hr * 0.25, cy: hy + hr * 0.05, rx: hr * 1.3, ry: hr * 0.78 };
@@ -561,6 +1021,9 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
   const e = ELEMENTS[el];
   const s = k * (minor ? 0.7 : 1);
   const { hx, hy, hr, bx, by, brx, bry, backx, backy } = a;
+  // Each element has three marking styles; style 0 is drawn below, styles 1 and 2 in markStyle.
+  const style = minor ? 0 : ph1.mark ?? 0;
+  if (style > 0 && markStyle(p, a, el, s, phase, ph1, style)) return;
   switch (el) {
     case 'ember': flame(p, backx - 1, backy - 1, 5 * s, e.base, e.glow); if (!minor) flame(p, backx + brx * 0.45, backy - 0.5, 3.4 * s, e.light, e.glow); break;
     case 'tide':
@@ -624,10 +1087,20 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       p.path(`M${f(tx2 + 3.5 * s)} ${f(ty2 - 7 * s)}q${f(4 * s)} ${f(-2 * s)} ${f(5 * s)} ${f(1 * s)}q${f(-3 * s)} ${f(1.5 * s)} ${f(-5 * s)} ${f(-1 * s)}Z`, g.light, { line: false });
       break;
     }
-    case 'gale':
-      p.path(`M${f(backx - 16 * s)} ${f(backy - 4 * s)}q${f(8 * s)} ${f(-6 * s)} ${f(12 * s)} 0M${f(backx - 20 * s)} ${f(backy + 4 * s)}q${f(7 * s)} ${f(-5 * s)} ${f(11 * s)} 0`, 'none', { stroke: e.light, sw: 1.6, op: 0.9 });
-      p.path(`M${f(hx - hr * 0.3)} ${f(hy - hr * 0.85)}Q${f(hx - hr * 0.9)} ${f(hy - hr * 1.7)} ${f(hx - hr * 1.3)} ${f(hy - hr * 1.2)}Q${f(hx - hr * 0.7)} ${f(hy - hr * 1.1)} ${f(hx - hr * 0.5)} ${f(hy - hr * 0.7)}Z`, e.light);
+    case 'gale': {
+      // A painted wind swirl on the flank (and a small one on the cheek): a spiral that trails off into a gust.
+      const swirl = (cx: number, cy: number, R: number) => {
+        const pts: string[] = [];
+        for (let i = 0; i <= 26; i++) { const t = i / 26, r = R * (0.18 + 0.82 * t), q = Math.PI * 0.2 - t * TAU * 1.15; pts.push(`${f(cx + Math.cos(q) * r)} ${f(cy + Math.sin(q) * r * 0.85)}`); }
+        const [ex, ey] = pts[pts.length - 1].split(' ').map(Number);
+        const d = 'M' + pts.join('L') + `Q${f(ex - R * 0.9)} ${f(ey + R * 0.25)} ${f(ex - R * 1.9)} ${f(ey - R * 0.05)}`;
+        p.line(d, e.dark, 3.4 * s + 0.6); p.line(d, '#ffffff', 2 * s + 0.4);
+      };
+      if (minor) { swirl(bx - brx * 0.05, by - bry * 0.1, 4 * s); break; }
+      if (a.flatBack) swirl(bx - brx * 0.05, by - bry * 0.12, 6.5 * s); else swirl(bx + brx * 0.05, by - bry * 0.12, 6 * s);
+      swirl(hx - hr * 0.2, hy + hr * 0.2, 2.8 * s);
       break;
+    }
     case 'mind': {
       const gy = hy - hr - 6 * s + Math.sin(phase * TAU) * 1.2;
       p.poly([[hx + hr * 0.2, gy - 4.5 * s], [hx + hr * 0.2 + 3.4 * s, gy], [hx + hr * 0.2, gy + 4.5 * s], [hx + hr * 0.2 - 3.4 * s, gy]], e.glow);
@@ -672,6 +1145,22 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
   }
 }
 
+/** How each stance leans and lowers each body plan. lean: degrees, forward is positive (head goes down for
+ *  long bodies). drop: how far the body sinks, so legs bend. hdx/hdy nudge the head before the lean. px: the
+ *  pivot, as a fraction of the body's half-width from its centre. */
+interface StancePose { lean: number; drop: number; hdx: number; hdy: number; px?: number; ft?: number; sx?: number }
+const S0: StancePose = { lean: 0, drop: 0, hdx: 0, hdy: 0 };
+const STANCES: Record<Skeleton, StancePose[]> = {
+  biped: [S0, { lean: 20, drop: 9, hdx: 1, hdy: 2, ft: 7 }, { lean: -12, drop: 0, hdx: -1, hdy: -3, ft: 2, sx: 2 }, { lean: 32, drop: 5, hdx: 1, hdy: 8, ft: 3 }],
+  // Prowl: low, stalking, head at shoulder height. Proud: chest and neck up. Hunched: a play-bow, front down.
+  quad: [S0, { lean: 3, drop: 8, hdx: 3, hdy: 11, ft: 4 }, { lean: -12, drop: 0, hdx: -2, hdy: -8, sx: 4 }, { lean: 16, drop: 1, hdx: 1, hdy: 2, px: -0.7, ft: 2 }],
+  multi: [S0, { lean: 0, drop: 7, hdx: 0, hdy: 4, ft: 3, sx: -1 }, { lean: -13, drop: 0, hdx: 0, hdy: -4, sx: 4 }, { lean: 12, drop: 1, hdx: 0, hdy: 3, px: 1, sx: -2 }],
+  // Serpents carry the stance in the neck: a low strike, reared up tall, or coiled down.
+  serpent: [S0, { lean: 0, drop: 0, hdx: 9, hdy: 16 }, { lean: 0, drop: 0, hdx: -4, hdy: -9 }, { lean: 0, drop: 0, hdx: 3, hdy: 22 }],
+  aquatic: [S0, { lean: 14, drop: 4, hdx: 0, hdy: 0 }, { lean: -16, drop: -1, hdx: 0, hdy: 0 }, { lean: 8, drop: 7, hdx: 0, hdy: 2 }],
+  floater: [S0, { lean: 16, drop: 2, hdx: 0, hdy: 0 }, { lean: -13, drop: -1, hdx: 0, hdy: 0, sx: 2 }, { lean: 22, drop: 6, hdx: 0, hdy: 3 }],
+};
+
 /** Draw a creature. Returns shapes back-to-front. */
 export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   const pal = paletteFor(ph);
@@ -685,6 +1174,20 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   const flap = Math.sin(phase * TAU * (o.walking ? 2 : 1));
   const reach = o.pose === 'attack' ? 1 : 0;
   const raise = o.pose === 'cast' ? 1 : 0;
+  // A fainted creature slumps upright-ish; otherwise it holds its stance.
+  const sp = o.ko ? S0 : STANCES[ph.skel][ph.stance ?? 0] ?? S0;
+  /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks. */
+  const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col: string, kx?: number, ky?: number, knee = 1) => {
+    const [x1, y1] = p.at(hx0, hy0);
+    p.free(() => {
+      const bend = Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop) * 0.6) * 0.9 * knee;
+      const mx = kx ?? (x1 + fx) / 2, my = ky ?? (y1 + fy) / 2;
+      p.taper(x1, y1, fx, fy, w0, w1, col, mx + bend, my + (ky == null ? 0 : (y1 - hy0) * 0.5));
+    });
+  };
+  const freePaw = (x: number, y: number, w: number, col: string) => p.free(() => paw(x, y, w, col));
+  const ft = sp.ft ?? 0;
+  const lean = (cx: number, cy: number) => { p.tf = sp.lean || sp.drop ? mkTf(cx, cy, sp.lean, sp.sx ?? 0, sp.drop) : null; };
   let a: Anchors;
   /** A foot with two toe lines, pointing forward. */
   const paw = (x: number, y: number, w: number, col: string) => {
@@ -705,26 +1208,31 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
     case 'biped': {
       const by = 64 - 3 * (b - 0.8), brx = 14.5 * b, bry = 18 * b;
       const hr = 12.5 * hs;
-      a = { hx: 53, hy: by - bry - hr * 0.5 + breathe * 0.4, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 44, wy: by - bry * 0.45, backx: 40, backy: by - bry * 0.72 };
-      drawWing(p, a, ph, k, flap, true);
       const hip = by + bry * 0.5;
+      lean(48, hip);
+      a = { back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.9), hx: 53 + sp.hdx, hy: by - bry - hr * 0.5 + breathe * 0.4 + sp.hdy, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 44, wy: by - bry * 0.45, backx: 40, backy: by - bry * 0.72 };
+      drawWing(p, a, ph, k, flap, true);
       p.g = 'back';
-      p.taper(52, hip, 54 - sw * 6, 87.6, 8.5 * ls, 5.4 * ls, far);
-      paw(54 - sw * 6, 89.2, 5.6 * ls, far);
+      leg(52, hip, 54 - sw * 6 + ft, 87.6, 8.5 * ls, 5.4 * ls, far);
+      freePaw(54 - sw * 6 + ft, 89.2, 5.6 * ls, far);
       p.taper(55, by - bry * 0.35, 63 - sw * 4, by + 3, 5 * ls, 3.6 * ls, far);
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
-      p.taper(45, hip, 44 + sw * 6, 87.6, 10 * ls, 6 * ls, pal.base);
-      paw(44 + sw * 6, 89.2, 6.2 * ls, pal.base);
+      leg(45, hip, 44 + sw * 6 - ft, 87.6, 10 * ls, 6 * ls, pal.base);
+      freePaw(44 + sw * 6 - ft, 89.2, 6.2 * ls, pal.base);
       // A pear-shaped torso: the belly is wider than the chest.
       p.ell(48, by, brx, bry, pal.base);
       p.ell(48, by + bry * 0.28, brx * 1.07, bry * 0.72, pal.base);
+      // A proud stance puffs the chest out.
+      if (ph.stance === 2 && !o.ko) p.ell(48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62, pal.base);
       drawPattern(p, a, ph);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
       // The near arm swings forward to strike, or up to cast.
       if (reach) p.taper(50, by - bry * 0.3, 66, by - bry * 0.45, 5.6 * ls, 4.4 * ls, pal.base, 60, by - bry * 0.05);
       else if (raise) p.taper(50, by - bry * 0.3, 60, by - bry * 1.05, 5.6 * ls, 4.4 * ls, pal.base, 59, by - bry * 0.4);
+      else if (ph.stance === 2 && !o.ko) p.taper(50, by - bry * 0.3, 54, by + 6, 5.6 * ls, 4.2 * ls, pal.base, 59, by - 2);
+      else if (ph.stance === 3 && !o.ko) p.taper(50, by - bry * 0.3, 61 + sw * 4, by + 10, 5.6 * ls, 4.2 * ls, pal.base, 58, by);
       else p.taper(50, by - bry * 0.3, 58 + sw * 4, by + 5, 5.6 * ls, 4.2 * ls, pal.base);
       p.g = 'body';
       break;
@@ -732,25 +1240,26 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
     case 'quad': {
       const by = 63, brx = 23 * b, bry = 13.5 * b;
       const hr = 12 * hs;
-      const hx = 48 + brx * 0.82, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4;
-      a = { flatBack: true, hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
+      const hx = 48 + brx * 0.82 + sp.hdx, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4 + sp.hdy;
+      lean(46 + brx * (sp.px ?? 0), by);
+      a = { flatBack: true, back: ellFrame(46, by, brx, bry, -Math.PI / 2 - 0.3), hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       const hip = by + bry * 0.3;
       const fx = 46 + brx * 0.55, rx = 46 - brx * 0.6;
       p.g = 'back';
-      p.taper(fx + 4, hip, fx + 4 - sw * 6, 87.8, 7.5 * ls, 5 * ls, far);
-      paw(fx + 4 - sw * 6, 89.3, 5.2 * ls, far);
-      p.taper(rx + 5, hip, rx + 5 + sw * 6, 87.8, 8.5 * ls, 5 * ls, far, rx + 5 - 3 * ls + sw * 3, 80);
-      paw(rx + 5 + sw * 6, 89.3, 5.2 * ls, far);
+      leg(fx + 4, hip, fx + 4 - sw * 6 + ft, 87.8, 7.5 * ls, 5 * ls, far, undefined, undefined, -0.7);
+      freePaw(fx + 4 - sw * 6 + ft, 89.3, 5.2 * ls, far);
+      leg(rx + 5, hip, rx + 5 + sw * 6 - ft, 87.8, 8.5 * ls, 5 * ls, far, rx + 5 - 3 * ls + sw * 3, 80, -1);
+      freePaw(rx + 5 + sw * 6 - ft, 89.3, 5.2 * ls, far);
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
       // A front paw swipes forward on an attack.
-      const pawX = fx - 2 + sw * 6 + reach * 12, pawY = 87.8 - reach * 9;
-      p.taper(fx - 2, hip, pawX, pawY, 8.5 * ls, 5.6 * ls, pal.base);
-      paw(pawX, pawY + 1.5, 5.8 * ls, pal.base);
+      const pawX = fx - 2 + sw * 6 + reach * 12 + ft, pawY = 87.8 - reach * 9;
+      leg(fx - 2, hip, pawX, pawY, 8.5 * ls, 5.6 * ls, pal.base, undefined, undefined, -0.7);
+      freePaw(pawX, pawY + 1.5, 5.8 * ls, pal.base);
       // The hind leg is thick at the haunch and bends back at the hock.
-      p.taper(rx - 1, hip - 1, rx - 1 - sw * 6, 87.8, 11.5 * ls, 5.6 * ls, pal.base, rx - 1 - 4 * ls - sw * 3, 80);
-      paw(rx - 1 - sw * 6, 89.3, 5.8 * ls, pal.base);
+      leg(rx - 1, hip - 1, rx - 1 - sw * 6 - ft, 87.8, 11.5 * ls, 5.6 * ls, pal.base, rx - 1 - 4 * ls - sw * 3, 80, -1);
+      freePaw(rx - 1 - sw * 6 - ft, 89.3, 5.8 * ls, pal.base);
       p.taper(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 13 * b, 9 * b, pal.base);
       p.ell(46, by, brx, bry, pal.base);
       // A deeper chest and a rounded rump break up the plain oval.
@@ -764,13 +1273,14 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const by = 66, hr = 10.5 * hs;
       const abx = 34, arx = 17 * b, ary = 12 * b;
       const thx = 34 + arx + 9 * b, thr = 11.5 * b;
-      const hx = thx + thr + hr * 0.45, hy = by - 6 + breathe * 0.3;
-      a = { flatBack: true, hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
+      const hx = thx + thr + hr * 0.45 + sp.hdx, hy = by - 6 + breathe * 0.3 + sp.hdy;
+      lean(thx + thr * (sp.px ?? 0), by);
+      a = { flatBack: true, back: ellFrame(abx, by - 2, arx, ary, -Math.PI / 2 - 0.2), hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'back';
       for (let i = 0; i < 3; i++) {
         const lx = thx - 7 + i * 6, s2 = (i % 2 === 0 ? sw : -sw) * 4;
-        p.taper(lx + 2, by + 2, lx + (i - 1) * 9 + 3 - s2, 90, 3.6 * ls, 1.8 * ls, far, lx + (i - 1) * 8 + 3, by - 4);
+        leg(lx + 2, by + 2, lx + (i - 1) * (9 + ft) + 3 - s2, 90, 3.6 * ls, 1.8 * ls, far, lx + (i - 1) * 8 + 3, by - 4, 0);
       }
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
@@ -781,20 +1291,21 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       shadeForm(p, thx, by - 1, thr, thr * 0.9);
       for (let i = 0; i < 3; i++) {
         const lx = thx - 8 + i * 6, s2 = (i % 2 === 0 ? -sw : sw) * 4;
-        p.taper(lx, by + 3, lx + (i - 1) * 10 - s2, 90, 4.2 * ls, 2 * ls, pal.dark, lx + (i - 1) * 9, by - 6);
+        leg(lx, by + 3, lx + (i - 1) * (10 + ft) - s2, 90, 4.2 * ls, 2 * ls, pal.dark, lx + (i - 1) * 9, by - 6, 0);
       }
       break;
     }
     case 'serpent': {
       const hr = 11.5 * hs, w = 12.5 * b;
       const wv = o.walking ? Math.sin(phase * TAU) * 3 : breathe;
-      const hx = 68, hy = 40 + breathe * 0.5;
-      a = { hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
+      const hx = 68 + sp.hdx, hy = 40 + breathe * 0.5 + sp.hdy;
+      p.tf = null;
+      a = { back: [24.5, 79.25 + wv * 0.125 - w * 0.3, 0], hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'body';
       drawTail(p, a, ph, k * 0.8, 0);
       // The body is one ribbon: thin at the tail, full through the coils, a little slimmer at the neck.
-      const ctrl = [[14, 85 - wv], [24, 74 + wv], [36, 84 - wv * 0.5], [50, 92 + wv * 0.4], [58, 78], [63, 66], [58, 56], [56, 48], [hx - 3, hy + 5]];
+      const ctrl = [[14, 85 - wv], [24, 74 + wv], [36, 84 - wv * 0.5], [50, 92 + wv * 0.4], [58, 78], [63, 66], [58 + sp.hdx * 0.25, 56 + sp.hdy * 0.35], [56 + sp.hdx * 0.6, 48 + sp.hdy * 0.7], [hx - 3, hy + 5]];
       const pts: number[][] = [], ws: number[] = [];
       for (let sgm = 0; sgm < 4; sgm++) {
         const [x0, y0] = ctrl[sgm * 2], [cx, cy] = ctrl[sgm * 2 + 1], [x1, y1] = ctrl[sgm * 2 + 2];
@@ -817,7 +1328,8 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
     case 'aquatic': {
       const by = 58 + breathe, brx = 25 * b, bry = 15 * b;
       const hr = 12 * hs;
-      a = { flatBack: true, hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
+      lean(48, by);
+      a = { flatBack: true, back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.35), hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'body';
       // Every swimmer has a fluke; the tail gene adds to it.
@@ -837,7 +1349,8 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       // floater
       const cy = 52 + breathe * 1.4, r = 17 * b;
       const hr = 13 * hs;
-      a = { hx: 52, hy: cy - r * 0.35, hr, bx: 50, by: cy + r * 0.45, brx: r * 0.8, bry: r * 0.75, tx: 44, ty: cy + r * 1.25, tdir: -0.9, wx: 43, wy: cy - r * 0.1, backx: 40, backy: cy - r * 0.55 };
+      lean(50, cy + r);
+      a = { back: ellFrame(50, cy, r, r * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - r * 0.35, hr, bx: 50, by: cy + r * 0.45, brx: r * 0.8, bry: r * 0.75, tx: 44, ty: cy + r * 1.25, tdir: -0.9, wx: 43, wy: cy - r * 0.1, backx: 40, backy: cy - r * 0.55 };
       drawWing(p, a, ph, k, flap, true);
       const wv = Math.sin(phase * TAU) * 1.6;
       p.g = 'back';
@@ -856,6 +1369,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   drawHead(p, a, ph, k, o.ko, o.pose);
   p.g = 'body';
   drawCues(p, a, ph.el1, st.cue, phase, false, ph);
+  p.tf = null;
   p.g = 'fx';
   if (o.stage >= 3) {
     // Motes drifting up through the idle cycle.

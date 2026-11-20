@@ -9,7 +9,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import { Animated, Easing, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Defs, Ellipse, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
-import { MoveDef, StatusKind } from '../game/data/moves';
+import { Flair, MoveDef, StatusKind } from '../game/data/moves';
 import { Battle, Ev, Unit, act, aiChoose, isBuff, needsPick, nextActor, turnOrder, usable, validTargets } from '../game/battle';
 import { STAGE_NAMES } from '../game/creature';
 import { express, starRating } from '../game/genome';
@@ -51,12 +51,16 @@ interface UA {
   lean: Animated.Value; stretch: Animated.Value;
   /** -1 for a fallen teammate left behind: it scrolls away with the ground during the walk. */
   behind: Animated.Value;
+  /** A spin about the body's middle, in degrees, for rolling attacks. */
+  spin: Animated.Value;
 }
 const newUA = (): UA => ({
   ox: new Animated.Value(0), oy: new Animated.Value(0), shake: new Animated.Value(0), blink: new Animated.Value(1),
   down: new Animated.Value(0), squash: new Animated.Value(0), fade: new Animated.Value(1),
-  lean: new Animated.Value(0), stretch: new Animated.Value(1), behind: new Animated.Value(0),
+  lean: new Animated.Value(0), stretch: new Animated.Value(1), behind: new Animated.Value(0), spin: new Animated.Value(0),
 });
+const tm = (v: Animated.Value, toValue: number, duration: number, easing?: (t: number) => number) =>
+  Animated.timing(v, { toValue, duration: Math.max(1, Math.round(duration)), easing, useNativeDriver: ND });
 /** What a creature is doing right now, for its drawing: a pose, running legs, or facing back toward its team. */
 interface Act { pose?: Pose; moving?: boolean; turned?: boolean }
 
@@ -187,11 +191,23 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const ua = useRef<Record<number, UA>>({});
   const breath = useRef(new Animated.Value(0)).current;
   const travel = useRef(new Animated.Value(0)).current;
+  /** The whole field shakes on heavy blows. */
+  const quake = useRef(new Animated.Value(0)).current;
+  const shakeField = useCallback((p: number) => {
+    Animated.sequence([p, -p * 0.8, p * 0.55, -p * 0.3, p * 0.12, 0].map(v => tm(quake, v, 42))).start();
+  }, [quake]);
   const busy = useRef(false);
   const D = W * 0.95; // how far the camera travels between chambers
   const enter = useMemo(() => Animated.subtract(D, travel), [D, travel]);
 
   const A = (uid: number) => (ua.current[uid] ??= newUA());
+  /** Squash on landing, then spring back. */
+  const land = (a: UA) => Animated.sequence([tm(a.stretch, 0.78, 70), Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 180, useNativeDriver: ND })]).start();
+  /** A quick knock backward, for a creature that takes a hit. */
+  const jolt = (uid: number, dir: number, px: number) => {
+    const a = A(uid);
+    Animated.sequence([tm(a.shake, dir * px, 45, Easing.out(Easing.quad)), Animated.spring(a.shake, { toValue: 0, friction: 4, tension: 160, useNativeDriver: ND })]).start();
+  };
   const T = () => (fastRef.current ? 0.5 : 1);
 
   useEffect(() => {
@@ -283,6 +299,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     let attackerX: number | null = null;
     let attackerSide = -1;
     let statusSound = false;
+    let lastStyle = '';
+    let lastBig = false;
     for (const e of events) {
       if (!live.current) return;
       switch (e.t) {
@@ -296,74 +314,242 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const a = A(e.u);
           const dir = u.side === 0 ? 1 : -1;
           const targets = e.targets.map(t => b.units[t]).filter(Boolean);
+          const big = e.rarity >= 2;
+          lastStyle = e.style; lastBig = big;
           if (e.style === 'melee' && targets[0]) {
             const pt = place(targets[0]);
             const tx = pt.x - dir * (pt.sz * 0.42 + pa.sz * 0.36) - pa.x;
             const ty = pt.feet - pa.feet + 2;
             melee = e.u;
-            // Run over, legs going.
-            setAct(e.u, { moving: true });
-            await run(Animated.parallel([
-              Animated.timing(a.ox, { toValue: tx, duration: 300 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
-              Animated.timing(a.oy, { toValue: ty, duration: 300 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
-              Animated.timing(a.lean, { toValue: 8, duration: 200 * T(), useNativeDriver: ND }),
-            ]));
-            setAct(e.u, { moving: false });
+            const runTo = async (ms = 300) => {
+              setAct(e.u, { moving: true });
+              await run(Animated.parallel([tm(a.ox, tx, ms * T(), Easing.inOut(Easing.quad)), tm(a.oy, ty, ms * T(), Easing.inOut(Easing.quad)), tm(a.lean, 8, 200 * T())]));
+              setAct(e.u, { moving: false });
+            };
             // Wind up: lean back and crouch.
-            await run(Animated.parallel([
-              Animated.timing(a.lean, { toValue: -14, duration: 130 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
-              Animated.timing(a.stretch, { toValue: 0.88, duration: 130 * T(), useNativeDriver: ND }),
-              Animated.timing(a.ox, { toValue: tx - dir * 6, duration: 130 * T(), useNativeDriver: ND }),
-            ]));
+            const windUp = (ms = 130) => run(Animated.parallel([tm(a.lean, -14, ms * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.88, ms * T()), tm(a.ox, tx - dir * 6, ms * T())]));
             // Strike: snap forward with the attack pose.
-            setAct(e.u, { pose: 'attack' });
-            sfx('swing');
-            await run(Animated.parallel([
-              Animated.timing(a.lean, { toValue: 18, duration: 80, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
-              Animated.timing(a.stretch, { toValue: 1.14, duration: 80, useNativeDriver: ND }),
-              Animated.timing(a.ox, { toValue: tx + dir * 16, duration: 80, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
-            ]));
+            const strike = (push = 16, ms = 80) => {
+              setAct(e.u, { pose: 'attack' });
+              sfx('swing');
+              return run(Animated.parallel([tm(a.lean, 18, ms, Easing.out(Easing.quad)), tm(a.stretch, 1.14, ms), tm(a.ox, tx + dir * push, ms, Easing.out(Easing.quad))]));
+            };
+            switch (e.flair as Flair) {
+              case 'pounce': {
+                // Crouch low at home, then leap the whole way in one arc and come down on the target.
+                await run(Animated.parallel([tm(a.lean, -12, 170 * T()), tm(a.stretch, 0.8, 170 * T())]));
+                setAct(e.u, { pose: 'attack' });
+                sfx('swing');
+                const air = 380 * T(), peak = Math.max(Math.min(ty, 0) - fieldH * 0.3, -pa.top - pa.sz * 0.25);
+                await run(Animated.parallel([
+                  tm(a.ox, tx + dir * 8, air),
+                  Animated.sequence([tm(a.oy, peak, air * 0.5, Easing.out(Easing.quad)), tm(a.oy, ty, air * 0.5, Easing.in(Easing.quad))]),
+                  Animated.sequence([tm(a.stretch, 1.18, air * 0.3), tm(a.lean, 28, air * 0.7)]),
+                ]));
+                addFx({ kind: 'shock', el: e.el, x: pt.x - dir * pt.sz * 0.2, y: pt.feet, w: pt.sz * 1.3 });
+                land(a);
+                shakeField(5);
+                break;
+              }
+              case 'slam': {
+                await runTo();
+                // Spring up high, hang for a beat, then come down hard.
+                setAct(e.u, { pose: 'cast' });
+                const up = Math.max(pa.sz * 0.3, Math.min(pa.sz * 0.8, pa.top + ty + pa.sz * 0.25));
+                await run(Animated.parallel([tm(a.oy, ty - up, 240 * T(), Easing.out(Easing.quad)), tm(a.lean, -10, 240 * T()), tm(a.stretch, 1.12, 240 * T()), tm(a.ox, tx + dir * 4, 240 * T())]));
+                await sleep(80 * T());
+                setAct(e.u, { pose: 'attack' });
+                sfx('swing');
+                await run(Animated.parallel([tm(a.oy, ty, 110, Easing.in(Easing.quad)), tm(a.lean, 24, 110), tm(a.ox, tx + dir * 12, 110)]));
+                addFx({ kind: 'shock', el: e.el, x: pt.x, y: pt.feet, w: pt.sz * 1.7 });
+                land(a);
+                shakeField(big ? 11 : 7);
+                break;
+              }
+              case 'slash':
+                await runTo();
+                await windUp();
+                await strike(24, 90);
+                addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 3, s: pt.sz * 0.95 });
+                break;
+              case 'bite':
+                await runTo();
+                await windUp(150);
+                addFx({ kind: 'chomp', x: pt.x - dir * pt.sz * 0.05, y: pt.midY, s: pt.sz * 0.64 });
+                await strike(12, 100);
+                break;
+              case 'flurry': {
+                await runTo();
+                for (let i = 0; i < 4; i++) {
+                  setAct(e.u, { pose: i % 2 ? 'cast' : 'attack' });
+                  sfx('swing');
+                  await run(Animated.parallel([tm(a.ox, tx + dir * (10 + (i % 2) * 8), 60), tm(a.lean, 12 + (i % 2) * 10, 60), tm(a.stretch, 1.08, 60)]));
+                  addFx({ kind: 'impact', el: e.el, x: pt.x - dir * pt.sz * 0.15 + (i % 2 ? 7 : -7), y: pt.midY + (i - 1.5) * 9 });
+                  jolt(targets[0].uid, dir, 5);
+                  await run(Animated.parallel([tm(a.ox, tx - dir * 3, 70), tm(a.lean, -4, 70), tm(a.stretch, 0.95, 70)]));
+                }
+                await strike(22, 80);
+                break;
+              }
+              case 'roll': {
+                // Curl up and roll in like a wheel, with a whirl of wind around the hit.
+                await run(Animated.parallel([tm(a.stretch, 0.84, 130 * T()), tm(a.lean, -8, 130 * T())]));
+                sfx('swing');
+                addFx({ kind: 'streak', el: e.el, x1: pa.x, x2: pt.x - dir * pt.sz * 0.3, y: pa.midY + ty * 0.5, h: pa.sz * 0.5 });
+                await run(Animated.parallel([
+                  tm(a.ox, tx + dir * 10, 340 * T(), Easing.in(Easing.quad)), tm(a.oy, ty, 340 * T()),
+                  tm(a.spin, 720, 340 * T(), Easing.in(Easing.quad)), tm(a.lean, 0, 120 * T()), tm(a.stretch, 0.92, 120 * T()),
+                ]));
+                a.spin.setValue(0);
+                addFx({ kind: 'whirl', el: e.el, x: pt.x - dir * pt.sz * 0.15, y: pt.midY, r: pt.sz * 0.5 });
+                await strike(18, 70);
+                break;
+              }
+              case 'dash': {
+                // Blink across in a blur and cut straight through, stopping on the far side.
+                await run(Animated.parallel([tm(a.lean, -10, 120 * T()), tm(a.stretch, 0.86, 120 * T())]));
+                const past = pt.x + dir * pt.sz * 0.55 - pa.x;
+                sfx('swing');
+                addFx({ kind: 'streak', el: e.el, x1: pa.x, x2: pt.x + dir * pt.sz * 0.55, y: pa.midY + ty * 0.5, h: pa.sz * 0.6 });
+                setAct(e.u, { pose: 'attack' });
+                await run(Animated.parallel([tm(a.blink, 0.25, 40), tm(a.ox, past, 90, Easing.out(Easing.cubic)), tm(a.oy, ty, 90), tm(a.lean, 20, 90), tm(a.stretch, 1.15, 90)]));
+                tm(a.blink, 1, 140).start();
+                addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 1, s: pt.sz * 1.35 });
+                await sleep(100);
+                break;
+              }
+              case 'touch':
+                // Drift over, half-faded like a ghost, and lay a chilling hand on the target.
+                await run(Animated.parallel([
+                  tm(a.blink, 0.5, 200 * T()), tm(a.ox, tx, 380 * T(), Easing.inOut(Easing.sin)),
+                  Animated.sequence([tm(a.oy, ty / 2 - 16, 190 * T(), Easing.out(Easing.quad)), tm(a.oy, ty, 190 * T(), Easing.in(Easing.quad))]),
+                  tm(a.lean, 10, 300 * T()),
+                ]));
+                setAct(e.u, { pose: 'attack' });
+                sfx(castSfx(e.el));
+                addFx({ kind: 'charge', el: e.el, x: pt.x, y: pt.midY });
+                await run(Animated.parallel([tm(a.ox, tx + dir * 14, 130), tm(a.blink, 1, 170)]));
+                break;
+              default:
+                await runTo();
+                await windUp();
+                await strike();
+            }
           } else if (e.style === 'ranged') {
             sfx(castSfx(e.el));
-            flashPose(e.u, 'cast', 450);
-            Animated.sequence([
-              Animated.parallel([
-                Animated.timing(a.lean, { toValue: -8, duration: 90, useNativeDriver: ND }),
-                Animated.timing(a.stretch, { toValue: 0.92, duration: 90, useNativeDriver: ND }),
-              ]),
-              Animated.parallel([
-                Animated.timing(a.lean, { toValue: 10, duration: 80, useNativeDriver: ND }),
-                Animated.timing(a.stretch, { toValue: 1.08, duration: 80, useNativeDriver: ND }),
-                Animated.timing(a.ox, { toValue: dir * 8, duration: 80, useNativeDriver: ND }),
-              ]),
-              Animated.parallel([
-                Animated.timing(a.lean, { toValue: 0, duration: 200, useNativeDriver: ND }),
-                Animated.timing(a.stretch, { toValue: 1, duration: 200, useNativeDriver: ND }),
-                Animated.timing(a.ox, { toValue: 0, duration: 200, useNativeDriver: ND }),
-              ]),
+            const mouthX = pa.x + dir * pa.sz * 0.3, mouthY = pa.midY - pa.sz * 0.1;
+            // Rare and legendary moves gather power first.
+            if (big) {
+              flashPose(e.u, 'cast', 420);
+              addFx({ kind: 'charge', el: e.el, x: pa.x, y: pa.midY });
+              await sleep(240 * T());
+            }
+            const recoil = () => Animated.sequence([
+              Animated.parallel([tm(a.lean, -8, 90), tm(a.stretch, 0.92, 90)]),
+              Animated.parallel([tm(a.lean, 10, 80), tm(a.stretch, 1.08, 80), tm(a.ox, dir * 8, 80)]),
+              Animated.parallel([tm(a.lean, 0, 200), tm(a.stretch, 1, 200), tm(a.ox, 0, 200)]),
             ]).start();
-            await sleep(150);
+            const flair = e.flair as Flair;
             let wait = 0;
-            for (const t of targets) {
-              const pt = place(t);
-              const x1 = pa.x + dir * pa.sz * 0.25, y1 = pa.midY, x2 = pt.x, y2 = pt.midY;
-              const dur = Math.round(Math.min(380, 160 + Math.abs(x2 - x1) * 0.5) * T());
-              if (isBeam(e.el)) addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: dur + 120 });
-              else addFx({ kind: 'proj', el: e.el, x1, y1, x2, y2, dur });
-              wait = Math.max(wait, isBeam(e.el) ? 90 : dur);
+            if (flair === 'bolt') {
+              // Call lightning, or a pillar of light, down from the sky.
+              flashPose(e.u, 'cast', 500);
+              Animated.sequence([tm(a.oy, -10, 120, Easing.out(Easing.quad)), tm(a.oy, 0, 160, Easing.in(Easing.quad))]).start();
+              await sleep(160 * T());
+              targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'bolt', el: e.el, x: p2.x, y: p2.feet - p2.sz * 0.08 }); }, i * 80));
+              addFx({ kind: 'flash', color: ELEMENTS[e.el].glow });
+              shakeField(4);
+              wait = 140 + targets.length * 80;
+            } else if (flair === 'erupt') {
+              // Stamp the ground, and it bursts up under the target.
+              flashPose(e.u, 'cast', 450);
+              Animated.sequence([tm(a.oy, -12, 110, Easing.out(Easing.quad)), tm(a.oy, 0, 110, Easing.in(Easing.quad))]).start();
+              await sleep(220 * T());
+              land(a);
+              shakeField(3);
+              targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'erupt', el: e.el, x: p2.x, y: p2.feet + 2, s: p2.sz * 0.85 }); }, i * 70));
+              wait = 180 + targets.length * 70;
+            } else if (flair === 'breath') {
+              flashPose(e.u, 'attack', 520);
+              Animated.sequence([tm(a.lean, -10, 110), tm(a.lean, 8, 120), tm(a.lean, 0, 300)]).start();
+              await sleep(110);
+              for (const t of targets) { const p2 = place(t); addFx({ kind: 'breath', el: e.el, x1: mouthX, y1: mouthY, x2: p2.x, y2: p2.midY, dur: 520 * T() }); }
+              wait = 300 * T();
+            } else if (flair === 'wave') {
+              flashPose(e.u, 'attack', 400);
+              recoil();
+              await sleep(120);
+              let longest = 0;
+              for (const t of targets) {
+                const p2 = place(t), dur = Math.round(Math.min(520, 220 + Math.abs(p2.x - pa.x) * 0.7) * T());
+                addFx({ kind: 'wave', el: e.el, x1: pa.x + dir * pa.sz * 0.35, x2: p2.x, y: p2.feet + 2, s: Math.max(p2.sz, pa.sz) * 0.7, dur });
+                longest = Math.max(longest, dur);
+              }
+              wait = longest * 0.85;
+            } else {
+              if (!big) flashPose(e.u, 'cast', 450);
+              recoil();
+              await sleep(150);
+              for (const t of targets) {
+                const p2 = place(t);
+                const x1 = mouthX, y1 = pa.midY, x2 = p2.x, y2 = p2.midY;
+                const dur = Math.round(Math.min(380, 160 + Math.abs(x2 - x1) * 0.5) * T());
+                if (flair === 'beam' || (flair === 'proj' && isBeam(e.el))) {
+                  addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: dur + 120 });
+                  wait = Math.max(wait, 90);
+                } else if (flair === 'volley') {
+                  // A spread of smaller shots, one after another.
+                  for (let k = 0; k < 4; k++) setTimeout(() => addFx({ kind: 'proj', el: e.el, x1, y1: y1 + (k - 1.5) * 7, x2: x2 + (k % 2 ? 5 : -5), y2: y2 + (k - 1.5) * 9, dur: Math.round(dur * 0.85) }), k * 75 * T());
+                  wait = Math.max(wait, dur * 0.85 + 3 * 75 * T());
+                } else {
+                  addFx({ kind: 'proj', el: e.el, x1, y1, x2, y2, dur });
+                  wait = Math.max(wait, dur);
+                }
+              }
             }
             await sleep(wait);
           } else if (e.style === 'area') {
             sfx(castSfx(e.el));
-            flashPose(e.u, 'cast', 600);
+            flashPose(e.u, 'cast', 650);
             Animated.sequence([
-              Animated.timing(a.stretch, { toValue: 0.86, duration: 220 * T(), useNativeDriver: ND }),
+              tm(a.stretch, 0.86, 220 * T()),
               Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 160, useNativeDriver: ND }),
             ]).start();
             addFx({ kind: 'charge', el: e.el, x: pa.x, y: pa.midY });
-            await sleep(260 * T());
-            targets.forEach((t, i) => setTimeout(() => { const pt = place(t); addFx({ kind: 'burst', el: e.el, x: pt.x, y: pt.midY, big: true }); }, i * 45));
-            await sleep(120 * T());
+            await sleep(240 * T());
+            const flair = e.flair as Flair;
+            if (flair === 'rain') {
+              // Meteors, hail, stars or shards come down from the sky on every target.
+              targets.forEach((t, i) => {
+                const p2 = place(t);
+                for (let k = 0; k < 3; k++) setTimeout(() => addFx({ kind: 'proj', el: e.el, x1: p2.x - dir * 50 + (k - 1) * 22, y1: -30, x2: p2.x + (k - 1) * 12, y2: p2.midY + (k - 1) * 6, dur: Math.round(300 * T()) }), (i * 50 + k * 90) * T());
+              });
+              await sleep((300 + 180) * T());
+            } else if (flair === 'quake') {
+              // Leap and stamp: the ground heaves under the whole enemy side.
+              await run(Animated.sequence([tm(a.oy, -20, 140 * T(), Easing.out(Easing.quad)), tm(a.oy, 0, 110, Easing.in(Easing.quad))]));
+              land(a);
+              shakeField(10);
+              targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'shock', el: e.el, x: p2.x, y: p2.feet, w: p2.sz * 1.5 }); }, i * 60));
+              await sleep(140 * T());
+            } else if (flair === 'sweep') {
+              // A wave, a gale or a cloud rolls across the whole enemy side.
+              let longest = 0;
+              for (const t of targets) {
+                const p2 = place(t), dur = Math.round(Math.min(620, 260 + Math.abs(p2.x - pa.x) * 0.8) * T());
+                addFx({ kind: 'wave', el: e.el, x1: pa.x + dir * pa.sz * 0.3, x2: p2.x + dir * p2.sz * 0.6, y: p2.feet + 2, s: p2.sz * 0.85, dur });
+                longest = Math.max(longest, dur);
+              }
+              await sleep(longest * 0.7);
+            } else if (flair === 'storm') {
+              targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'bolt', el: e.el, x: p2.x, y: p2.feet - p2.sz * 0.08 }); }, i * 90));
+              addFx({ kind: 'flash', color: ELEMENTS[e.el].glow });
+              shakeField(5);
+              await sleep(160 + targets.length * 90);
+            } else {
+              targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'burst', el: e.el, x: p2.x, y: p2.midY, big: true }); }, i * 45));
+              await sleep(120 * T());
+            }
           } else {
             sfx(e.heal ? 'heal' : castSfx(e.el) === 'magic' ? 'magic' : 'buff');
             flashPose(e.u, 'cast', 450);
@@ -387,7 +573,12 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           addFloat(e.u, `-${e.n}${e.mult > 1 ? '!' : ''}`, e.mult > 1 ? '#ffd34d' : e.mult < 1 ? '#b9b3cc' : '#ff7b7b', e.mult > 1);
           if (e.mult > 1) addFloat(e.u, e.mult >= 4 ? 'Devastating' : 'Hits hard', '#ffd34d');
           else if (e.mult < 1) addFloat(e.u, 'Hits weakly', '#b9b3cc');
-          if (e.from >= 0) addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
+          if (e.from >= 0 && lastStyle === 'melee') {
+            addFx({ kind: 'impact', el: moveEl, x: pt.x - (t.side === 0 ? -1 : 1) * pt.sz * 0.12, y: pt.midY, big: e.mult > 1 || lastBig });
+            addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY });
+            jolt(e.u, t.side === 0 ? -1 : 1, e.mult > 1 || lastBig ? 14 : 8);
+          } else if (e.from >= 0) addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
+          if (e.from >= 0 && (e.mult > 1 || e.n > t.max.hp * 0.3)) shakeField(e.mult > 1 ? 6 : 4);
           sfx(e.mult > 1 || e.n > t.max.hp * 0.3 ? 'hitBig' : 'hit');
           const a = A(e.u);
           if (t.alive) flashPose(e.u, 'hurt', 320);
@@ -402,7 +593,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           Animated.sequence([
             Animated.timing(a.blink, { toValue: 0.45, duration: 50, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 90, useNativeDriver: ND }),
           ]).start();
-          await sleep(200 * T());
+          await sleep((lastStyle === 'melee' ? 250 : 200) * T());
           break;
         }
         case 'miss': {
@@ -445,9 +636,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       const a = A(melee);
       const m = melee;
       if (bRef.current!.units[m].alive) {
+        a.spin.setValue(0);
         await run(Animated.parallel([
           Animated.timing(a.lean, { toValue: 0, duration: 150, useNativeDriver: ND }),
           Animated.timing(a.stretch, { toValue: 1, duration: 150, useNativeDriver: ND }),
+          Animated.timing(a.blink, { toValue: 1, duration: 150, useNativeDriver: ND }),
         ]));
         setAct(m, { pose: undefined, turned: true, moving: true });
         await run(Animated.parallel([
@@ -458,7 +651,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       } else setAct(m, null);
     }
     if (live.current) { setView(snap(b)); setOrder(turnOrder(b, 8)); }
-  }, [addFloat, addFx, faintAnim, place, reviveAnim]);
+  }, [addFloat, addFx, faintAnim, place, reviveAnim, shakeField, fieldH]);
 
   const finish = useCallback(() => {
     const b = bRef.current!;
@@ -516,7 +709,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     // the native side holding the old value (a faded-out enemy's opacity 0), which made new enemies invisible.
     for (const u of b.units) {
       const a = A(u.uid);
-      a.ox.setValue(0); a.oy.setValue(0); a.shake.setValue(0); a.blink.setValue(1); a.squash.setValue(0); a.lean.setValue(0); a.stretch.setValue(1);
+      a.ox.setValue(0); a.oy.setValue(0); a.shake.setValue(0); a.blink.setValue(1); a.squash.setValue(0); a.lean.setValue(0); a.stretch.setValue(1); a.spin.setValue(0);
       a.down.setValue(u.alive ? 0 : 1);
       a.fade.setValue(u.alive ? 1 : 0);
       a.behind.setValue(0);
@@ -582,7 +775,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         }) : null}
       </View>
 
-      <View style={{ width: W, height: fieldH, overflow: 'hidden' }}>
+      <View style={{ width: W, height: fieldH, overflow: 'hidden', backgroundColor: theRun.ground }}>
+      <Animated.View style={{ position: 'absolute', left: 0, top: 0, width: W, height: fieldH, transform: [{ translateX: quake }, { translateY: Animated.multiply(quake, 0.4) }] }}>
         <Backdrop W={W} H={fieldH} sky={theRun.sky} ground={theRun.ground} travel={travel} />
 
         {b && units.map(u => {
@@ -628,6 +822,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 <Animated.View style={{
                   width: pos.sz, height: pos.sz, opacity: Animated.multiply(a.fade, a.blink),
                   transform: [
+                    { rotate: a.spin.interpolate({ inputRange: [0, 360], outputRange: u.side === 0 ? ['0deg', '360deg'] : ['0deg', '-360deg'] }) },
                     { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.12] }) },
                     { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, pos.sz * 0.24] }) },
                     { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 90}deg`] }) },
@@ -688,6 +883,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>{fightNo <= 1 ? 'Entering...' : fight?.boss ? 'Something big is ahead...' : 'On to the next chamber...'}</Text>
           </View>
         ) : null}
+      </Animated.View>
       </View>
 
       <View style={{ flex: 1, padding: 10 }}>

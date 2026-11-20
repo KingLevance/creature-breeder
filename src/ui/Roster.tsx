@@ -5,7 +5,7 @@ import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
 import { Creature, PedNode, STAGE_NAMES, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
 import { NAME_MAX, expandRoster, release, releaseValue, renameCreature, rosterExpandCost, useScan } from '../game/economy';
-import { PART_KEYS, PART_LABELS, SKELETON_NAMES, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
+import { PART_KEYS, PART_LABELS, SKELETON_NAMES, STANCE_NAMES, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, MoveRow, P, SexMark, Stars, TypeChips, st } from './kit';
 import { useGame } from './store';
@@ -126,6 +126,8 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             <GeneRow label="Element" shown={ELEMENTS[ph.el1].name} hid={c.scanned ? c.g.el1.filter(e => e !== ph.el1).map(e => ELEMENTS[e].name)[0] : undefined} scanned={c.scanned} />
             <GeneRow label="2nd element" shown={ph.el2 ? ELEMENTS[ph.el2].name : 'None'} hid={c.scanned ? c.g.el2.map(e => (e === 'none' ? 'None' : ELEMENTS[e].name)).filter(n => n !== (ph.el2 ? ELEMENTS[ph.el2].name : 'None'))[0] : undefined} scanned={c.scanned} />
             {PART_KEYS.map(k => <GeneRow key={k} label={PART_LABELS[k]} shown={capital(ph[k])} hid={c.scanned ? capital(hidden(c.g[k] as [string, string], ph[k]) ?? '') || undefined : undefined} scanned={c.scanned} />)}
+            <GeneRow label="Markings" shown={`Style ${(ph.mark ?? 0) + 1}`} hid={c.scanned && c.g.mark && c.g.mark[0] !== c.g.mark[1] ? `Style ${Math.max(...c.g.mark) + 1}` : undefined} scanned={c.scanned} />
+            <GeneRow label="Stance" shown={STANCE_NAMES[ph.stance ?? 0]} hid={c.scanned && c.g.stance && c.g.stance[0] !== c.g.stance[1] ? STANCE_NAMES[Math.max(...c.g.stance)] : undefined} scanned={c.scanned} />
             {c.scanned ? (
               <>
                 <GeneRow label="Legendary slot" shown={ph.leg ? 'Yes' : 'No'} hid={!ph.leg && (c.g.leg[0] === 1 || c.g.leg[1] === 1) ? 'Yes (carried)' : undefined} scanned />

@@ -11,7 +11,29 @@ export type FxSpec =
   | { id: number; kind: 'burst'; el: ElementId; x: number; y: number; big?: boolean }
   | { id: number; kind: 'charge'; el: ElementId; x: number; y: number }
   | { id: number; kind: 'aura'; color: string; x: number; y: number }
-  | { id: number; kind: 'puff'; x: number; y: number; color?: string };
+  | { id: number; kind: 'puff'; x: number; y: number; color?: string }
+  /** A comic hit star with speed lines. */
+  | { id: number; kind: 'impact'; el: ElementId; x: number; y: number; big?: boolean }
+  /** Claw or blade streaks across a target. */
+  | { id: number; kind: 'slash'; el: ElementId; x: number; y: number; dir: number; n: number; s: number }
+  /** Jaws snapping shut. */
+  | { id: number; kind: 'chomp'; x: number; y: number; s: number }
+  /** A ring of dust and flying rubble on the ground. */
+  | { id: number; kind: 'shock'; el: ElementId; x: number; y: number; w: number }
+  /** Speed lines along a dash. */
+  | { id: number; kind: 'streak'; el: ElementId; x1: number; x2: number; y: number; h: number }
+  /** Lightning or a pillar of light from the sky. */
+  | { id: number; kind: 'bolt'; el: ElementId; x: number; y: number }
+  /** Spikes, vines or flames bursting out of the ground. */
+  | { id: number; kind: 'erupt'; el: ElementId; x: number; y: number; s: number }
+  /** A wave rolling along the ground. */
+  | { id: number; kind: 'wave'; el: ElementId; x1: number; x2: number; y: number; s: number; dur: number }
+  /** A cone of breath from the mouth to the target. */
+  | { id: number; kind: 'breath'; el: ElementId; x1: number; y1: number; x2: number; y2: number; dur: number }
+  /** A whirl of wind around a rolling attacker. */
+  | { id: number; kind: 'whirl'; el: ElementId; x: number; y: number; r: number }
+  /** The whole field flashes. */
+  | { id: number; kind: 'flash'; color: string };
 
 /** An effect before it has been given an id. */
 export type FxNew = FxSpec extends infer T ? (T extends FxSpec ? Omit<T, 'id'> : never) : never;
@@ -162,6 +184,262 @@ const Puff = memo(function Puff({ s, done }: { s: Extract<FxSpec, { kind: 'puff'
   );
 });
 
+/** A small seeded random, so an effect looks the same every time it renders. */
+const rand = (seed: number) => () => { seed = (seed * 16807) % 2147483647; return (seed % 1000) / 1000; };
+const STAR = (R: number, r: number, n = 8, jitter?: () => number) =>
+  Array.from({ length: n * 2 }, (_, i) => {
+    const a = (i / (n * 2)) * Math.PI * 2 - Math.PI / 2, rr = i % 2 ? r : R * (jitter ? 0.75 + jitter() * 0.4 : 1);
+    return `${(Math.cos(a) * rr).toFixed(1)},${(Math.sin(a) * rr).toFixed(1)}`;
+  }).join(' ');
+
+const Impact = memo(function Impact({ s, done }: { s: Extract<FxSpec, { kind: 'impact' }>; done: () => void }) {
+  const t = useRun(s.big ? 360 : 280, done, Easing.out(Easing.cubic));
+  const e = ELEMENTS[s.el];
+  const R = s.big ? 40 : 28, j = rand(s.id + 3);
+  const lines = Array.from({ length: 7 }, (_, i) => {
+    const a = (i / 7) * Math.PI * 2 + j() * 0.5;
+    return (
+      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - 9, top: s.y - 1.5, width: 18, height: 3, borderRadius: 2, backgroundColor: i % 2 ? '#ffffff' : e.glow,
+        opacity: t.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] }),
+        transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [Math.cos(a) * R * 0.5, Math.cos(a) * R * 1.5] }) }, { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [Math.sin(a) * R * 0.5, Math.sin(a) * R * 1.5] }) }, { rotate: `${(a * 180) / Math.PI}deg` }] }} />
+    );
+  });
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2,
+        opacity: t.interpolate({ inputRange: [0, 0.15, 0.6, 1], outputRange: [0, 1, 0.9, 0] }),
+        transform: [{ scale: t.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.3, 1.05, 1.2] }) }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '10deg'] }) }] }}>
+        <Svg width={R * 2} height={R * 2} viewBox={`${-R} ${-R} ${R * 2} ${R * 2}`}>
+          <Polygon points={STAR(R * 0.98, R * 0.5, 8, j)} fill={e.base} />
+          <Polygon points={STAR(R * 0.68, R * 0.34, 8)} fill="#ffffff" />
+          <Circle r={R * 0.2} fill={e.glow} />
+        </Svg>
+      </Animated.View>
+      {lines}
+    </>
+  );
+});
+
+const Slash = memo(function Slash({ s, done }: { s: Extract<FxSpec, { kind: 'slash' }>; done: () => void }) {
+  const t = useRun(260 + s.n * 50, done, Easing.out(Easing.quad));
+  const e = ELEMENTS[s.el];
+  const L = s.s, Hh = L * 0.36;
+  const d = `M${-L / 2} ${-Hh / 2} Q0 ${Hh * 0.55} ${L / 2} ${Hh / 2} Q0 ${Hh * 0.05} ${-L / 2} ${-Hh / 2}Z`;
+  return (
+    <>
+      {Array.from({ length: s.n }, (_, i) => {
+        const off = (i - (s.n - 1) / 2) * L * 0.2, t0 = (i / s.n) * 0.25;
+        const tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.35)], outputRange: [0, 1], extrapolate: 'clamp' });
+        return (
+          <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - L / 2, top: s.y - Hh / 2 + off, width: L, height: Hh,
+            opacity: t.interpolate({ inputRange: [t0, t0 + 0.05, 0.7, 1], outputRange: [0, 1, 0.9, 0], extrapolate: 'clamp' }),
+            transform: [{ scaleX: s.dir }, { rotate: '-28deg' }, { translateX: tt.interpolate({ inputRange: [0, 1], outputRange: [-L * 0.35, 0] }) }, { scaleX: tt.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) }] }}>
+            <Svg width={L} height={Hh} viewBox={`${-L / 2} ${-Hh / 2} ${L} ${Hh}`}>
+              <Path d={d} fill={e.base} stroke={e.dark} strokeWidth={1} />
+              <Path d={d} fill="#ffffff" transform="scale(0.85 0.45)" />
+            </Svg>
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+});
+
+const Chomp = memo(function Chomp({ s, done }: { s: Extract<FxSpec, { kind: 'chomp' }>; done: () => void }) {
+  const t = useRun(420, done, Easing.linear);
+  const W = s.s, Hh = s.s * 0.42;
+  const teeth = (down: boolean) => {
+    const n = 5, w = W / n;
+    let d = down ? `M0 0 L${W} 0 ` : `M0 ${Hh} L${W} ${Hh} `;
+    for (let i = n - 1; i >= 0; i--) d += down ? `L${(i + 0.5) * w} ${Hh * 0.75} L${i * w} 0 ` : `L${(i + 0.5) * w} ${Hh * 0.25} L${i * w} ${Hh} `;
+    return d + 'Z';
+  };
+  const jaw = (down: boolean) => (
+    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - W / 2, top: s.y - Hh + (down ? -Hh * 0.2 : Hh * 1.2), width: W, height: Hh,
+      opacity: t.interpolate({ inputRange: [0, 0.1, 0.75, 1], outputRange: [0, 1, 1, 0] }),
+      transform: [{ translateY: t.interpolate({ inputRange: [0, 0.35, 0.45, 1], outputRange: down ? [-Hh * 0.9, Hh * 0.2, Hh * 0.15, Hh * 0.15] : [Hh * 0.9, -Hh * 0.2, -Hh * 0.15, -Hh * 0.15] }) }] }}>
+      <Svg width={W} height={Hh}><Path d={teeth(down)} fill="#ffffff" stroke="#3a2f45" strokeWidth={1.6} strokeLinejoin="round" /></Svg>
+    </Animated.View>
+  );
+  return <>{jaw(true)}{jaw(false)}</>;
+});
+
+const Shock = memo(function Shock({ s, done }: { s: Extract<FxSpec, { kind: 'shock' }>; done: () => void }) {
+  const t = useRun(620, done, Easing.out(Easing.quad));
+  const e = ELEMENTS[s.el];
+  const dust = '#e3d3b4', j = rand(s.id + 11);
+  const W = s.w, Hh = W * 0.24;
+  const ring = (k: number, col: string) => (
+    <Animated.View key={k} pointerEvents="none" style={{ position: 'absolute', left: s.x - W / 2, top: s.y - Hh / 2, width: W, height: Hh,
+      opacity: t.interpolate({ inputRange: [0, 0.1, 1], outputRange: [0, 0.9, 0] }),
+      transform: [{ scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.25 + k * 0.1, 1.25 + k * 0.25] }) }] }}>
+      <Svg width={W} height={Hh}><Ellipse cx={W / 2} cy={Hh / 2} rx={W / 2 - 3} ry={Hh / 2 - 2} stroke={col} strokeWidth={4 - k} fill={col} fillOpacity={0.12} /></Svg>
+    </Animated.View>
+  );
+  const rocks = Array.from({ length: 8 }, (_, i) => {
+    const dx = (i - 3.5) * W * 0.11 + (j() - 0.5) * 8, up = 18 + j() * 30, r = 3 + j() * 3.5;
+    return (
+      <Animated.View key={'r' + i} pointerEvents="none" style={{ position: 'absolute', left: s.x - r, top: s.y - r, width: r * 2, height: r * 2, borderRadius: r * 0.5, backgroundColor: i % 3 === 0 ? e.dark : i % 3 === 1 ? dust : e.base,
+        opacity: t.interpolate({ inputRange: [0, 0.75, 1], outputRange: [1, 1, 0] }),
+        transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx * 1.6] }) }, { translateY: t.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, -up, 4] }) }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${(j() - 0.5) * 400}deg`] }) }] }} />
+    );
+  });
+  return <>{ring(0, dust)}{ring(1, e.base)}{rocks}</>;
+});
+
+const Streak = memo(function Streak({ s, done }: { s: Extract<FxSpec, { kind: 'streak' }>; done: () => void }) {
+  const t = useRun(300, done, Easing.out(Easing.quad));
+  const e = ELEMENTS[s.el];
+  const x0 = Math.min(s.x1, s.x2), len = Math.abs(s.x2 - s.x1);
+  return (
+    <>
+      {[-0.4, -0.15, 0.1, 0.32].map((f, i) => (
+        <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: x0, top: s.y + f * s.h, width: len, height: i % 2 ? 2.5 : 4, borderRadius: 2, backgroundColor: i % 2 ? '#ffffff' : e.light,
+          opacity: t.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.85, 0] }),
+          transform: [{ scaleX: t.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.3, 1, 0.6] }) }, { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, (s.x2 > s.x1 ? 1 : -1) * len * 0.2] }) }] }} />
+      ))}
+    </>
+  );
+});
+
+const Bolt = memo(function Bolt({ s, done, H }: { s: Extract<FxSpec, { kind: 'bolt' }>; done: () => void; H: number }) {
+  const t = useRun(460, done);
+  const e = ELEMENTS[s.el];
+  const pillar = s.el === 'radiant' || s.el === 'glimmer';
+  const j = rand(s.id + 5);
+  let d = `M${s.x + (j() - 0.5) * 30} -10`;
+  const n = 7;
+  for (let i = 1; i < n; i++) d += ` L${s.x + (j() - 0.5) * 34} ${-10 + ((s.y + 10) * i) / n}`;
+  d += ` L${s.x} ${s.y}`;
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, opacity: t.interpolate({ inputRange: [0, 0.08, 0.2, 0.3, 0.45, 1], outputRange: [0, 1, 0.35, 1, 0.9, 0] }) }}>
+        <Svg width={s.x + 60} height={H}>
+          {pillar ? (
+            <>
+              <Path d={`M${s.x - 26} -10 L${s.x + 26} -10 L${s.x + 18} ${s.y} L${s.x - 18} ${s.y}Z`} fill={e.base} opacity={0.45} />
+              <Path d={`M${s.x - 11} -10 L${s.x + 11} -10 L${s.x + 7} ${s.y} L${s.x - 7} ${s.y}Z`} fill={e.glow} />
+            </>
+          ) : (
+            <>
+              <Path d={d} stroke={e.base} strokeWidth={9} fill="none" strokeLinejoin="round" strokeLinecap="round" opacity={0.6} />
+              <Path d={d} stroke="#ffffff" strokeWidth={3} fill="none" strokeLinejoin="round" strokeLinecap="round" />
+            </>
+          )}
+          <Ellipse cx={s.x} cy={s.y} rx={30} ry={8} fill={e.glow} opacity={0.7} />
+        </Svg>
+      </Animated.View>
+    </>
+  );
+});
+
+/** One spike of an eruption, drawn standing on (0, 0), about 1 unit tall. */
+function spikePath(el: ElementId, w: number, h: number, lean: number): string {
+  switch (el) {
+    case 'verdant': return `M${-w * 0.5} 0 Q${-w * 0.6 + lean} ${-h * 0.5} ${lean * 1.6} ${-h} Q${w * 0.2 + lean} ${-h * 0.5} ${w * 0.5} 0Z`;
+    case 'ember': case 'shade': case 'void': case 'spirit':
+      return `M${-w * 0.5} 0 Q${-w * 0.7} ${-h * 0.45} ${lean} ${-h} Q${w * 0.1} ${-h * 0.6} ${w * 0.3} ${-h * 0.75} Q${w * 0.75} ${-h * 0.35} ${w * 0.5} 0Z`;
+    default: return `M${-w * 0.5} 0 L${lean - w * 0.08} ${-h} L${lean + w * 0.12} ${-h * 0.92} L${w * 0.5} 0Z`;
+  }
+}
+const ERUPT_COL: Partial<Record<ElementId, [string, string]>> = {
+  frost: ['#bfeaff', '#ffffff'], stone: ['#9c9384', '#c9c1b1'], terra: ['#8a6440', '#b48a5c'], verdant: ['#3f9a4a', '#8fd16a'],
+  ember: ['#ff6a2a', '#ffd34d'], shade: ['#2d2240', '#9b6cff'], void: ['#1b1030', '#b48cff'], spirit: ['#7e7bc9', '#e9e8ff'],
+};
+const Erupt = memo(function Erupt({ s, done }: { s: Extract<FxSpec, { kind: 'erupt' }>; done: () => void }) {
+  const t = useRun(700, done, Easing.out(Easing.quad));
+  const e = ELEMENTS[s.el];
+  const [c1, c2] = ERUPT_COL[s.el] ?? [e.base, e.light];
+  const W = s.s * 1.6, Hh = s.s * 1.1;
+  const spikes = [[-0.32, 0.55, -6], [0.3, 0.6, 7], [-0.05, 1, 2], [-0.18, 0.75, -3], [0.15, 0.8, 4]];
+  const grow = t.interpolate({ inputRange: [0, 0.18, 0.28, 0.8, 1], outputRange: [0.05, 1.12, 1, 1, 0.1] });
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - W / 2, top: s.y - Hh, width: W, height: Hh,
+        opacity: t.interpolate({ inputRange: [0, 0.05, 0.85, 1], outputRange: [0, 1, 1, 0] }),
+        transform: [{ translateY: grow.interpolate({ inputRange: [0, 1.2], outputRange: [Hh / 2, -Hh * 0.1] }) }, { scaleY: grow }] }}>
+        <Svg width={W} height={Hh} viewBox={`${-W / 2} ${-Hh} ${W} ${Hh}`}>
+          {spikes.map(([x, h, ln], i) => <Path key={i} d={spikePath(s.el, W * 0.2, Hh * h, ln)} fill={i === 2 ? c2 : c1} stroke={e.dark} strokeWidth={1.2} transform={`translate(${x * W} 0)`} />)}
+        </Svg>
+      </Animated.View>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - W * 0.6, top: s.y - 6, width: W * 1.2, height: 12, borderRadius: 12, backgroundColor: c1, opacity: t.interpolate({ inputRange: [0, 0.1, 1], outputRange: [0, 0.5, 0] }) }} />
+    </>
+  );
+});
+
+/** A wave crest drawn on (0,0)-(W,H), moving right. */
+function WaveShape({ el, W, H }: { el: ElementId; W: number; H: number }) {
+  const e = ELEMENTS[el];
+  switch (el) {
+    case 'tide':
+      return (<Svg width={W} height={H}><Path d={`M0 ${H} Q${W * 0.3} ${H * 0.75} ${W * 0.55} ${H * 0.2} Q${W * 0.8} ${-H * 0.05} ${W * 0.95} ${H * 0.35} Q${W * 0.75} ${H * 0.25} ${W * 0.7} ${H * 0.55} Q${W * 0.85} ${H} ${W} ${H}Z`} fill={e.base} stroke={e.dark} strokeWidth={1.5} /><Path d={`M${W * 0.5} ${H * 0.35} Q${W * 0.7} ${H * 0.05} ${W * 0.9} ${H * 0.3}`} stroke="#ffffff" strokeWidth={3} fill="none" strokeLinecap="round" /></Svg>);
+    case 'gale':
+      return (<Svg width={W} height={H}>{[0.25, 0.5, 0.75].map((y, i) => <Path key={i} d={`M0 ${H * y} Q${W * 0.5} ${H * (y - 0.25)} ${W * 0.8} ${H * y} Q${W} ${H * (y + 0.15)} ${W * 0.85} ${H * (y + 0.2)}`} stroke={i === 1 ? '#ffffff' : e.light} strokeWidth={4} fill="none" strokeLinecap="round" />)}</Svg>);
+    case 'terra':
+      return (<Svg width={W} height={H}><Path d={`M0 ${H} Q${W * 0.2} ${H * 0.4} ${W * 0.5} ${H * 0.3} Q${W * 0.85} ${H * 0.25} ${W} ${H}Z`} fill={e.base} stroke={e.dark} strokeWidth={1.5} /><Circle cx={W * 0.4} cy={H * 0.15} r={4} fill={e.dark} /><Circle cx={W * 0.7} cy={H * 0.05} r={3} fill={e.base} /></Svg>);
+    default:
+      return (<Svg width={W} height={H}><Path d={`M${W * 0.25} 0 Q${W} ${H * 0.5} ${W * 0.25} ${H} Q${W * 0.7} ${H * 0.5} ${W * 0.25} 0Z`} fill={e.light} stroke={e.base} strokeWidth={2} opacity={0.9} /><Path d={`M0 ${H * 0.3} L${W * 0.35} ${H * 0.3} M0 ${H * 0.7} L${W * 0.35} ${H * 0.7}`} stroke={e.light} strokeWidth={3} strokeLinecap="round" /></Svg>);
+  }
+}
+const Wave = memo(function Wave({ s, done }: { s: Extract<FxSpec, { kind: 'wave' }>; done: () => void }) {
+  const t = useRun(s.dur, done, Easing.inOut(Easing.quad));
+  const W = s.s * 1.1, Hh = s.s * 0.8, dir = s.x2 >= s.x1 ? 1 : -1;
+  return (
+    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x1 - W / 2, top: s.y - Hh, width: W, height: Hh,
+      opacity: t.interpolate({ inputRange: [0, 0.1, 0.85, 1], outputRange: [0, 1, 1, 0] }),
+      transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, s.x2 - s.x1] }) }, { scaleX: dir }, { scaleY: t.interpolate({ inputRange: [0, 0.2, 0.5, 0.8, 1], outputRange: [0.3, 1, 0.9, 1.1, 0.6] }) }] }}>
+      <WaveShape el={s.el} W={W} H={Hh} />
+    </Animated.View>
+  );
+});
+
+const Breath = memo(function Breath({ s, done, W, H }: { s: Extract<FxSpec, { kind: 'breath' }>; done: () => void; W: number; H: number }) {
+  const t = useRun(s.dur, done);
+  const e = ELEMENTS[s.el];
+  const dx = s.x2 - s.x1, dy = s.y2 - s.y1, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+  const cone = (w0: number, w1: number) => `M${s.x1 + nx * w0} ${s.y1 + ny * w0} L${s.x2 + nx * w1} ${s.y2 + ny * w1} Q${s.x2 + dx / len * w1 * 0.8} ${s.y2 + dy / len * w1 * 0.8} ${s.x2 - nx * w1} ${s.y2 - ny * w1} L${s.x1 - nx * w0} ${s.y1 - ny * w0}Z`;
+  const puffs = Array.from({ length: 6 }, (_, i) => {
+    const t0 = i * 0.09, r = 7 + i * 1.5;
+    const tt = t.interpolate({ inputRange: [t0, t0 + 0.4], outputRange: [0, 1], extrapolate: 'clamp' });
+    return (
+      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x1 - r, top: s.y1 - r, width: r * 2, height: r * 2, borderRadius: r, backgroundColor: i % 2 ? e.glow : e.light,
+        opacity: tt.interpolate({ inputRange: [0, 0.1, 0.8, 1], outputRange: [0, 0.9, 0.7, 0] }),
+        transform: [{ translateX: tt.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) }, { translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, dy + (i % 2 ? 6 : -6)] }) }, { scale: tt.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1.6] }) }] }} />
+    );
+  });
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, opacity: t.interpolate({ inputRange: [0, 0.15, 0.3, 0.45, 0.6, 0.8, 1], outputRange: [0, 0.95, 0.7, 0.95, 0.75, 0.6, 0] }) }}>
+        <Svg width={W} height={H}>
+          <Path d={cone(5, 30)} fill={e.base} opacity={0.55} />
+          <Path d={cone(3, 17)} fill={e.light} opacity={0.8} />
+          <Path d={cone(1.5, 7)} fill={e.glow} />
+        </Svg>
+      </Animated.View>
+      {puffs}
+    </>
+  );
+});
+
+const Whirl = memo(function Whirl({ s, done }: { s: Extract<FxSpec, { kind: 'whirl' }>; done: () => void }) {
+  const t = useRun(420, done, Easing.out(Easing.quad));
+  const e = ELEMENTS[s.el], R = s.r;
+  return (
+    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2,
+      opacity: t.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.9, 0] }),
+      transform: [{ rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-420deg'] }) }, { scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.15] }) }] }}>
+      <Svg width={R * 2} height={R * 2} viewBox={`${-R} ${-R} ${R * 2} ${R * 2}`}>
+        {[0, 120, 240].map(a => <Path key={a} d={`M${R * 0.85} 0 A${R * 0.85} ${R * 0.85} 0 0 1 ${R * 0.85 * Math.cos(1.6)} ${R * 0.85 * Math.sin(1.6)}`} stroke={a ? e.light : '#ffffff'} strokeWidth={4} fill="none" strokeLinecap="round" transform={`rotate(${a})`} />)}
+      </Svg>
+    </Animated.View>
+  );
+});
+
+const Flash = memo(function Flash({ s, done, W, H }: { s: Extract<FxSpec, { kind: 'flash' }>; done: () => void; W: number; H: number }) {
+  const t = useRun(260, done, Easing.out(Easing.quad));
+  return <Animated.View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, backgroundColor: s.color, opacity: t.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 0.5, 0] }) }} />;
+});
+
 export const FxLayer = memo(function FxLayer({ items, onDone, W, H }: { items: FxSpec[]; onDone: (id: number) => void; W: number; H: number }) {
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H }}>
@@ -174,6 +452,17 @@ export const FxLayer = memo(function FxLayer({ items, onDone, W, H }: { items: F
           case 'charge': return <Charge key={s.id} s={s} done={done} />;
           case 'aura': return <Aura key={s.id} s={s} done={done} />;
           case 'puff': return <Puff key={s.id} s={s} done={done} />;
+          case 'impact': return <Impact key={s.id} s={s} done={done} />;
+          case 'slash': return <Slash key={s.id} s={s} done={done} />;
+          case 'chomp': return <Chomp key={s.id} s={s} done={done} />;
+          case 'shock': return <Shock key={s.id} s={s} done={done} />;
+          case 'streak': return <Streak key={s.id} s={s} done={done} />;
+          case 'bolt': return <Bolt key={s.id} s={s} done={done} H={H} />;
+          case 'erupt': return <Erupt key={s.id} s={s} done={done} />;
+          case 'wave': return <Wave key={s.id} s={s} done={done} />;
+          case 'breath': return <Breath key={s.id} s={s} done={done} W={W} H={H} />;
+          case 'whirl': return <Whirl key={s.id} s={s} done={done} />;
+          case 'flash': return <Flash key={s.id} s={s} done={done} W={W} H={H} />;
         }
       })}
     </View>
