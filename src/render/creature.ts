@@ -525,8 +525,38 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
   }
 }
 
+/** The head's outline as an ellipse, for things that sit on or wrap around it. */
+function headEllipse(ph: Pheno, hx: number, hy: number, hr: number) {
+  if (ph.head === 'long') return { cx: hx + hr * 0.25, cy: hy + hr * 0.05, rx: hr * 1.3, ry: hr * 0.78 };
+  if (ph.head === 'blunt') return { cx: hx - hr * 0.1, cy: hy, rx: hr * 0.95, ry: hr * 0.92 };
+  return { cx: hx, cy: hy, rx: hr, ry: hr * 0.95 };
+}
+
+/** A fighter's headband: a red band wrapped round the forehead, knotted at the back with two tails. */
+function headband(p: Pen, a: Anchors, ph: Pheno, s: number, phase: number) {
+  const { cx, cy, rx, ry } = headEllipse(ph, a.hx, a.hy, a.hr);
+  // Red cloth, unless the creature is already reddish: then white cloth with a red stripe, so it stands out.
+  const [hue, sat] = hexToHsl(p.pal.base);
+  const reddish = sat > 0.25 && (hue < 30 || hue > 330);
+  const red = reddish ? '#f4efe6' : '#d7443e', dark = reddish ? '#d7443e' : '#9c2724';
+  const y1 = cy - ry * 0.7, y2 = cy - ry * 0.7 + ry * 0.26 * Math.max(0.7, s);
+  const half = (y: number) => rx * Math.sqrt(Math.max(0, 1 - ((y - cy) / ry) ** 2)) + 0.6;
+  const t1 = half(y1), t2 = half(y2), bow = ry * 0.08;
+  const was = p.g;
+  p.g = 'face';
+  // The tails flutter behind the knot.
+  const kx = cx - (t1 + t2) / 2, ky = (y1 + y2) / 2;
+  const fl = Math.sin(phase * TAU) * 1.5;
+  p.taper(kx, ky, kx - 9 * s - 2, ky + 4 * s + fl, 2.6 * s + 0.6, 1.4 * s + 0.4, red, kx - 5 * s, ky - 1);
+  p.taper(kx, ky, kx - 7 * s - 2, ky + 8 * s - fl, 2.6 * s + 0.6, 1.4 * s + 0.4, dark, kx - 3 * s, ky + 4 * s);
+  p.path(`M${f(cx - t1)} ${f(y1)}Q${f(cx)} ${f(y1 + bow)} ${f(cx + t1)} ${f(y1)}L${f(cx + t2)} ${f(y2)}Q${f(cx)} ${f(y2 + bow)} ${f(cx - t2)} ${f(y2)}Z`, red);
+  p.line(`M${f(cx - t1 * 0.9)} ${f((y1 + y2) / 2 + bow * 0.5)}Q${f(cx)} ${f((y1 + y2) / 2 + bow)} ${f(cx + t1 * 0.9)} ${f((y1 + y2) / 2 + bow * 0.5)}`, dark, 0.7);
+  p.ell(kx, ky, 2 * s + 0.6, 2.4 * s + 0.6, red);
+  p.g = was;
+}
+
 /** Element look cues. A baby shows only a hint; the full markings arrive with maturity. */
-function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, minor: boolean) {
+function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, minor: boolean, ph1: Pheno) {
   const c = p.pal;
   const e = ELEMENTS[el];
   const s = k * (minor ? 0.7 : 1);
@@ -551,28 +581,47 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       break;
     case 'brawn':
       p.path(`M${f(bx - brx * 0.1)} ${f(by - bry * 0.55)}L${f(bx + brx * 0.25)} ${f(by - bry * 0.1)}M${f(bx + brx * 0.05)} ${f(by - bry * 0.6)}L${f(bx + brx * 0.4)} ${f(by - bry * 0.15)}`, 'none', { stroke: e.dark, sw: 1.3 * Math.max(0.7, s) });
-      p.path(`M${f(hx - hr * 0.75)} ${f(hy - hr * 0.5)}L${f(hx + hr * 0.75)} ${f(hy - hr * 0.62)}`, 'none', { stroke: '#f5f0e6', sw: 2.4 * Math.max(0.6, s) });
+      headband(p, a, ph1, s, phase);
       break;
     case 'venom':
       for (const t of [0.2, 0.5, 0.75]) p.path(`M${f(bx - brx * 0.6 + brx * 1.2 * t)} ${f(by + bry * 0.85)}q${f(1.5 * s)} ${f(3.5 * s)} 0 ${f(5 * s)}q${f(-1.5 * s)} ${f(-1.5 * s)} 0 ${f(-5 * s)}Z`, e.glow, { line: false });
       p.poly([[hx + hr * 0.45, hy + hr * 0.5], [hx + hr * 0.55, hy + hr * 0.5 + 4 * s], [hx + hr * 0.68, hy + hr * 0.48]], '#ffffff');
       break;
     case 'terra': {
-      // A mound of earth with a sprout and a couple of pebbles, sitting on the body's top surface. Upright and
-      // long bodies have no flat back, so it sits on top of the head instead.
-      let mx: number, my: number;
-      if (a.flatBack) {
-        mx = bx - brx * 0.2;
-        const t = (mx - bx) / brx;
-        my = by - bry * Math.sqrt(Math.max(0, 1 - t * t)) + 2.2 * s;
-      } else { mx = hx - hr * 0.15; my = hy - hr * 0.78 + 2 * s; }
-      p.path(`M${f(mx - 10 * s)} ${f(my)}Q${f(mx - 8 * s)} ${f(my - 7 * s)} ${f(mx)} ${f(my - 7.5 * s)}Q${f(mx + 8 * s)} ${f(my - 7 * s)} ${f(mx + 10 * s)} ${f(my)}Z`, e.dark);
-      p.dot(mx - 4 * s, my - 2.5 * s, 1.5 * s + 0.3, '#9c9384');
-      p.dot(mx + 4.5 * s, my - 1.8 * s, 1.2 * s + 0.3, '#b3aa98');
-      const g = ELEMENTS.verdant;
-      p.line(`M${f(mx)} ${f(my - 7 * s)}Q${f(mx - 1 * s)} ${f(my - 11 * s)} ${f(mx - 4 * s)} ${f(my - 13 * s)}`, g.dark, 1.6 * s + 0.4);
-      p.line(`M${f(mx)} ${f(my - 7 * s)}Q${f(mx + 1 * s)} ${f(my - 12 * s)} ${f(mx + 3.5 * s)} ${f(my - 14 * s)}`, g.base, 1.6 * s + 0.4);
-      p.path(`M${f(mx + 3.5 * s)} ${f(my - 14 * s)}q${f(4 * s)} ${f(-2 * s)} ${f(5 * s)} ${f(1 * s)}q${f(-3 * s)} ${f(1.5 * s)} ${f(-5 * s)} ${f(-1 * s)}Z`, g.light, { line: false });
+      // A lumpy mound of soil with a sprout and pebbles. It sits on the body's top surface (or the top of the head
+      // for upright, long and floating bodies), sinks a little into it, and fades into it through a soft soil stain.
+      const surf = a.flatBack ? { cx: bx, cy: by, rx: brx, ry: bry } : headEllipse(ph1, hx, hy, hr);
+      const mx = a.flatBack ? bx - brx * 0.2 : hx - hr * 0.22;
+      const sy = (x: number) => surf.cy - surf.ry * Math.sqrt(Math.max(0, 1 - ((x - surf.cx) / surf.rx) ** 2));
+      const W = (a.flatBack ? 10 : 7.5) * s, H = (a.flatBack ? 6.5 : 5.2) * s, sink = 1.2 * s + 0.3;
+      const soil = e.dark, soilLight = shade(e.dark, 0.12);
+      // Soil stain: a band just inside the surface, widest under the mound and thinning out to either side.
+      const N = 12, top: string[] = [], bot: string[] = [];
+      for (let i = 0; i <= N; i++) {
+        const u = (i / N) * 2 - 1, x = mx + u * W * 1.45;
+        top.push(`${f(x)} ${f(sy(x) + 0.4)}`);
+        bot.unshift(`${f(x)} ${f(sy(x) + 0.4 + 3.6 * s * (1 - u * u))}`);
+      }
+      p.path('M' + top.join('L') + 'L' + bot.join('L') + 'Z', soil, { line: false, op: 0.3 });
+      // The mound: a lumpy top over a base that follows the surface.
+      const lump: string[] = [], base: string[] = [];
+      for (let i = 0; i <= N; i++) {
+        const u = (i / N) * 2 - 1, x = mx + u * W;
+        const h = H * Math.pow(Math.max(0, 1 - u * u), 0.6) * (1 + 0.14 * Math.sin((u + 1) * Math.PI * 2.5));
+        lump.push(`${f(x)} ${f(sy(x) + sink - h)}`);
+        base.unshift(`${f(x)} ${f(sy(x) + sink)}`);
+      }
+      p.path('M' + lump.join('L') + 'L' + base.join('L') + 'Z', soil);
+      p.ell(mx - W * 0.3, sy(mx - W * 0.3) + sink - H * 0.62, W * 0.3, H * 0.18, soilLight, { line: false, op: 0.7, rot: -12 });
+      p.dot(mx - W * 0.45, sy(mx - W * 0.45) + sink - H * 0.3, 1.3 * s + 0.3, '#9c9384');
+      p.dot(mx + W * 0.42, sy(mx + W * 0.42) + sink - H * 0.25, 1.05 * s + 0.3, '#b3aa98');
+      // Crumbs on the body around the mound.
+      for (const [u, d] of [[-1.2, 2.2], [1.15, 1.8], [-0.7, 3.4], [0.75, 3.1]]) p.dot(mx + u * W, sy(mx + u * W) + d * s + 0.5, 0.55 * s + 0.25, soil, 0.7);
+      // Sprout.
+      const g = ELEMENTS.verdant, tx2 = mx + W * 0.05, ty2 = sy(tx2) + sink - H * 0.95;
+      p.line(`M${f(tx2)} ${f(ty2)}Q${f(tx2 - 1 * s)} ${f(ty2 - 4 * s)} ${f(tx2 - 4 * s)} ${f(ty2 - 6 * s)}`, g.dark, 1.5 * s + 0.4);
+      p.line(`M${f(tx2)} ${f(ty2)}Q${f(tx2 + 1 * s)} ${f(ty2 - 5 * s)} ${f(tx2 + 3.5 * s)} ${f(ty2 - 7 * s)}`, g.base, 1.5 * s + 0.4);
+      p.path(`M${f(tx2 + 3.5 * s)} ${f(ty2 - 7 * s)}q${f(4 * s)} ${f(-2 * s)} ${f(5 * s)} ${f(1 * s)}q${f(-3 * s)} ${f(1.5 * s)} ${f(-5 * s)} ${f(-1 * s)}Z`, g.light, { line: false });
       break;
     }
     case 'gale':
@@ -806,7 +855,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   p.g = 'body';
   drawHead(p, a, ph, k, o.ko, o.pose);
   p.g = 'body';
-  drawCues(p, a, ph.el1, st.cue, phase, false);
+  drawCues(p, a, ph.el1, st.cue, phase, false, ph);
   p.g = 'fx';
   if (o.stage >= 3) {
     // Motes drifting up through the idle cycle.
