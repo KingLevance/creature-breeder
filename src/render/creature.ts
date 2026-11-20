@@ -565,9 +565,15 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   } else if (ph.head !== 'beak' && ph.head !== 'blunt') p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
 }
 
-function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
+/** Marking styles that are painted on the hide rather than attached to it. */
+const SKIN = new Set(['ember1', 'spark1', 'venom1', 'terra1', 'stone2', 'void2', 'radiant1']);
+const isSkin = (ph: Pheno) => ph.skel !== 'serpent' && SKIN.has(ph.el1 + (ph.mark ?? 0));
+
+function drawPattern(p: Pen, a: Anchors, ph: Pheno, cue = 1) {
   const c = p.pal;
   const { bx, by, brx, bry } = a;
+  // Painted element markings go first, so the belly patch, the arms and the shading all sit over them.
+  if (isSkin(ph)) markStyle(p, a, ph.el1, cue, 0, ph, ph.mark ?? 0);
   switch (ph.pattern) {
     case 'belly': p.ell(bx + brx * 0.1, by + bry * 0.38, brx * 0.68, bry * 0.5, c.light, { line: false }); break;
     case 'spots':
@@ -636,10 +642,23 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
   switch (el) {
     case 'ember':
       if (v === 1) {
-        // Magma seams: glowing cracks across the body.
-        for (const pts of [[[-0.55, -0.45], [-0.4, -0.15], [-0.5, 0.15], [-0.32, 0.42]], [[0.05, -0.6], [0.16, -0.3], [0.02, -0.05], [0.18, 0.22]], [[0.45, -0.38], [0.34, -0.1], [0.5, 0.12]]]) {
-          const xy = pts.map(([u, w]) => body(u, w));
-          line(xy, e.dark, 3 * s + 0.6); line(xy, '#ffb347', 1.8 * s + 0.4); line(xy, '#fff1a8', 0.7 * s + 0.2);
+        // Painted flames: dark tongues licking up the hide (streaming back along the flank on long bodies),
+        // each with a brighter core.
+        const dark = mix(c.base, e.dark, 0.62), core = mix(c.base, e.glow, 0.6);
+        const tongue = (x0: number, y0: number, x1: number, y1: number, w: number, bend: number, col: string) => {
+          const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+          p.path(`M${f(x0 + nx * w / 2)} ${f(y0 + ny * w / 2)}Q${f(x0 + dx * 0.5 + nx * w * (0.75 + bend))} ${f(y0 + dy * 0.5 + ny * w * (0.75 + bend))} ${f(x1)} ${f(y1)}Q${f(x0 + dx * 0.45 - nx * w * (0.75 - bend))} ${f(y0 + dy * 0.45 - ny * w * (0.75 - bend))} ${f(x0 - nx * w / 2)} ${f(y0 - ny * w / 2)}Z`, col, { line: false });
+        };
+        const flames: [number, number, number, number, number, number][] = a.flatBack
+          // from the shoulder, streaming back: [u0, w0, u1, w1, width, bend]
+          ? [[0.5, -0.1, -0.5, -0.55, 0.5, 0.25], [0.5, 0.1, -0.72, -0.05, 0.55, -0.15], [0.45, 0.3, -0.35, 0.42, 0.42, 0.2]]
+          // from the hips, rising up the back
+          : [[-0.62, 0.42, -0.42, -0.58, 0.58, 0.25], [-0.25, 0.38, -0.02, -0.78, 0.62, -0.2], [0.12, 0.3, 0.32, -0.32, 0.42, 0.2]];
+        const size = a.flatBack ? bry : brx;
+        for (const [u0, w0, u1, w1, wd, bd] of flames) { const [x0, y0] = body(u0, w0), [x1, y1] = body(u1, w1); tongue(x0, y0, x1, y1, size * wd, bd, dark); }
+        for (const [u0, w0, u1, w1, wd, bd] of flames) {
+          const [x0, y0] = body(u0, w0), [x1, y1] = body(u0 + (u1 - u0) * 0.62, w0 + (w1 - w0) * 0.62);
+          tongue(x0, y0, x1, y1, size * wd * 0.45, bd, core);
         }
         return done();
       }
@@ -662,11 +681,31 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         return done();
       }
       {
-        // A spiral shell on the back.
-        const sh = '#f2d3be', sd = shade(sh, -0.22);
-        p.path(`M${b(-7.5 * s, -1.5)}Q${b(-7.5 * s, 9 * s)} ${b(0, 9.5 * s)}Q${b(7.5 * s, 9 * s)} ${b(7.5 * s, -1.5)}Z`, sh);
-        for (const [lx, lo] of [[-5, 6.5], [-2.5, 8.6], [0, 9.2], [2.5, 8.6], [5, 6.5]]) p.line(`M${b(0, 0)}L${b(lx * s, lo * s)}`, sd, 0.8);
-        p.ell(...(B(0, 0.5) as [number, number]), 2.2 * s, 1.4 * s, sd, { line: false });
+        // A shell that grows over the back like a turtle's: it follows the body's curve, with a pale rim and plates.
+        if (ph.skel === 'serpent') return false;
+        const shell = mix('#b9824e', e.dark, 0.25), plate = shade(shell, -0.14), rim = '#f1dfb8';
+        const rimW = Math.min(brx, bry) * 0.13, N = 12, outer: number[][] = [], inner: number[][] = [];
+        for (let i = 0; i <= N; i++) {
+          const t = i / N;
+          if (a.flatBack) {
+            const u = -0.85 + 1.3 * t, h = bry * Math.sqrt(Math.max(0, 1 - u * u));
+            outer.push([bx + brx * u, by - h - rimW * 0.6]);
+            inner.unshift([bx + brx * u, by - bry * (0.02 + 0.2 * Math.sin(t * Math.PI))]);
+          } else {
+            const w = -0.85 + 1.5 * t, h = brx * Math.sqrt(Math.max(0, 1 - w * w));
+            outer.push([bx - h - rimW * 0.6, by + bry * w]);
+            inner.unshift([bx - brx * (0.25 + 0.2 * Math.sin(t * Math.PI)), by + bry * w]);
+          }
+        }
+        p.poly([...outer, ...inner], shell);
+        // Plates: seams from the rim up over the dome.
+        for (const t of [0.3, 0.55, 0.8]) {
+          const i = Math.round(t * N), [ox2, oy2] = outer[i], [ix, iy] = inner[N - i];
+          line([[ix + (ox2 - ix) * 0.12, iy + (oy2 - iy) * 0.12], [ix + (ox2 - ix) * 0.85, iy + (oy2 - iy) * 0.85]], plate, 1.2);
+        }
+        line(outer.slice(2, N - 1).map(([x, y], i) => { const [ix, iy] = inner[N - 2 - i]; return [x + (ix - x) * 0.45, y + (iy - y) * 0.45]; }), plate, 1.1);
+        // The pale rim along the lower edge.
+        p.line('M' + inner.map(([x, y]) => f(x) + ' ' + f(y)).join('L'), rim, rimW);
         return done();
       }
     case 'verdant':
@@ -764,14 +803,14 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
       return done();
     case 'terra':
       if (v === 1) {
-        // Patches of dried, cracked clay.
-        const clay = hexToHsl(c.base)[2] > 0.45 ? '#7a5638' : '#e8cfa6', crack = hexToHsl(c.base)[2] > 0.45 ? '#4a3220' : '#9c7a52';
-        for (const [u, w, r] of [[-0.35, -0.2, 5.2], [0.35, 0.2, 3.8]]) {
-          const [x, y] = body(u, w), pts: number[][] = [];
-          for (let i = 0; i < 9; i++) { const t = (i / 9) * TAU, rr = r * s * (0.8 + 0.25 * Math.sin(i * 2.3)); pts.push([x + Math.cos(t) * rr * 1.2, y + Math.sin(t) * rr * 0.8]); }
-          p.poly(pts, clay, { line: false, op: 0.9 });
-          line([[x - r * s * 0.7, y - 0.5], [x - r * s * 0.1, y + 0.6], [x + r * s * 0.3, y - 0.8], [x + r * s * 0.8, y + 0.3]], crack, 0.9);
-          line([[x - r * s * 0.1, y + 0.6], [x, y + r * s * 0.6]], crack, 0.9);
+        // A plated hide like baked, cracked earth: a honeycomb of plates across the back.
+        const r = Math.min(brx, bry) * 0.26;
+        const [cx, cy] = a.flatBack ? body(-0.2, -0.38) : body(-0.32, -0.22);
+        const seam = mix(c.base, e.dark, 0.7);
+        for (const [i, j] of [[-1, -0.5], [0, -0.5], [1, -0.5], [-0.5, 0.42], [0.5, 0.42], [1.5, 0.42]]) {
+          const x = cx + i * r * 1.75, y = cy + j * r * 1.75, k = r * 0.94;
+          const pts = [0, 1, 2, 3, 4, 5].map(q => [x + Math.cos((q * Math.PI) / 3 + Math.PI / 6) * k, y + Math.sin((q * Math.PI) / 3 + Math.PI / 6) * k]);
+          p.path('M' + pts.map(([px, py]) => f(px) + ' ' + f(py)).join('L') + 'Z', shade(c.base, (i + j) % 1 === 0 ? 0.13 : 0.07), { stroke: seam, sw: 1.2 });
         }
         return done();
       }
@@ -1023,7 +1062,8 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
   const { hx, hy, hr, bx, by, brx, bry, backx, backy } = a;
   // Each element has three marking styles; style 0 is drawn below, styles 1 and 2 in markStyle.
   const style = minor ? 0 : ph1.mark ?? 0;
-  if (style > 0 && markStyle(p, a, el, s, phase, ph1, style)) return;
+  if (style > 0 && k < 0.5 && !isSkin(ph1)) { drawCues(p, a, el, k, phase, minor, { ...ph1, mark: 0 }); return; }
+  if (style > 0 && (isSkin(ph1) || markStyle(p, a, el, s, phase, ph1, style))) return;
   switch (el) {
     case 'ember': flame(p, backx - 1, backy - 1, 5 * s, e.base, e.glow); if (!minor) flame(p, backx + brx * 0.45, backy - 0.5, 3.4 * s, e.light, e.glow); break;
     case 'tide':
@@ -1151,7 +1191,7 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
 interface StancePose { lean: number; drop: number; hdx: number; hdy: number; px?: number; ft?: number; sx?: number }
 const S0: StancePose = { lean: 0, drop: 0, hdx: 0, hdy: 0 };
 const STANCES: Record<Skeleton, StancePose[]> = {
-  biped: [S0, { lean: 20, drop: 9, hdx: 1, hdy: 2, ft: 7 }, { lean: -12, drop: 0, hdx: -1, hdy: -3, ft: 2, sx: 2 }, { lean: 32, drop: 5, hdx: 1, hdy: 8, ft: 3 }],
+  biped: [S0, { lean: 9, drop: 4, hdx: 1, hdy: 1, ft: 6 }, { lean: -9, drop: 0, hdx: -1, hdy: -3, ft: 2, sx: 2 }, { lean: 14, drop: 3, hdx: 3, hdy: 6, ft: 3 }],
   // Prowl: low, stalking, head at shoulder height. Proud: chest and neck up. Hunched: a play-bow, front down.
   quad: [S0, { lean: 3, drop: 8, hdx: 3, hdy: 11, ft: 4 }, { lean: -12, drop: 0, hdx: -2, hdy: -8, sx: 4 }, { lean: 16, drop: 1, hdx: 1, hdy: 2, px: -0.7, ft: 2 }],
   multi: [S0, { lean: 0, drop: 7, hdx: 0, hdy: 4, ft: 3, sx: -1 }, { lean: -13, drop: 0, hdx: 0, hdy: -4, sx: 4 }, { lean: 12, drop: 1, hdx: 0, hdy: 3, px: 1, sx: -2 }],
@@ -1215,7 +1255,9 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.g = 'back';
       leg(52, hip, 54 - sw * 6 + ft, 87.6, 8.5 * ls, 5.4 * ls, far);
       freePaw(54 - sw * 6 + ft, 89.2, 5.6 * ls, far);
-      p.taper(55, by - bry * 0.35, 63 - sw * 4, by + 3, 5 * ls, 3.6 * ls, far);
+      // The far arm: up in a guard for a ready stance, otherwise hanging.
+      if (ph.stance === 1 && !o.ko && !reach && !raise) p.taper(55, by - bry * 0.35, 66, by - bry * 0.55, 5 * ls, 4 * ls, far, 64, by - bry * 0.05);
+      else p.taper(55, by - bry * 0.35, 63 - sw * 4, by + 3, 5 * ls, 3.6 * ls, far);
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
       leg(45, hip, 44 + sw * 6 - ft, 87.6, 10 * ls, 6 * ls, pal.base);
@@ -1225,14 +1267,16 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.ell(48, by + bry * 0.28, brx * 1.07, bry * 0.72, pal.base);
       // A proud stance puffs the chest out.
       if (ph.stance === 2 && !o.ko) p.ell(48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62, pal.base);
-      drawPattern(p, a, ph);
+      drawPattern(p, a, ph, st.cue);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
       // The near arm swings forward to strike, or up to cast.
       if (reach) p.taper(50, by - bry * 0.3, 66, by - bry * 0.45, 5.6 * ls, 4.4 * ls, pal.base, 60, by - bry * 0.05);
       else if (raise) p.taper(50, by - bry * 0.3, 60, by - bry * 1.05, 5.6 * ls, 4.4 * ls, pal.base, 59, by - bry * 0.4);
-      else if (ph.stance === 2 && !o.ko) p.taper(50, by - bry * 0.3, 54, by + 6, 5.6 * ls, 4.2 * ls, pal.base, 59, by - 2);
-      else if (ph.stance === 3 && !o.ko) p.taper(50, by - bry * 0.3, 61 + sw * 4, by + 10, 5.6 * ls, 4.2 * ls, pal.base, 58, by);
+      // Ready: fists up in front of the chest. Proud: the arm relaxed down the side. Hunched: arms hang forward.
+      else if (ph.stance === 1 && !o.ko) p.taper(50, by - bry * 0.3, 62, by - bry * 0.4, 5.6 * ls, 4.8 * ls, pal.base, 60, by + bry * 0.12);
+      else if (ph.stance === 2 && !o.ko) p.taper(50, by - bry * 0.3, 46 + sw * 3, by + bry * 0.38, 5.6 * ls, 4.2 * ls, pal.base, 51, by + bry * 0.05);
+      else if (ph.stance === 3 && !o.ko) p.taper(50, by - bry * 0.3, 58 + sw * 4, by + bry * 0.32, 5.6 * ls, 4.2 * ls, pal.base, 56, by + bry * 0.02);
       else p.taper(50, by - bry * 0.3, 58 + sw * 4, by + 5, 5.6 * ls, 4.2 * ls, pal.base);
       p.g = 'body';
       break;
@@ -1265,7 +1309,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       // A deeper chest and a rounded rump break up the plain oval.
       p.ell(46 + brx * 0.52, by + bry * 0.08, brx * 0.52, bry * 1.0, pal.base);
       p.ell(46 - brx * 0.58, by - bry * 0.04, brx * 0.46, bry * 0.98, pal.base);
-      drawPattern(p, a, ph);
+      drawPattern(p, a, ph, st.cue);
       shadeForm(p, 46, by, brx, bry);
       break;
     }
@@ -1285,7 +1329,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
       p.ell(abx, by - 2, arx, ary, pal.base);
-      drawPattern(p, a, ph);
+      drawPattern(p, a, ph, st.cue);
       shadeForm(p, abx, by - 2, arx, ary);
       p.ell(thx, by - 1, thr, thr * 0.9, shade(pal.base, -0.04));
       shadeForm(p, thx, by - 1, thr, thr * 0.9);
@@ -1338,7 +1382,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       if (ph.el2 && (ph.tail === 'stub' || ph.tail === 'fan')) tailTip(p, a.tx - 9 * b, by - 9 * b + fl, ph.el2, 0.8 * k);
       if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTail(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
       p.ell(48, by, brx, bry, pal.base);
-      drawPattern(p, a, ph);
+      drawPattern(p, a, ph, st.cue);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
       p.ell(48 + brx * 0.05, by + bry * 0.55, 8 * ls, 4 * ls, shade(pal.base, -0.08), { rot: 28 + sw * 14 });
@@ -1357,7 +1401,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.ell(50 - r * 0.75, cy + r * 0.6 - wv, 3.4 * ls, 3 * ls, far);
       p.g = 'body';
       p.path(`M${f(50 - r)} ${f(cy)}Q${f(50 - r)} ${f(cy - r * 1.1)} 50 ${f(cy - r * 1.1)}Q${f(50 + r)} ${f(cy - r * 1.1)} ${f(50 + r)} ${f(cy)}Q${f(50 + r)} ${f(cy + r * 1.1)} ${f(50 + r * 0.55)} ${f(cy + r * 1.45 + wv)}Q${f(50 + r * 0.35)} ${f(cy + r * 1.05)} ${f(50 + r * 0.1)} ${f(cy + r * 1.6 - wv)}Q${f(50 - r * 0.15)} ${f(cy + r * 1.1)} ${f(50 - r * 0.45)} ${f(cy + r * 1.7 + wv)}Q${f(50 - r * 0.95)} ${f(cy + r * 1.1)} ${f(50 - r)} ${f(cy)}Z`, pal.base);
-      drawPattern(p, a, ph);
+      drawPattern(p, a, ph, st.cue);
       shadeForm(p, 50, cy + r * 0.1, r * 0.86, r * 0.8);
       if (ph.tail !== 'stub') drawTail(p, { ...a, tx: 50 - r * 0.5, ty: cy + r * 1.2, tdir: -0.6 }, ph, k * 0.7, wv);
       p.ell(50 + r * 0.95, cy + r * 0.45 + wv, 3.6 * ls, 3.2 * ls, pal.base);
