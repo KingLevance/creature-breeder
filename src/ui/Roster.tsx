@@ -1,10 +1,10 @@
 // The roster, the creature detail sheet (stats, moves, genes, pedigree) and the team picker.
 import React, { useMemo, useState } from 'react';
-import { Modal, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
 import { Creature, PedNode, STAGE_NAMES, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
-import { expandRoster, release, releaseValue, rosterExpandCost, useScan } from '../game/economy';
+import { NAME_MAX, expandRoster, release, releaseValue, renameCreature, rosterExpandCost, useScan } from '../game/economy';
 import { PART_KEYS, PART_LABELS, SKELETON_NAMES, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, MoveRow, P, SexMark, Stars, TypeChips, st } from './kit';
@@ -32,6 +32,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
   const { save, mutate } = useGame();
   const { width: W } = useWindowDimensions();
   const [confirm, setConfirm] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const c = save.creatures.find(x => x.id === id);
   const ph = useMemo(() => (c ? express(c.g) : null), [c?.g]);
   if (!c || !ph) return null;
@@ -48,10 +49,28 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
         <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
           <View style={{ alignItems: 'center' }}>
             <CreatureView ph={ph} stage={stage} size={W * 0.55} />
-            <View style={st.row}>
-              <Text style={{ color: C.text, fontSize: 22, fontWeight: '900' }}>{c.name}</Text>
-              <SexMark sex={c.sex} />
-            </View>
+            {editing != null ? (
+              <View style={[st.row, { marginVertical: 4 }]}>
+                <TextInput
+                  value={editing}
+                  onChangeText={setEditing}
+                  maxLength={NAME_MAX}
+                  autoFocus
+                  selectTextOnFocus
+                  returnKeyType="done"
+                  onSubmitEditing={() => { mutate(s => { renameCreature(s, c.id, editing); }); setEditing(null); }}
+                  style={{ color: C.text, fontSize: 20, fontWeight: '800', backgroundColor: C.panel2, borderColor: C.gold, borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, minWidth: 170, textAlign: 'center' }}
+                />
+                <Btn small kind="gold" label="Save" disabled={!editing.trim()} onPress={() => { mutate(s => { renameCreature(s, c.id, editing); }); setEditing(null); }} />
+                <Btn small kind="ghost" label="Cancel" onPress={() => setEditing(null)} />
+              </View>
+            ) : (
+              <Pressable onPress={() => setEditing(c.name)} style={st.row} hitSlop={8}>
+                <Text style={{ color: C.text, fontSize: 22, fontWeight: '900' }}>{c.name}</Text>
+                <SexMark sex={c.sex} />
+                <Text style={{ color: C.dim, fontSize: 16 }}>✎</Text>
+              </Pressable>
+            )}
             <Stars n={starRating(c.g)} size={20} />
             <View style={{ marginTop: 4 }}><TypeChips ph={ph} /></View>
             <P dim style={{ marginTop: 4 }}>{SKELETON_NAMES[ph.skel]} · {buildLabel(ph.build)} · {c.origin === 'bred' ? 'Bred' : c.origin === 'starter' ? 'Starter' : 'Wild-born'}</P>

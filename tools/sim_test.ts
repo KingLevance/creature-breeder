@@ -4,7 +4,7 @@ import { ELEMENT_IDS, matchup } from '../src/game/data/elements';
 import { MOVE_LIST, MOVES, movePool } from '../src/game/data/moves';
 import { act, aiChoose, autoResolve, createBattle, makeUnit, nextActor, turnOrder, usable, validTargets } from '../src/game/battle';
 import { Creature, makeCreature, slotRarities, stageLevels, stageOf, statsFor } from '../src/game/creature';
-import { STARTERS, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan } from '../src/game/economy';
+import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan } from '../src/game/economy';
 import { breed, express, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
 import { finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
 import { TUT, newSave } from '../src/game/save';
@@ -147,6 +147,7 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
   ok(breedCost(starter, second) > 0 && starter.bred === 1, 'breeding cost and count');
   s.scans = 1;
   ok(useScan(s, third.id) && third.scanned, 'scan lens reveals genes');
+  ok(renameCreature(s, third.id, '  Sir   Fluffington the Third  ') && third.name === 'Sir Fluffington' && !renameCreature(s, third.id, '   ') && third.name === 'Sir Fluffington', 'renaming trims, caps length and refuses blanks');
   // After the tutorial, eggs take time.
   s.eggs.push({ id: 'x', g: wildGenome(rng, { els: ['ember'], quality: 0.5 }), origin: 'wild', mutations: 0 });
   const free = s.incubators.findIndex(i => !i.egg);

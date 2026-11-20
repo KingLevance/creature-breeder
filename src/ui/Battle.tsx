@@ -17,7 +17,8 @@ import { FightResult, Loot, Run, finishFight, startBattle } from '../game/run';
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
 import { FxLayer, FxNew, FxSpec, isBeam } from './Fx';
-import { Bar, Btn, C, CreatureView, EggView, P, Stars, readable, st } from './kit';
+import { Bar, Btn, C, CreatureView, EggView, LiveCreature, P, Stars, readable, st } from './kit';
+import type { Pose } from '../render/creature';
 import { rng, useGame } from './store';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -46,11 +47,18 @@ interface Float { id: number; uid: number; text: string; color: string; big?: bo
 interface UA {
   ox: Animated.Value; oy: Animated.Value; shake: Animated.Value; blink: Animated.Value;
   down: Animated.Value; squash: Animated.Value; fade: Animated.Value;
+  /** Lean in degrees (positive = toward the enemy) and a stretch along the body, both pivoting at the feet. */
+  lean: Animated.Value; stretch: Animated.Value;
+  /** -1 for a fallen teammate left behind: it scrolls away with the ground during the walk. */
+  behind: Animated.Value;
 }
 const newUA = (): UA => ({
   ox: new Animated.Value(0), oy: new Animated.Value(0), shake: new Animated.Value(0), blink: new Animated.Value(1),
   down: new Animated.Value(0), squash: new Animated.Value(0), fade: new Animated.Value(1),
+  lean: new Animated.Value(0), stretch: new Animated.Value(1), behind: new Animated.Value(0),
 });
+/** What a creature is doing right now, for its drawing: a pose, running legs, or facing back toward its team. */
+interface Act { pose?: Pose; moving?: boolean; turned?: boolean }
 
 const FloatText = memo(function FloatText({ f, x, y, onDone }: { f: Float; x: number; y: number; onDone: (id: number) => void }) {
   const a = useRef(new Animated.Value(0)).current;
@@ -67,15 +75,9 @@ const FloatText = memo(function FloatText({ f, x, y, onDone }: { f: Float; x: nu
   );
 });
 
-/** A creature's picture. When walking it steps through its walk cycle on its own timer. */
-const Sprite = memo(function Sprite({ u, size, walking }: { u: Unit; size: number; walking: boolean }) {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    if (!walking) { setFrame(0); return; }
-    const id = setInterval(() => setFrame(f => (f + 1) % 12), 55);
-    return () => clearInterval(id);
-  }, [walking]);
-  return <CreatureView ph={u.ph} stage={u.stage} size={size} flip={u.side === 1} phase={frame / 12} walking={walking} />;
+/** A creature's picture: idles on its own, runs when moving, and shows its current pose. */
+const Sprite = memo(function Sprite({ u, size, walking, ko, pose, turned }: { u: Unit; size: number; walking: boolean; ko: boolean; pose?: Pose; turned?: boolean }) {
+  return <LiveCreature ph={u.ph} stage={u.stage} size={size} flip={(u.side === 1) !== !!turned} walking={walking && !ko} ko={ko} pose={ko ? 'idle' : pose} shadow={false} />;
 });
 
 // ---------- scrolling background
@@ -172,9 +174,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const [result, setResult] = useState<FightResult | null>(null);
   const [mode, setMode] = useState<'walk' | 'fight'>('walk');
   const [fightNo, setFightNo] = useState(0);
+  const [acts, setActs] = useState<Record<number, Act>>({});
+  /** Teammates who fell in an earlier chamber and were left behind. */
+  const [leftBehind, setLeftBehind] = useState<number[]>([]);
+  const setAct = useCallback((uid: number, patch: Act | null) => setActs(m => ({ ...m, [uid]: patch ? { ...m[uid], ...patch } : {} })), []);
+  /** Hold a pose for a moment, then go back to idle. */
+  const flashPose = useCallback((uid: number, pose: Pose, ms: number) => {
+    setAct(uid, { pose });
+    setTimeout(() => setActs(m => (m[uid]?.pose === pose ? { ...m, [uid]: { ...m[uid], pose: undefined } } : m)), ms);
+  }, [setAct]);
   const nextId = useRef(0);
   const ua = useRef<Record<number, UA>>({});
-  const bob = useRef(new Animated.Value(0)).current;
+  const breath = useRef(new Animated.Value(0)).current;
   const travel = useRef(new Animated.Value(0)).current;
   const busy = useRef(false);
   const D = W * 0.95; // how far the camera travels between chambers
@@ -185,13 +196,14 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
   useEffect(() => {
     live.current = true;
+    // Breathing: a slow squash and stretch from the feet, shared by everyone but offset between neighbours.
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(bob, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
-      Animated.timing(bob, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
+      Animated.timing(breath, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
+      Animated.timing(breath, { toValue: 0, duration: 1100, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }),
     ]));
     loop.start();
     return () => { live.current = false; loop.stop(); };
-  }, [bob]);
+  }, [breath]);
 
   const addFloat = useCallback((uid: number, text: string, color: string, big?: boolean) => {
     setFloats(fs => [...fs.slice(-14), { id: ++nextId.current, uid, text, color, big }]);
@@ -250,13 +262,22 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     const a = A(u.uid);
     const p = place(u);
     sfx('revive');
+    // Left behind earlier: it comes back to its old spot under a beam of light.
+    const wasBehind = leftBehind.includes(u.uid);
+    if (wasBehind) {
+      a.fade.setValue(0); a.behind.setValue(0); a.ox.setValue(0); a.down.setValue(1);
+      setLeftBehind(l => l.filter(x => x !== u.uid));
+      addFx({ kind: 'beam', el: 'radiant', x1: p.x, y1: -20, x2: p.x, y2: p.feet, dur: 520 });
+      await sleep(220);
+      addFx({ kind: 'puff', x: p.x, y: p.feet - 6, color: '#fff6c8' });
+    }
     addFx({ kind: 'aura', color: C.good, x: p.x, y: p.feet - p.sz * 0.5 });
     await run(Animated.parallel([
       Animated.timing(a.fade, { toValue: 1, duration: 250, useNativeDriver: ND }),
       Animated.timing(a.down, { toValue: 0, duration: 350 * T(), easing: Easing.out(Easing.back(1.5)), useNativeDriver: ND }),
       Animated.timing(a.ox, { toValue: 0, duration: 350 * T(), useNativeDriver: ND }),
     ]));
-  }, [addFx, place]);
+  }, [addFx, place, leftBehind]);
 
   const play = useCallback(async (events: Ev[]) => {
     const b = bRef.current!;
@@ -280,25 +301,51 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const targets = e.targets.map(t => b.units[t]).filter(Boolean);
           if (e.style === 'melee' && targets[0]) {
             const pt = place(targets[0]);
-            const tx = pt.x - dir * (pt.sz * 0.42 + pa.sz * 0.3) - pa.x;
+            const tx = pt.x - dir * (pt.sz * 0.42 + pa.sz * 0.36) - pa.x;
             const ty = pt.feet - pa.feet + 2;
             melee = e.u;
+            // Run over, legs going.
+            setAct(e.u, { moving: true });
+            await run(Animated.parallel([
+              Animated.timing(a.ox, { toValue: tx, duration: 300 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.oy, { toValue: ty, duration: 300 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.lean, { toValue: 8, duration: 200 * T(), useNativeDriver: ND }),
+            ]));
+            setAct(e.u, { moving: false });
+            // Wind up: lean back and crouch.
+            await run(Animated.parallel([
+              Animated.timing(a.lean, { toValue: -14, duration: 130 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.stretch, { toValue: 0.88, duration: 130 * T(), useNativeDriver: ND }),
+              Animated.timing(a.ox, { toValue: tx - dir * 6, duration: 130 * T(), useNativeDriver: ND }),
+            ]));
+            // Strike: snap forward with the attack pose.
+            setAct(e.u, { pose: 'attack' });
             sfx('swing');
             await run(Animated.parallel([
-              Animated.timing(a.ox, { toValue: tx, duration: 240 * T(), easing: Easing.in(Easing.quad), useNativeDriver: ND }),
-              Animated.timing(a.oy, { toValue: ty, duration: 240 * T(), easing: Easing.in(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.lean, { toValue: 18, duration: 80, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+              Animated.timing(a.stretch, { toValue: 1.14, duration: 80, useNativeDriver: ND }),
+              Animated.timing(a.ox, { toValue: tx + dir * 16, duration: 80, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
             ]));
-            Animated.sequence([
-              Animated.timing(a.ox, { toValue: tx + dir * 12, duration: 60, useNativeDriver: ND }),
-              Animated.timing(a.ox, { toValue: tx, duration: 90, useNativeDriver: ND }),
-            ]).start();
-            await sleep(50);
           } else if (e.style === 'ranged') {
             sfx(castSfx(e.el));
+            flashPose(e.u, 'cast', 450);
             Animated.sequence([
-              Animated.timing(a.ox, { toValue: dir * 8, duration: 90, useNativeDriver: ND }),
-              Animated.timing(a.ox, { toValue: 0, duration: 140, useNativeDriver: ND }),
+              Animated.parallel([
+                Animated.timing(a.lean, { toValue: -8, duration: 90, useNativeDriver: ND }),
+                Animated.timing(a.stretch, { toValue: 0.92, duration: 90, useNativeDriver: ND }),
+              ]),
+              Animated.parallel([
+                Animated.timing(a.lean, { toValue: 10, duration: 80, useNativeDriver: ND }),
+                Animated.timing(a.stretch, { toValue: 1.08, duration: 80, useNativeDriver: ND }),
+                Animated.timing(a.ox, { toValue: dir * 8, duration: 80, useNativeDriver: ND }),
+              ]),
+              Animated.parallel([
+                Animated.timing(a.lean, { toValue: 0, duration: 200, useNativeDriver: ND }),
+                Animated.timing(a.stretch, { toValue: 1, duration: 200, useNativeDriver: ND }),
+                Animated.timing(a.ox, { toValue: 0, duration: 200, useNativeDriver: ND }),
+              ]),
             ]).start();
+            await sleep(150);
             let wait = 0;
             for (const t of targets) {
               const pt = place(t);
@@ -311,12 +358,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             await sleep(wait);
           } else if (e.style === 'area') {
             sfx(castSfx(e.el));
+            flashPose(e.u, 'cast', 600);
+            Animated.sequence([
+              Animated.timing(a.stretch, { toValue: 0.86, duration: 220 * T(), useNativeDriver: ND }),
+              Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 160, useNativeDriver: ND }),
+            ]).start();
             addFx({ kind: 'charge', el: e.el, x: pa.x, y: pa.midY });
             await sleep(260 * T());
             targets.forEach((t, i) => setTimeout(() => { const pt = place(t); addFx({ kind: 'burst', el: e.el, x: pt.x, y: pt.midY, big: true }); }, i * 45));
             await sleep(120 * T());
           } else {
             sfx(e.heal ? 'heal' : castSfx(e.el) === 'magic' ? 'magic' : 'buff');
+            flashPose(e.u, 'cast', 450);
             Animated.sequence([
               Animated.timing(a.oy, { toValue: -12, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
               Animated.timing(a.oy, { toValue: 0, duration: 160, easing: Easing.in(Easing.quad), useNativeDriver: ND }),
@@ -340,6 +393,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           if (e.from >= 0) addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
           sfx(e.mult > 1 || e.n > t.max.hp * 0.3 ? 'hitBig' : 'hit');
           const a = A(e.u);
+          if (t.alive) flashPose(e.u, 'hurt', 320);
+          Animated.sequence([
+            Animated.timing(a.lean, { toValue: -10, duration: 60, useNativeDriver: ND }),
+            Animated.spring(a.lean, { toValue: 0, friction: 4, tension: 140, useNativeDriver: ND }),
+          ]).start();
           Animated.sequence([
             Animated.timing(a.shake, { toValue: 7, duration: 40, useNativeDriver: ND }), Animated.timing(a.shake, { toValue: -6, duration: 50, useNativeDriver: ND }),
             Animated.timing(a.shake, { toValue: 3, duration: 40, useNativeDriver: ND }), Animated.timing(a.shake, { toValue: 0, duration: 40, useNativeDriver: ND }),
@@ -388,12 +446,19 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     // A melee attacker runs back to its spot.
     if (melee != null && live.current) {
       const a = A(melee);
-      if (bRef.current!.units[melee].alive) {
+      const m = melee;
+      if (bRef.current!.units[m].alive) {
         await run(Animated.parallel([
-          Animated.timing(a.ox, { toValue: 0, duration: 260 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
-          Animated.timing(a.oy, { toValue: 0, duration: 260 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+          Animated.timing(a.lean, { toValue: 0, duration: 150, useNativeDriver: ND }),
+          Animated.timing(a.stretch, { toValue: 1, duration: 150, useNativeDriver: ND }),
         ]));
-      }
+        setAct(m, { pose: undefined, turned: true, moving: true });
+        await run(Animated.parallel([
+          Animated.timing(a.ox, { toValue: 0, duration: 320 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+          Animated.timing(a.oy, { toValue: 0, duration: 320 * T(), easing: Easing.inOut(Easing.quad), useNativeDriver: ND }),
+        ]));
+        setAct(m, { turned: false, moving: false });
+      } else setAct(m, null);
     }
     if (live.current) { setView(snap(b)); setOrder(turnOrder(b, 8)); }
   }, [addFloat, addFx, faintAnim, place, reviveAnim]);
@@ -450,9 +515,17 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const enterChamber = useCallback(() => {
     const b = mutate(s => startBattle(rng, s, theRun));
     bRef.current = b;
-    ua.current = {};
-    for (const u of b.units) if (!u.alive) { const a = A(u.uid); a.down.setValue(1); a.fade.setValue(u.side === 0 ? 0.4 : 0); }
-    setView(snap(b)); setOrder(turnOrder(b, 8)); setResult(null); setFloats([]); setFx([]);
+    // Reset every animation value in place. Swapping in new Animated.Values on a natively-driven view can leave
+    // the native side holding the old value (a faded-out enemy's opacity 0), which made new enemies invisible.
+    for (const u of b.units) {
+      const a = A(u.uid);
+      a.ox.setValue(0); a.oy.setValue(0); a.shake.setValue(0); a.blink.setValue(1); a.squash.setValue(0); a.lean.setValue(0); a.stretch.setValue(1);
+      a.down.setValue(u.alive ? 0 : 1);
+      a.fade.setValue(u.alive ? 1 : u.side === 0 ? 0.4 : 0);
+      a.behind.setValue(!u.alive && u.side === 0 ? -1 : 0);
+    }
+    setLeftBehind(b.units.filter(u => !u.alive && u.side === 0).map(u => u.uid));
+    setView(snap(b)); setOrder(turnOrder(b, 8)); setResult(null); setFloats([]); setFx([]); setActs({});
     setMode('walk');
     setFightNo(n => n + 1);
     const f = theRun.fights[theRun.idx];
@@ -460,6 +533,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     travel.setValue(0);
     Animated.timing(travel, { toValue: D, duration: 1800, easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }).start(() => {
       if (!live.current) return;
+      for (const u of b.units) if (!u.alive && u.side === 0) A(u.uid).fade.setValue(0);
       setMode('fight');
       setOrder(turnOrder(b, 8));
       setTimeout(() => { if (live.current) step(); }, 300);
@@ -525,15 +599,35 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const fallDir = u.side === 0 ? -1 : 1;
           const showBars = v.alive && (mode === 'fight' || u.side === 0);
           return (
-            <Animated.View key={u.uid} style={{
+            <Animated.View key={`${fightNo}_${u.uid}`} style={{
               position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz,
               transform: [
-                { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(a.ox, a.shake) },
-                { translateY: Animated.add(a.oy, v.alive && !walking ? bob.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [0, -3] : [-3, 0] }) : 0) },
+                { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind)) },
+                { translateY: a.oy },
               ],
             }}>
               <Pressable onPress={() => onTapUnit(u.uid)} style={{ width: pos.sz, height: pos.sz }}>
                 {(canPick || isActor) ? <View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: isActor ? C.gold : allyPick ? C.good : C.bad, backgroundColor: isActor ? 'rgba(245,197,66,0.18)' : 'rgba(255,255,255,0.12)' }} /> : null}
+                {/* The shadow lies on the ground on its own, so it stays flat when the creature leans or falls over. */}
+                <Animated.View pointerEvents="none" style={{
+                  position: 'absolute', left: pos.sz * 0.26, top: pos.sz * 0.88, width: pos.sz * 0.48, height: pos.sz * 0.08, borderRadius: pos.sz,
+                  backgroundColor: 'rgba(0,0,0,0.2)', opacity: a.fade,
+                  transform: [
+                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.14] }) },
+                    { scaleX: a.down.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) },
+                  ],
+                }} />
+                <Animated.View style={{
+                  width: pos.sz, height: pos.sz,
+                  // Lean, stretch and breathing all pivot at the feet.
+                  transform: [
+                    { translateY: pos.sz * 0.42 },
+                    { rotate: a.lean.interpolate({ inputRange: [-90, 90], outputRange: u.side === 0 ? ['-90deg', '90deg'] : ['90deg', '-90deg'] }) },
+                    { scaleX: Animated.multiply(a.stretch, v.alive ? breath.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [1, 0.985] : [0.985, 1] }) : 1) },
+                    { scaleY: Animated.multiply(a.stretch.interpolate({ inputRange: [0.5, 1, 1.5], outputRange: [1.4, 1, 0.8] }), v.alive ? breath.interpolate({ inputRange: [0, 1], outputRange: u.uid % 2 ? [1, 1.035] : [1.035, 1] }) : 1) },
+                    { translateY: -pos.sz * 0.42 },
+                  ],
+                }}>
                 <Animated.View style={{
                   width: pos.sz, height: pos.sz, opacity: Animated.multiply(a.fade, a.blink),
                   transform: [
@@ -544,7 +638,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                     { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
                   ],
                 }}>
-                  <Sprite u={u} size={pos.sz} walking={walking} />
+                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive} pose={acts[u.uid]?.pose} turned={acts[u.uid]?.turned} />
+                </Animated.View>
                 </Animated.View>
                 {showBars ? (
                   <View pointerEvents="none" style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
@@ -564,6 +659,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             </Animated.View>
           );
         })}
+
+        {b && sel && (sel.target === 'fallen' || sel.target === 'allFallen') ? leftBehind.map(uid => {
+          const u = b.units[uid];
+          if (!u || u.alive) return null;
+          const pos = place(u);
+          return (
+            <Pressable key={'ghost' + uid} onPress={() => onTapUnit(uid)} style={{ position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz, opacity: 0.45 }}>
+              <View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: C.good, backgroundColor: 'rgba(90,209,122,0.2)' }} />
+              <CreatureView ph={u.ph} stage={u.stage} size={pos.sz} ko shadow={false} />
+            </Pressable>
+          );
+        }) : null}
 
         <FxLayer items={fx} onDone={dropFx} W={W} H={fieldH} />
 

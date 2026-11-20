@@ -146,7 +146,13 @@ export interface DrawOpts {
   phase?: number;
   walking?: boolean;
   shadow?: boolean;
+  /** Fainted: X eyes. */
+  ko?: boolean;
+  /** A momentary expression or action. */
+  pose?: Pose;
 }
+
+export type Pose = 'idle' | 'blink' | 'attack' | 'cast' | 'hurt';
 
 function star(p: Pen, x: number, y: number, r: number, fill: string, op = 1) {
   const q = r * 0.3;
@@ -159,12 +165,21 @@ function flame(p: Pen, x: number, y: number, r: number, c1: string, c2: string) 
 }
 
 function drawTail(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
-  const { tx, ty, tdir } = a;
+  const { tx, ty } = a;
   const c = p.pal;
-  const len = (ph.tail === 'stub' ? 5 : ph.tail === 'whip' ? 26 : 19) * k;
+  let len = (ph.tail === 'stub' ? 5 : ph.tail === 'whip' ? 26 : 19) * k;
+  // Keep the tail inside the drawing box, or it gets cut off flat at the edge. How far past its end each tip reaches:
+  const tip = { fan: 10.5, plume: 7, club: 7, tuft: 6, whip: 2.5, long: 4, stinger: 3, stub: 0 }[ph.tail as 'fan'] ?? 4;
+  const room = tx - 2 - tip * k;
+  // Running out of room: curl the tail upward first, and only shorten it if curling isn't enough.
+  let tdir = a.tdir;
+  if (len * Math.cos(tdir) > room) {
+    tdir = Math.min(1.25, Math.max(tdir, Math.acos(Math.max(0, Math.min(1, room / len)))));
+    if (len * Math.cos(tdir) > room) len = Math.max(4, room / Math.cos(tdir));
+  }
   // The tail leaves the body pointing back (left) and curls up a little.
   const ex = tx - len * Math.cos(tdir), ey = ty - len * Math.sin(tdir) + sway;
-  const kx = tx - len * 0.6, ky = ty + 4 * k;
+  const kx = tx - len * 0.6 * Math.cos(tdir) / Math.cos(a.tdir || 0.01), ky = ty + 4 * k;
   const w = ph.tail === 'whip' ? 2.4 : 5 * Math.max(0.6, k);
   if (ph.tail === 'stub') { p.ell(tx - 2, ty, 4.5 * Math.max(0.7, k), 3.6 * Math.max(0.7, k), c.base); return; }
   if (ph.tail === 'stinger') {
@@ -267,8 +282,29 @@ function drawHorns(p: Pen, a: Anchors, ph: Pheno, k: number) {
   }
 }
 
-function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno) {
+function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false, pose: Pose = 'idle') {
   const c = p.pal;
+  if (!ko && (pose === 'blink' || pose === 'hurt')) {
+    // Closed eyes for a blink; squeezed shut (> <) when hurt.
+    const shut = (ex: number, ey: number, er: number, side: number) => {
+      const k = er * 0.85, w = Math.max(1.1, er * 0.4);
+      if (pose === 'blink') p.line(`M${f(ex - k)} ${f(ey)}Q${f(ex)} ${f(ey + k * 0.6)} ${f(ex + k)} ${f(ey)}`, c.out, w);
+      else p.line(`M${f(ex - k * side)} ${f(ey - k * 0.7)}L${f(ex + k * 0.5 * side)} ${f(ey)}L${f(ex - k * side)} ${f(ey + k * 0.7)}`, c.out, w);
+    };
+    if (ph.eyes === 'multi') { shut(x + r * 0.18, y - r * 0.12, r * 0.2, 1); shut(x + r * 0.56, y - r * 0.2, r * 0.17, -1); shut(x + r * 0.42, y + r * 0.14, r * 0.13, -1); shut(x - r * 0.12, y - r * 0.3, r * 0.13, 1); }
+    else { shut(x + r * 0.08, y - r * 0.1, r * 0.24, 1); shut(x + r * 0.6, y - r * 0.1, r * 0.2, -1); }
+    return;
+  }
+  if (ko) {
+    // Knocked out: an X for each eye.
+    const xEye = (ex: number, ey: number, er: number) => {
+      const k = er * 0.95, w = Math.max(1.3, er * 0.5);
+      p.line(`M${f(ex - k)} ${f(ey - k)}L${f(ex + k)} ${f(ey + k)}M${f(ex + k)} ${f(ey - k)}L${f(ex - k)} ${f(ey + k)}`, c.out, w);
+    };
+    if (ph.eyes === 'multi') { xEye(x + r * 0.18, y - r * 0.12, r * 0.2); xEye(x + r * 0.56, y - r * 0.2, r * 0.17); xEye(x + r * 0.42, y + r * 0.14, r * 0.13); xEye(x - r * 0.12, y - r * 0.3, r * 0.13); }
+    else { xEye(x + r * 0.08, y - r * 0.1, r * 0.24); xEye(x + r * 0.6, y - r * 0.1, r * 0.2); }
+    return;
+  }
   const glowy = ph.eyes === 'glow' || ph.el1 === 'shade' || ph.el1 === 'void' || ph.el1 === 'spirit';
   const white = glowy ? c.glow : '#ffffff';
   const pupil = glowy ? shade(c.glow, 0.2) : '#1b1420';
@@ -287,7 +323,7 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno) {
   }
 }
 
-function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number) {
+function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose: Pose = 'idle') {
   const c = p.pal;
   const { hx, hy, hr: r } = a;
   drawHorns(p, a, ph, feat);
@@ -326,8 +362,16 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number) {
   }
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
   p.g = 'face';
-  drawEyes(p, hx, hy, r, ph);
-  if (ph.head !== 'beak' && ph.head !== 'blunt') p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
+  drawEyes(p, hx, hy, r, ph, ko, pose);
+  const open = pose === 'attack' || pose === 'cast' || pose === 'hurt';
+  if (open) {
+    // Open mouth: a roar for attacks and casts, a gasp when hurt.
+    const mx = ph.head === 'beak' ? hx + r * 1.0 : ph.head === 'long' ? hx + r * 1.0 : ph.head === 'snout' ? hx + r * 0.95 : hx + r * 0.55;
+    const my = ph.head === 'beak' ? hy + r * 0.5 : hy + r * 0.48;
+    const mr = pose === 'hurt' ? r * 0.14 : pose === 'attack' ? r * 0.3 : r * 0.22;
+    p.ell(mx, my, mr, mr * (pose === 'hurt' ? 1 : 0.8), '#3a1626');
+    if (pose !== 'hurt') p.ell(mx, my + mr * 0.35, mr * 0.55, mr * 0.3, '#e0677a', { line: false });
+  } else if (ph.head !== 'beak' && ph.head !== 'blunt') p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
 }
 
 function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
@@ -343,7 +387,18 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno) {
       for (const t of [-0.45, -0.05, 0.35]) p.path(`M${f(bx + brx * t)} ${f(by - bry * 0.8)}Q${f(bx + brx * (t + 0.14))} ${f(by - bry * 0.3)} ${f(bx + brx * (t - 0.02))} ${f(by + bry * 0.05)}`, 'none', { stroke: c.dark, sw: 2.2, op: 0.8 });
       break;
     case 'bands':
-      for (const t of [-0.35, 0.3]) p.path(`M${f(bx + brx * t)} ${f(by - bry * 0.86)}L${f(bx + brx * t)} ${f(by + bry * 0.86)}`, 'none', { stroke: c.accentDark, sw: Math.max(2.5, brx * 0.2), op: 0.85 });
+      // Each band is a slice of the body ellipse, so its ends follow the body's curve instead of poking out.
+      for (const t of [-0.35, 0.3]) {
+        const dt = Math.max(2.5, brx * 0.2) / 2 / brx;
+        const top: string[] = [], bot: string[] = [];
+        for (let k = 0; k <= 6; k++) {
+          const tt = t - dt + (2 * dt * k) / 6;
+          const h = bry * Math.sqrt(Math.max(0, 1 - tt * tt)) * 0.96;
+          top.push(`${f(bx + brx * tt)} ${f(by - h)}`);
+          bot.unshift(`${f(bx + brx * tt)} ${f(by + h)}`);
+        }
+        p.path('M' + top.join('L') + 'L' + bot.join('L') + 'Z', c.accentDark, { line: false, op: 0.85 });
+      }
       break;
     case 'stars':
       star(p, bx - brx * 0.35, by - bry * 0.2, bry * 0.26, c.glow); star(p, bx + brx * 0.2, by + bry * 0.15, bry * 0.2, c.glow); star(p, bx + brx * 0.1, by - bry * 0.5, bry * 0.15, c.glow);
@@ -454,6 +509,8 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   const b = st.body, hs = st.head, ls = st.limb, k = st.feat;
   const far = shade(pal.base, -0.1);
   const flap = Math.sin(phase * TAU * (o.walking ? 2 : 1));
+  const reach = o.pose === 'attack' ? 1 : 0;
+  const raise = o.pose === 'cast' ? 1 : 0;
   let a: Anchors;
 
   p.g = 'aura';
@@ -482,7 +539,10 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.ell(48, by, brx, bry, pal.base);
       drawPattern(p, a, ph);
       p.g = 'front';
-      p.limb(50, by - bry * 0.3, 58 + sw * 4, by + 5, 4.8 * ls, pal.base);
+      // The near arm swings forward to strike, or up to cast.
+      if (reach) p.limb(50, by - bry * 0.3, 66, by - bry * 0.45, 4.8 * ls, pal.base, 60, by - bry * 0.05);
+      else if (raise) p.limb(50, by - bry * 0.3, 60, by - bry * 1.05, 4.8 * ls, pal.base, 59, by - bry * 0.4);
+      else p.limb(50, by - bry * 0.3, 58 + sw * 4, by + 5, 4.8 * ls, pal.base);
       p.g = 'body';
       break;
     }
@@ -501,9 +561,11 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       p.ell(rx + 6 + sw * 6, 89.6, 3.8 * ls, 2.2 * ls, shade(pal.dark, -0.05));
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
-      p.limb(fx - 2, hip, fx - 2 + sw * 6, 89, 6 * ls, pal.base);
+      // A front paw swipes forward on an attack.
+      const pawX = fx - 2 + sw * 6 + reach * 12, pawY = 89 - reach * 9;
+      p.limb(fx - 2, hip, pawX, pawY, 6 * ls, pal.base);
       p.limb(rx - 1, hip, rx - 1 - sw * 6, 89, 6 * ls, pal.base);
-      p.ell(fx - 1 + sw * 6, 89.6, 4 * ls, 2.3 * ls, pal.dark);
+      p.ell(pawX + 1, pawY + 0.6, 4 * ls, 2.3 * ls, pal.dark, { rot: reach * -30 });
       p.ell(rx - sw * 6, 89.6, 4 * ls, 2.3 * ls, pal.dark);
       p.limb(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 9 * b, pal.base);
       p.ell(46, by, brx, bry, pal.base);
@@ -537,7 +599,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
       const hr = 11.5 * hs, w = 12 * b;
       const wv = o.walking ? Math.sin(phase * TAU) * 3 : breathe;
       const hx = 68, hy = 40 + breathe * 0.5;
-      const d = `M14 ${f(85 - wv)}Q24 ${f(74 + wv)} 36 ${f(84 - wv * 0.5)}Q50 ${f(94 + wv * 0.4)} 58 ${f(78)}Q63 66 58 56Q56 48 ${f(hx - 3)} ${f(hy + 5)}`;
+      const d = `M14 ${f(85 - wv)}Q24 ${f(74 + wv)} 36 ${f(84 - wv * 0.5)}Q50 ${f(92 + wv * 0.4)} 58 ${f(78)}Q63 66 58 56Q56 48 ${f(hx - 3)} ${f(hy + 5)}`;
       a = { hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
       drawWing(p, a, ph, k, flap, true);
       p.g = 'body';
@@ -588,7 +650,7 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
 
   drawWing(p, a, ph, k, flap, false);
   p.g = 'body';
-  drawHead(p, a, ph, k);
+  drawHead(p, a, ph, k, o.ko, o.pose);
   p.g = 'body';
   drawCues(p, a, ph.el1, st.cue, phase, false);
   if (ph.el2) drawCues(p, a, ph.el2, st.cue, phase, true);

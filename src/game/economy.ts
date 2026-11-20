@@ -269,6 +269,16 @@ export function buy(s: Save, id: string): boolean {
   return true;
 }
 
+export const NAME_MAX = 16;
+/** Rename a creature. Names are trimmed and must have at least one visible character. */
+export function renameCreature(s: Save, id: string, name: string): boolean {
+  const c = byId(s, id);
+  const n = name.replace(/\s+/g, ' ').trim().slice(0, NAME_MAX).trim();
+  if (!c || !n) return false;
+  c.name = n;
+  return true;
+}
+
 export function useScan(s: Save, id: string): boolean {
   const c = byId(s, id);
   if (!c || c.scanned || s.scans < 1) return false;

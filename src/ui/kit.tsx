@@ -1,5 +1,5 @@
 // Shared look and small building blocks used by every screen.
-import React, { memo, useMemo } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import Svg, { Circle, Ellipse, Path } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
@@ -7,7 +7,7 @@ import { MoveDef, RARITY_COLORS, RARITY_NAMES } from '../game/data/moves';
 import { Creature, STAGE_NAMES, stageOf, typeLabel } from '../game/creature';
 import { Pheno, express, rareCarrierCount, starRating } from '../game/genome';
 import { tap } from './audio';
-import { Shape, creatureOpacity, drawCreature, drawEgg } from '../render/creature';
+import { Pose, Shape, creatureOpacity, drawCreature, drawEgg } from '../render/creature';
 
 export const C = {
   bg: '#171226', panel: '#231b3a', panel2: '#2e2450', line: '#43366b', text: '#f4efff', dim: '#a99fc9',
@@ -27,16 +27,37 @@ function ShapeNodes({ shapes }: { shapes: Shape[] }) {
   );
 }
 
-interface CreatureViewProps { ph: Pheno; stage: number; size: number; phase?: number; walking?: boolean; flip?: boolean; shadow?: boolean }
+interface CreatureViewProps { ph: Pheno; stage: number; size: number; phase?: number; walking?: boolean; flip?: boolean; shadow?: boolean; ko?: boolean; pose?: Pose }
 /** One creature, drawn from its visible traits. The same component feeds cards, the nursery and battles. */
-export const CreatureView = memo(function CreatureView({ ph, stage, size, phase = 0, walking, flip, shadow }: CreatureViewProps) {
-  const shapes = useMemo(() => drawCreature(ph, { stage, phase, walking, shadow }), [ph, stage, phase, walking, shadow]);
+export const CreatureView = memo(function CreatureView({ ph, stage, size, phase = 0, walking, flip, shadow, ko, pose }: CreatureViewProps) {
+  const shapes = useMemo(() => drawCreature(ph, { stage, phase, walking, shadow, ko, pose }), [ph, stage, phase, walking, shadow, ko, pose]);
   return (
     <Svg width={size} height={size} viewBox="0 0 100 100" opacity={creatureOpacity(ph)} style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
       <ShapeNodes shapes={shapes} />
     </Svg>
   );
 });
+
+/** A creature that idles on its own: a slow sway of head, tail and wings, and a blink every few seconds. */
+export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewProps, 'phase'> & { pose?: Pose }) {
+  const [frame, setFrame] = useState(() => Math.floor(Math.random() * IDLE_FRAMES));
+  const [blink, setBlink] = useState(false);
+  const walking = !!props.walking;
+  useEffect(() => {
+    const id = setInterval(() => setFrame(f => (f + 1) % (walking ? 12 : IDLE_FRAMES)), walking ? 55 : IDLE_MS);
+    return () => clearInterval(id);
+  }, [walking]);
+  useEffect(() => {
+    if (props.ko) return;
+    let t: ReturnType<typeof setTimeout>;
+    const next = () => { t = setTimeout(() => { setBlink(true); t = setTimeout(() => { setBlink(false); next(); }, 140); }, 2200 + Math.random() * 3200); };
+    next();
+    return () => clearTimeout(t);
+  }, [props.ko]);
+  const pose = props.pose && props.pose !== 'idle' ? props.pose : blink ? 'blink' : 'idle';
+  return <CreatureView {...props} pose={pose} phase={walking ? frame / 12 : frame / IDLE_FRAMES} />;
+});
+const IDLE_FRAMES = 12, IDLE_MS = 150;
 
 export const EggView = memo(function EggView({ ph, size, wobble = 0 }: { ph: Pheno; size: number; wobble?: number }) {
   const shapes = useMemo(() => drawEgg(ph, wobble), [ph, wobble]);
