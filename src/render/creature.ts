@@ -383,10 +383,18 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       for (const t of [0.2, 0.5, 0.75]) p.path(`M${f(bx - brx * 0.6 + brx * 1.2 * t)} ${f(by + bry * 0.85)}q${f(1.5 * s)} ${f(3.5 * s)} 0 ${f(5 * s)}q${f(-1.5 * s)} ${f(-1.5 * s)} 0 ${f(-5 * s)}Z`, e.glow, { line: false });
       p.poly([[hx + hr * 0.45, hy + hr * 0.5], [hx + hr * 0.55, hy + hr * 0.5 + 4 * s], [hx + hr * 0.68, hy + hr * 0.48]], '#ffffff');
       break;
-    case 'terra':
-      p.ell(backx - 2 * s, backy + 2, 7 * s, 3.4 * s, e.dark, { op: 0.9 });
-      p.ell(backx + 6 * s, backy + 3, 4 * s, 2.4 * s, e.light, { op: 0.9 });
+    case 'terra': {
+      // A mound of earth on the back with a sprout and a couple of pebbles in it.
+      const mx = backx + 1 * s, my = backy + 2.5;
+      p.path(`M${f(mx - 10 * s)} ${f(my)}Q${f(mx - 8 * s)} ${f(my - 7 * s)} ${f(mx)} ${f(my - 7.5 * s)}Q${f(mx + 8 * s)} ${f(my - 7 * s)} ${f(mx + 10 * s)} ${f(my)}Z`, e.dark);
+      p.dot(mx - 4 * s, my - 2.5 * s, 1.5 * s + 0.3, '#9c9384');
+      p.dot(mx + 4.5 * s, my - 1.8 * s, 1.2 * s + 0.3, '#b3aa98');
+      const g = ELEMENTS.verdant;
+      p.line(`M${f(mx)} ${f(my - 7 * s)}Q${f(mx - 1 * s)} ${f(my - 11 * s)} ${f(mx - 4 * s)} ${f(my - 13 * s)}`, g.dark, 1.6 * s + 0.4);
+      p.line(`M${f(mx)} ${f(my - 7 * s)}Q${f(mx + 1 * s)} ${f(my - 12 * s)} ${f(mx + 3.5 * s)} ${f(my - 14 * s)}`, g.base, 1.6 * s + 0.4);
+      p.path(`M${f(mx + 3.5 * s)} ${f(my - 14 * s)}q${f(4 * s)} ${f(-2 * s)} ${f(5 * s)} ${f(1 * s)}q${f(-3 * s)} ${f(1.5 * s)} ${f(-5 * s)} ${f(-1 * s)}Z`, g.light, { line: false });
       break;
+    }
     case 'gale':
       p.path(`M${f(backx - 16 * s)} ${f(backy - 4 * s)}q${f(8 * s)} ${f(-6 * s)} ${f(12 * s)} 0M${f(backx - 20 * s)} ${f(backy + 4 * s)}q${f(7 * s)} ${f(-5 * s)} ${f(11 * s)} 0`, 'none', { stroke: e.light, sw: 1.6, op: 0.9 });
       p.path(`M${f(hx - hr * 0.3)} ${f(hy - hr * 0.85)}Q${f(hx - hr * 0.9)} ${f(hy - hr * 1.7)} ${f(hx - hr * 1.3)} ${f(hy - hr * 1.2)}Q${f(hx - hr * 0.7)} ${f(hy - hr * 1.1)} ${f(hx - hr * 0.5)} ${f(hy - hr * 0.7)}Z`, e.light);
