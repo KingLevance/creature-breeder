@@ -379,10 +379,11 @@ export const SexMark = ({ sex }: { sex: 'M' | 'F' }) => <Text style={{ color: se
 export function Bar({ frac, color, height = 6, back = '#120d20' }: { frac: number; color: string; height?: number; back?: string }) {
   const grow = useRef(new Animated.Value(0)).current;
   const f = Math.max(0, Math.min(1, frac));
-  useEffect(() => { Animated.timing(grow, { toValue: f, duration: 550, easing: Easing.out(Easing.cubic), useNativeDriver: LOOK_ND }).start(); }, [f, grow]);
+  // Width, not a scale: a scaled fill could stop a hair short of the end on iOS and look less than full.
+  useEffect(() => { Animated.timing(grow, { toValue: f, duration: 550, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start(); }, [f, grow]);
   return (
     <View style={{ height, backgroundColor: back, borderRadius: height / 2, overflow: 'hidden', borderWidth: height >= 6 ? 1 : 0, borderColor: 'rgba(0,0,0,0.35)' }}>
-      <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '100%', borderRadius: height / 2, overflow: 'hidden', transformOrigin: 'left', transform: [{ scaleX: grow }] }}>
+      <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: grow.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }), borderRadius: height / 2, overflow: 'hidden', backgroundColor: color }}>
         <Grad colors={[mixHex(color, '#ffffff', 0.35), color]} />
         {height >= 5 ? <View style={{ position: 'absolute', left: 2, right: 2, top: 1, height: Math.max(1, height * 0.28), borderRadius: height, backgroundColor: 'rgba(255,255,255,0.3)' }} /> : null}
       </Animated.View>

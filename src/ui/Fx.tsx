@@ -2,7 +2,7 @@
 // Each effect runs its own native-driver animation and removes itself when done.
 import React, { memo, useEffect, useRef } from 'react';
 import { Animated, Easing, Text, View } from 'react-native';
-import Svg, { Circle, Ellipse, G, Path, Polygon } from 'react-native-svg';
+import Svg, { Circle, Defs, Ellipse, G, Path, Polygon, RadialGradient, Stop } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
 
 export type FxSpec =
@@ -523,8 +523,18 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size }: { sta
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: S, height: S }}>
       {buff ? (
-        <Animated.View style={{ position: 'absolute', left: S * 0.18, top: S * 0.84, width: S * 0.64, height: S * 0.12, borderRadius: S, borderWidth: 2, borderColor: buff,
-          opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.35, 0.85, 0.35] }), transform: [{ scaleX: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.92, 1.05, 0.92] }) }] }} />
+        <>
+          <Animated.View style={{ position: 'absolute', left: S * 0.14, top: S * 0.8, width: S * 0.72, height: S * 0.2, opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.45, 0.9, 0.45] }) }}>
+            <Svg width={S * 0.72} height={S * 0.2}><Defs><RadialGradient id={`bf${S}`} cx="50%" cy="50%" r="50%"><Stop offset="0" stopColor={buff} stopOpacity={0.75} /><Stop offset="1" stopColor={buff} stopOpacity={0} /></RadialGradient></Defs><Ellipse cx={S * 0.36} cy={S * 0.1} rx={S * 0.36} ry={S * 0.1} fill={`url(#bf${S})`} /></Svg>
+          </Animated.View>
+          {[0, 1, 2].map(i => {
+            const p01 = cyc(i / 3).interpolate({ inputRange: [0, 1, 1.0001, 2], outputRange: [0, 1, 0, 1] });
+            return (
+              <Animated.View key={'s' + i} style={{ position: 'absolute', left: S * (0.3 + i * 0.2), top: S * 0.82, width: 5, height: 5, borderRadius: 3, backgroundColor: buff,
+                opacity: p01.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0, 1, 0.8, 0] }), transform: [{ translateY: p01.interpolate({ inputRange: [0, 1], outputRange: [0, -S * 0.35] }) }] }} />
+            );
+          })}
+        </>
       ) : null}
       {shield ? (
         <Animated.View style={{ position: 'absolute', left: S * 0.12, top: S * 0.2, width: S * 0.76, height: S * 0.76, borderRadius: S, borderWidth: 2, borderColor: '#bff3ff', backgroundColor: 'rgba(159,232,255,0.12)',

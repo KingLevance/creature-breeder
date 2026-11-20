@@ -13,7 +13,7 @@ import { Flair, MoveDef, StatusKind } from '../game/data/moves';
 import { Battle, Ev, Unit, act, aiChoose, isBuff, needsPick, nextActor, turnOrder, usable, validTargets } from '../game/battle';
 import { STAGE_NAMES } from '../game/creature';
 import { express, starRating } from '../game/genome';
-import { FightResult, Loot, Run, finishFight, startBattle } from '../game/run';
+import { FightResult, Loot, Run, finishFight, startBattle, emptyLoot } from '../game/run';
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
 import { FxLayer, FxNew, FxSpec, StatusFx, isBeam } from './Fx';
@@ -144,6 +144,45 @@ function lootLines(l: Loot): string {
   return parts.join(' · ');
 }
 
+/** Loot as a row of small icon chips. */
+function LootChips({ loot, eggs }: { loot: Loot; eggs?: number }) {
+  const items: [React.ReactNode, string, string][] = [];
+  if (loot.gold) items.push([<Icon key="g" name="coin" size={15} />, String(loot.gold), '#ffd34d']);
+  if (loot.dust) items.push([<Icon key="d" name="sparkle" size={14} color="#e8d9b0" />, `${loot.dust} dust`, '#e8d9b0']);
+  if (loot.shard) items.push([<Icon key="s" name="gem" size={14} />, `${loot.shard} shard${loot.shard > 1 ? 's' : ''}`, '#c9b8ff']);
+  if (loot.core) items.push([<Icon key="c" name="bolt" size={14} color="#7fe8b0" />, `${loot.core} core${loot.core > 1 ? 's' : ''}`, '#7fe8b0']);
+  if (loot.scans) items.push([<Icon key="l" name="scan" size={14} color="#9fe8ff" />, `${loot.scans} lens`, '#9fe8ff']);
+  if (loot.essence) items.push([<Icon key="e" name="gem" size={14} />, `${loot.essence} essence`, '#c9b8ff']);
+  const n = eggs ?? loot.eggs.length;
+  if (n) items.push([<Icon key="egg" name="egg" size={14} color="#ffd34d" accent="#b4721a" />, `${n} egg${n > 1 ? 's' : ''}`, '#ffd34d']);
+  if (!items.length) return <P dim>Nothing yet.</P>;
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+      {items.map(([icon, text, color], i) => (
+        <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(10,6,22,0.5)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+          <View>{icon}</View>
+          <Text style={{ color, fontFamily: F.semi, fontSize: 13 }}>{text}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const addLoot = (a: Loot, b: Loot | null): Loot => (b ? {
+  gold: a.gold + b.gold, dust: a.dust + b.dust, shard: a.shard + b.shard, core: a.core + b.core, scans: a.scans + b.scans, essence: a.essence + b.essence, eggs: [...a.eggs, ...b.eggs],
+} : a);
+
+/** The countdown to the next fight, as a bar that drains. */
+function Countdown({ ms }: { ms: number }) {
+  const t = useRef(new Animated.Value(1)).current;
+  useEffect(() => { Animated.timing(t, { toValue: 0, duration: ms, easing: Easing.linear, useNativeDriver: false }).start(); }, [t, ms]);
+  return (
+    <View style={{ height: 6, borderRadius: 3, backgroundColor: '#120d20', overflow: 'hidden', marginTop: 10 }}>
+      <Animated.View style={{ height: 6, borderRadius: 3, backgroundColor: C.gold, width: t.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }} />
+    </View>
+  );
+}
+
 export function LootView({ title, loot }: { title: string; loot: Loot }) {
   const text = lootLines(loot);
   if (!text && !loot.eggs.length) return null;
@@ -182,6 +221,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const [floats, setFloats] = useState<Float[]>([]);
   const [fx, setFx] = useState<FxSpec[]>([]);
   const [result, setResult] = useState<FightResult | null>(null);
+  /** Everything won so far this run, and fights won, for the auto-battle panel. */
+  const [runLoot, setRunLoot] = useState<Loot>(emptyLoot());
+  const [wins, setWins] = useState(0);
   const [mode, setMode] = useState<'walk' | 'fight'>('walk');
   const [fightNo, setFightNo] = useState(0);
   const [acts, setActs] = useState<Record<number, Act>>({});
@@ -742,6 +784,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     const b = bRef.current!;
     if (b.over == null) b.over = 0; // raid: out of actions
     const res = mutate(s => finishFight(rng, s, theRun, b, Date.now()));
+    setRunLoot(l => addLoot(addLoot(l, res.drops), res.chest));
+    if (res.won) setWins(w => w + 1);
     setBanner(null); setActor(null); setSel(null);
     setMusic(null);
     sfx(theRun.kind === 'raid' || res.won ? 'victory' : 'defeat');
@@ -1026,12 +1070,57 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               </View>
             ) : null}
           </>
+        ) : save.auto && result && !result.runOver ? (
+          <FadeIn key={'res' + fightNo} dy={10}>
+            <View style={[st.row, { marginBottom: 6 }]}>
+              <Icon name="crown" size={22} color={C.gold} accent="#2b2054" />
+              <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 20, flex: 1 }}>{result.cleared && theRun.kind === 'area' ? 'Area cleared!' : 'Fight won!'}</Text>
+              <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13 }}>{theRun.fights[theRun.idx]?.boss ? 'Boss next' : theRun.kind === 'tower' ? `Floor ${theRun.floor} next` : 'Next fight'}</Text>
+            </View>
+            {result.xp.map(x => {
+              const c = byId(save, x.cid);
+              if (!c) return null;
+              return (
+                <View key={x.cid} style={[st.row, { marginBottom: 3 }]}>
+                  <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14, width: 96 }} numberOfLines={1}>{c.name}</Text>
+                  <Text style={{ color: C.dim, fontSize: 12, width: 64 }}>+{x.xp} XP</Text>
+                  <View style={{ flex: 1 }}>
+                    {x.levels ? <Text style={{ color: C.good, fontFamily: F.semi, fontSize: 13 }}>Lv {c.level - x.levels} → {c.level}</Text> : null}
+                    {x.newStage != null ? <Text style={{ color: C.gold, fontFamily: F.semi, fontSize: 12 }}>Grew into {x.newStage === 3 ? 'an' : 'a'} {STAGE_NAMES[x.newStage]}!</Text> : null}
+                    {x.learned.map(m => <Text key={m.id} style={{ color: C.accent2, fontSize: 12 }}>Learned {m.name}</Text>)}
+                  </View>
+                </View>
+              );
+            })}
+            <View style={{ marginTop: 6 }}><LootChips loot={addLoot(result.drops, result.chest)} /></View>
+            <Countdown ms={1800} />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+              <Btn small style={{ flex: 1 }} kind="ghost" label="Leave" onPress={leave} />
+              <Btn small style={{ flex: 2 }} kind="gold" label="Go now" onPress={enterChamber} />
+            </View>
+          </FadeIn>
+        ) : save.auto && mode === 'fight' ? (
+          <FadeIn dy={8}>
+            <View style={[st.row, { marginBottom: 8 }]}>
+              <Icon name="bolt" size={20} color="#a898ff" />
+              <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 18, flex: 1 }}>Auto battle</Text>
+              {theRun.fights.length > 1 && theRun.kind !== 'tower' ? (
+                <View style={{ flexDirection: 'row', gap: 4 }}>
+                  {theRun.fights.map((f, i) => (
+                    <View key={i} style={{ width: f.boss ? 14 : 10, height: f.boss ? 14 : 10, borderRadius: 7, backgroundColor: i < theRun.idx ? C.good : i === theRun.idx ? C.gold : '#3a3060', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)' }} />
+                  ))}
+                </View>
+              ) : null}
+            </View>
+            <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13, marginBottom: 6 }}>Won so far this run{wins ? ` (${wins} fight${wins > 1 ? 's' : ''})` : ''}</Text>
+            <LootChips loot={runLoot} />
+          </FadeIn>
         ) : (
-          <P dim style={{ textAlign: 'center', marginTop: 12 }}>{mode === 'walk' ? '' : save.auto ? 'Auto battle is on.' : result ? '' : 'Waiting...'}</P>
+          <P dim style={{ textAlign: 'center', marginTop: 12 }}>{mode === 'walk' || result ? '' : 'Waiting...'}</P>
         )}
       </View>
 
-      {result ? (
+      {result && !(save.auto && !result.runOver) ? (
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#000a', justifyContent: 'center', padding: 16 }}>
           <FadeIn dy={30}>
           <View style={[st.card, { maxHeight: winH * 0.8, borderColor: result.won ? C.gold + 'aa' : C.bad + 'aa', borderWidth: 1.5 }, shadow(result.won ? C.gold : C.bad, 18, 0.5, 0)]}>
