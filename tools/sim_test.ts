@@ -6,7 +6,7 @@ import { act, aiChoose, autoResolve, createBattle, makeUnit, nextActor, turnOrde
 import { Creature, makeCreature, slotRarities, stageLevels, stageOf, statsFor } from '../src/game/creature';
 import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan, releaseMany, discardEgg, train, trainCost, hatchAll, fillIncubators } from '../src/game/economy';
 import { breed, express, fillGenome, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
-import { finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
+import { bossPreview, finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
 import { TUT, newSave } from '../src/game/save';
 
 let failed = 0;
@@ -197,6 +197,15 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
   const n = s.creatures.length;
   ok(release(s, weak[0].id) && s.creatures.length === n - 1 && s.essence > 0, 'releasing gives essence');
   ok(STARTERS.length === 3, 'three starters');
+  {
+    // An area's boss is the same creature every run, and matches the campaign map's preview.
+    const s2 = newSave(); pickStarter(rng, s2, 0); s2.tutorial = TUT.DONE;
+    const ids2 = s2.creatures.map(c => c.id);
+    const bossOf = () => { const r = startAreaRun(rng, s2, 2, ids2)!; return r.fights[r.fights.length - 1].enemies[0]; };
+    const b1 = bossOf(), b2 = bossOf(), pv = bossPreview(AREAS[2]);
+    const looks = (g: typeof pv) => JSON.stringify(express(g));
+    ok(looks(b1.g) === looks(b2.g) && looks(b1.g) === looks(pv), 'a boss looks the same every run, and like its preview');
+  }
 
   // Releasing several at once, throwing away eggs, and spending essence on training.
   {

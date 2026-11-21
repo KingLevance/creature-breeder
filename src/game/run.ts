@@ -75,7 +75,8 @@ function areaFights(rng: Rng, a: AreaDef): FightDef[] {
     const enemies = Array.from({ length: count }, () => makeCreature(rng, wildGenome(rng, wildOpts(a)), clamp(level + rint(rng, -1, 0), 1, MAX_LEVEL), 'wild', enemyStage(a.id, false)));
     fights.push({ enemies, mods: enemies.map(() => ({ stage: enemyStage(a.id, false), ...ENEMY(a.id) })), boss: false, level });
   });
-  const boss = makeCreature(rng, bossGenome(rng, a), clamp(a.hi + 1, 1, MAX_LEVEL), 'wild', enemyStage(a.id, true));
+  // The boss is the same creature every time, the one the campaign map shows, not a fresh roll per run.
+  const boss = makeCreature(rng, bossPreview(a), clamp(a.hi + 1, 1, MAX_LEVEL), 'wild', enemyStage(a.id, true));
   boss.name = a.boss.name;
   const minions = Array.from({ length: a.bossMinions }, () => makeCreature(rng, wildGenome(rng, wildOpts(a)), a.hi, 'wild', enemyStage(a.id, false)));
   fights.push({
@@ -179,7 +180,10 @@ export function startRaidRun(rng: Rng, s: Save, team: string[], now: number): Ru
   if (st.triesLeft <= 0) return null;
   s.raid.tries++;
   s.team = [...team];
-  const g = wildGenome(rng, { els: [st.boss.el], quality: 0.9, skels: [st.boss.skel] });
+  // Each raid boss always looks the same: its genome comes from its own fixed seed, not the run's dice.
+  let h = 2166136261;
+  for (const ch of st.boss.name) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  const g = wildGenome(mulberry32(h >>> 0), { els: [st.boss.el], quality: 0.9, skels: [st.boss.skel] });
   g.skel = [st.boss.skel, st.boss.skel]; g.el1 = [st.boss.el, st.boss.el]; g.el2 = [st.boss.el2, st.boss.el2]; g.leg = [1, 1];
   const boss = makeCreature(rng, g, st.level, 'wild', 4);
   boss.name = st.boss.name;
