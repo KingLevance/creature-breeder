@@ -317,10 +317,12 @@ class Pen {
   }
 }
 
-/** Soft shading on a rounded form: a shadow along the underside and a highlight on top, for a sense of volume. */
+/**
+ * Soft shading on a rounded form: a shadow along the underside, for a sense of volume. (It used to add a pale
+ * gloss oval on top too, but on a body with markings, arms and wings that read as one more shape, not as light.)
+ */
 function shadeForm(p: Pen, cx: number, cy: number, rx: number, ry: number) {
   shadeUnder(p, cx, cy, rx, ry);
-  p.ell(cx - rx * 0.28, cy - ry * 0.55, rx * 0.36, ry * 0.15, '#ffffff', { line: false, op: 0.22, rot: -10 });
 }
 /**
  * Shading for a head made of a skull and a jaw: the underside shadow follows the true bottom edge of the two
@@ -2176,7 +2178,9 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       p.poly([[backx - 1 * s, backy + 1], [backx + 3 * s, backy - 12 * s], [backx + 6 * s, backy + 1]], e.glow, { op: 0.95 });
       break;
     case 'brawn':
-      p.path(`M${f(bx - brx * 0.1)} ${f(by - bry * 0.55)}L${f(bx + brx * 0.25)} ${f(by - bry * 0.1)}M${f(bx + brx * 0.05)} ${f(by - bry * 0.6)}L${f(bx + brx * 0.4)} ${f(by - bry * 0.15)}`, 'none', { stroke: e.dark, sw: 1.3 * Math.max(0.7, s) });
+      // Two claw scars: on the flank of a long body; on an upright one, low on the hip, clear of the arm's shoulder.
+      if (!a.flatBack) p.path(`M${f(bx - brx * 0.62)} ${f(by + bry * 0.05)}L${f(bx - brx * 0.38)} ${f(by + bry * 0.38)}M${f(bx - brx * 0.5)} ${f(by - bry * 0.02)}L${f(bx - brx * 0.26)} ${f(by + bry * 0.31)}`, 'none', { stroke: e.dark, sw: 1.2 * s });
+      else p.path(`M${f(bx - brx * 0.1)} ${f(by - bry * 0.55)}L${f(bx + brx * 0.25)} ${f(by - bry * 0.1)}M${f(bx + brx * 0.05)} ${f(by - bry * 0.6)}L${f(bx + brx * 0.4)} ${f(by - bry * 0.15)}`, 'none', { stroke: e.dark, sw: 1.3 * Math.max(0.7, s) });
       headband(p, a, ph1, s, phase);
       break;
     case 'venom':
@@ -2445,12 +2449,42 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     const col = limbOf(col0);
     if (!seamless) p.taper(sx, sy, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
     else {
-      // Split the arm's curve at t0 (outlined below) and t1 (the plain shoulder piece reaches down to here).
+      // The upper arm is part of the torso: the arm is drawn from part-way down its curve, with no outline round
+      // its top end, and that top end fades in over a short stretch so the body's markings run up into the
+      // shoulder instead of being cut off by a plain patch.
       const B = (t: number) => [(1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * ex, (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ey];
       const W = (t: number) => (w0 + (w1 - w0) * t) * lw;
-      const t0 = 0.24, t1 = 0.42, [ax, ay] = B(t0), [bx2, by2] = B(t1);
-      p.taper(ax, ay, ex, ey, W(t0), w1 * lw, col, cx + (ex - cx) * t0, cy + (ey - cy) * t0);
-      p.taper(sx, sy, bx2, by2, w0 * lw, W(t1), col, sx + (cx - sx) * t1, sy + (cy - sy) * t1, false);
+      /** The arm from t down to the wrist as one closed shape with a round top, for the faint fade-in layers. */
+      const limbShape = (t0: number) => {
+        const pts: number[][] = [], ws: number[] = [];
+        for (let i = 0; i <= 10; i++) { const t = t0 + ((1 - t0) * i) / 10; pts.push(B(t)); ws.push(W(t)); }
+        const Ls: string[] = [], Rs: string[] = [];
+        let d0x = 0, d0y = 1;
+        pts.forEach((q, i) => {
+          const a2 = pts[Math.max(0, i - 1)], b2 = pts[Math.min(pts.length - 1, i + 1)], L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1;
+          const dx = (b2[0] - a2[0]) / L, dy = (b2[1] - a2[1]) / L, h = ws[i] / 2;
+          if (!i) { d0x = dx; d0y = dy; }
+          Ls.push(`${f(q[0] - dy * h)} ${f(q[1] + dx * h)}`);
+          Rs.unshift(`${f(q[0] + dy * h)} ${f(q[1] - dx * h)}`);
+        });
+        const cap: string[] = [], h0 = ws[0] / 2;
+        for (let k = 1; k < 12; k++) {
+          // Round the top: from the right side, back over the top, to the left side.
+          const a3 = Math.atan2(-d0x, d0y) + Math.PI + (Math.PI * k) / 12;
+          cap.push(`${f(pts[0][0] + Math.cos(a3) * h0)} ${f(pts[0][1] + Math.sin(a3) * h0)}`);
+        }
+        return 'M' + Ls.join('L') + 'L' + Rs.join('L') + 'L' + cap.join('L') + 'Z';
+      };
+      const from = (t: number, o: { line?: boolean; op?: number } = {}) => {
+        const [ax, ay] = B(t);
+        if (o.line === false) p.taper(ax, ay, ex, ey, W(t), w1 * lw, col, cx + (ex - cx) * t, cy + (ey - cy) * t, false);
+        else p.taper(ax, ay, ex, ey, W(t), w1 * lw, col, cx + (ex - cx) * t, cy + (ey - cy) * t);
+      };
+      for (const t of [0.14, 0.2]) p.path(limbShape(t), col, { line: false, op: 0.4 });
+      const t0 = 0.27, [ax, ay] = B(t0), r0 = W(t0);
+      p.mask = (x, y) => Math.hypot(x - ax, y - ay) < r0 * 0.7 && (x - ax) * (ex - ax) + (y - ay) * (ey - ay) < r0 * r0 * 0.2;
+      from(t0);
+      p.mask = null;
     }
     const dx = ex - cx, dy = ey - cy, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
     const hr = w1 * lw * 0.72, hx = ex + ux * hr * 0.5, hy = ey + uy * hr * 0.5;
@@ -2486,6 +2520,17 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     const P = (u: number, v: number): [number, number] => [x + (u * ca - v * sa) * w, y + (u * sa + v * ca) * w];
     const M = (pts: [number, number][]) => 'M' + pts.map(q => f(q[0]) + ' ' + f(q[1])).join('L') + 'Z';
     const Q = (u: number, v: number) => P(u, v).map(f).join(' ');
+    /** Toe bumps along the front of a clawed paw, drawn before the paw so their outline merges with it. */
+    const TOES: [number, number][] = [[0.5, 0.24], [0.76, 0.2], [0.98, 0.12]];
+    const toes = () => { for (const [u, v] of TOES) p.ell(...P(u, v), w * 0.24, w * 0.22, col); };
+    /** A small pale claw at the front of each toe, curling down at the tip, with a fine dark edge. */
+    const claws = () => {
+      for (const [u, v] of TOES) {
+        const d = `M${Q(u + 0.14, v - 0.13)}Q${Q(u + 0.46, v - 0.08)} ${Q(u + 0.5, v + 0.2)}Q${Q(u + 0.32, v + 0.08)} ${Q(u + 0.16, v + 0.12)}Z`;
+        p.path(d, '#f4ecd8', { line: false });
+        p.line(d, pal.out, Math.max(0.45, w * 0.07), 0.85);
+      }
+    };
     switch (ph.feet) {
       case 'hooves': {
         // A hoof: a dark, slanted horn block under a band of hide, with a shine on its face.
@@ -2520,18 +2565,11 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
         return;
       }
       default:
+        // A clawed paw has toes: bumps along its front, each with a small claw.
+        if (ph.feet === 'claws') toes();
         p.ell(x + w * 0.22, y, w * 0.82, w * 0.46, col, lift ? { rot: -lift * 4 } : undefined);
-        p.line(`M${f(x + w * 0.5)} ${f(y - w * 0.08)}l0 ${f(w * 0.36)}M${f(x + w * 0.8)} ${f(y - w * 0.02)}l0 ${f(w * 0.3)}`, pal.out, 0.7);
-        if (ph.feet === 'claws') {
-          // Two curved claws hooking down from the toes to the ground, the far one peeking out behind.
-          const claw = (u: number, v: number, k: number, ink: string) => {
-            const d = `M${Q(u - 0.06 * k, v - 0.2 * k)}Q${Q(u + 0.34 * k, v - 0.16 * k)} ${Q(u + 0.36 * k, v + 0.3 * k)}Q${Q(u + 0.16 * k, v + 0.1 * k)} ${Q(u - 0.02 * k, v + 0.1 * k)}Z`;
-            p.path(d, ink, { line: false });
-            p.line(d, pal.out, Math.max(0.45, w * 0.09), 0.9);
-          };
-          claw(0.72, -0.02, 0.8, '#d9cdb4');
-          claw(0.98, 0.12, 1, '#f4ecd8');
-        }
+        if (ph.feet !== 'claws') p.line(`M${f(x + w * 0.5)} ${f(y - w * 0.08)}l0 ${f(w * 0.36)}M${f(x + w * 0.8)} ${f(y - w * 0.02)}l0 ${f(w * 0.3)}`, pal.out, 0.7);
+        else claws();
     }
   };
 
