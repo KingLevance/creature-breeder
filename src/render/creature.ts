@@ -360,6 +360,8 @@ interface Anchors {
   flatBack?: boolean;
   /** The body's ellipses, for parts that melt into it (an upright body's near wing). */
   hull?: number[][];
+  /** Where a flipper joins an upright or floating body, when that isn't the wing root. */
+  fin?: [number, number];
   hx: number; hy: number; hr: number;
   bx: number; by: number; brx: number; bry: number;
   tx: number; ty: number; tdir: number;
@@ -516,8 +518,8 @@ function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: b
   p.g = far ? 'back' : 'front';
   p.part = far ? 'wingFar' : 'wingNear';
   const [fox, foy] = wingOffset(a, far);
-  const jx = ph.wings === 'flipper' && a.flatBack ? a.bx + a.brx * 0.42 + fox : a.wx + fox + (ph.wings === 'flipper' ? 4 : 0);
-  const jy = ph.wings === 'flipper' && a.flatBack ? a.by - a.bry * 0.3 + foy : a.wy + foy + (ph.wings === 'flipper' ? 2 : 0);
+  const [sx0, sy0] = flipperRoot(a, far);
+  const jx = ph.wings === 'flipper' ? sx0 : a.wx + fox, jy = ph.wings === 'flipper' ? sy0 : a.wy + foy;
   p.pivots[p.part] = p.at(jx, jy);
   // On an upright or floating body the near wing grows from the back edge in front of the body: where it overlaps
   // the body it has no outline and melts into it; it's outlined only where it stands free. (Flippers are arms.)
@@ -527,6 +529,14 @@ function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: b
   p.mask = null;
   p.g = was;
   p.part = wasPart;
+}
+
+/** Where a flipper joins the body: the shoulder of a long back, the side of a floating body, or by the wing root. */
+function flipperRoot(a: Anchors, far: boolean): [number, number] {
+  if (a.flatBack) return [a.bx + a.brx * 0.42 + (far ? 4 : 0), a.by - a.bry * 0.3 + (far ? -1 : 0)];
+  if (a.fin) return [a.fin[0] + (far ? 4 : 0), a.fin[1] + (far ? -1 : 0)];
+  const [fox, foy] = wingOffset(a, far);
+  return [a.wx + fox + 4, a.wy + foy + 2];
 }
 
 /** Where the far wing sits relative to the near one: higher and further forward on an upright body, so both show. */
@@ -559,7 +569,7 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
     case 'flipper': {
       // A pectoral fin: narrow where it joins the shoulder, fanning out behind into a scalloped edge with ribs,
       // in the wing colour so it reads as a fin and not a horn.
-      const sx = a.flatBack ? a.bx + a.brx * 0.42 + (far ? 4 : 0) : x + 4, sy = a.flatBack ? a.by - a.bry * 0.3 + (far ? -1 : 0) : y + 2;
+      const [sx, sy] = flipperRoot(a, far);
       const lift = up * 0.35;
       const ax = sx - 14 * k, ay = sy + 1 * k - lift, ex = sx - 5.5 * k, ey = sy + 13 * k - lift * 0.6;
       p.path(`M${f(sx + 1.5 * k)} ${f(sy - 1.5 * k)}Q${f(sx - 5 * k)} ${f(sy - 4.5 * k - lift)} ${f(ax)} ${f(ay)}`
@@ -1232,6 +1242,8 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
   const kind = ph.ears ?? 'none';
   // A swimmer's head is the front of its body, so ears would land beside its eyes: it has none.
   if (kind === 'none' || ph.head === 'eared' || ph.skel === 'aquatic') return;
+  // Tall rabbit ears and tall horns would be four spikes on one crown: the horns win (antlers and ears suit).
+  if (kind === 'long' && TALL_HORNS.includes(ph.horns)) return;
   const c = p.pal, { hx, hy, hr: r } = a, H = headEllipse(ph, hx, hy, r);
   const inner = mix(c.accent, '#ff9fbf', 0.35), skin = c.limb, shadeSkin = shade(skin, -0.08);
   /** A point on the top of the head at x, sunk `sink` radii inside, and the outward direction there. */
@@ -1340,7 +1352,8 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
       } else {
         // The near ear hangs off the back of the head, half over its edge, well clear of the eyes.
         // Its top starts inside the head, so it grows out of the crown.
-        const e = crown(hx - r * 0.55, 0.2);
+        // (A skull's bone face reaches further back, so the ear hangs further back on it.)
+        const e = crown(hx - r * (ph.head === 'skull' ? 0.82 : 0.62), 0.2);
         ear(e.x, e.y, e.x - r * 0.52, e.y + r * 1.2, r * 0.36, skin, true);
       }
       break;
@@ -1497,10 +1510,13 @@ const SKIN = new Set(['ember1', 'spark1', 'venom1', 'terra1', 'stone2', 'void2',
  * instead. The same genes always resolve the same way.
  */
 const backTaken = (ph: Pheno) => (ph.crest ?? 'none') !== 'none' || ph.wings !== 'none';
-const crownTaken = (ph: Pheno) => (ph.ears ?? 'none') !== 'none' && ph.head !== 'eared' && ph.skel !== 'aquatic';
+const TALL_HORNS = ['curved', 'spike', 'crown', 'crystal'];
+const crownTaken = (ph: Pheno) => (ph.ears ?? 'none') !== 'none' && ph.head !== 'eared' && ph.skel !== 'aquatic' && !(ph.ears === 'long' && TALL_HORNS.includes(ph.horns));
+/** Ears, or horns bigger than nubs: either way the top of the head already has its feature. */
+const crownFull = (ph: Pheno) => crownTaken(ph) || (ph.horns !== 'none' && ph.horns !== 'nubs');
 /** Marking styles that ride on the back (a shell, a boulder, a cloud, a cog, a ridge, a cape) and on the crown. */
 const RIDES_BACK: Partial<Record<ElementId, number>> = { tide: 2, verdant: 2, venom: 2, terra: 2, gale: 2, swarm: 1, stone: 1, shade: 2, forge: 1 };
-const ON_CROWN: Partial<Record<ElementId, number>> = { tide: 1, gale: 1, frost: 1, shade: 1 };
+const ON_CROWN: Partial<Record<ElementId, number>> = { tide: 1, gale: 1, frost: 1, shade: 1, spark: 2, spirit: 1, radiant: 2 };
 /** Whether a marking style would land on a spot another feature owns. */
 function markBlocked(ph: Pheno, el: ElementId, v: number) {
   // A beetle shell under insect wings is one look, not a clash.
@@ -1822,7 +1838,8 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
       if (v === 1) {
         // A belt with a gold buckle, plus scars.
         if (!a.flatBack && !a.back) return false;
-        if (ph.skel === 'serpent') return false;
+        // Serpents and swimmers have no waist to belt.
+        if (ph.skel === 'serpent' || ph.skel === 'aquatic') return false;
         wrap(a.flatBack ? 0.12 : 0.22, 0.2, '#3a2b25');
         const [x, y] = a.flatBack ? body(0.12, 0.62) : body(0.62, 0.22);
         p.path(`M${f(x - 2 * s)} ${f(y - 1.8 * s)}L${f(x + 2 * s)} ${f(y - 1.8 * s)}L${f(x + 2 * s)} ${f(y + 1.8 * s)}L${f(x - 2 * s)} ${f(y + 1.8 * s)}Z`, '#e8b93c');
@@ -2145,7 +2162,8 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       p.path(`M${f(bx + brx * 0.9)} ${f(by + bry * 0.9)}q${f(1.6 * s)} ${f(3 * s)} 0 ${f(4.4 * s)}q${f(-1.6 * s)} ${f(-1.4 * s)} 0 ${f(-4.4 * s)}Z`, e.glow, { line: false, op: 0.9 });
       break;
     case 'verdant':
-      p.path(`M${f(hx - hr * 0.1)} ${f(hy - hr * 0.9)}Q${f(hx - 7 * s)} ${f(hy - hr - 9 * s)} ${f(hx + 1 * s)} ${f(hy - hr - 12 * s)}Q${f(hx + 6 * s)} ${f(hy - hr - 5 * s)} ${f(hx - hr * 0.1)} ${f(hy - hr * 0.9)}Z`, e.base);
+      // The sprout on the head gives way to ears or horns, which already own the crown.
+      if (!crownFull(ph1)) p.path(`M${f(hx - hr * 0.1)} ${f(hy - hr * 0.9)}Q${f(hx - 7 * s)} ${f(hy - hr - 9 * s)} ${f(hx + 1 * s)} ${f(hy - hr - 12 * s)}Q${f(hx + 6 * s)} ${f(hy - hr - 5 * s)} ${f(hx - hr * 0.1)} ${f(hy - hr * 0.9)}Z`, e.base);
       if (back) p.path(`M${f(backx - 4 * s)} ${f(backy + 1)}Q${f(backx - 9 * s)} ${f(backy - 6 * s)} ${f(backx - 2 * s)} ${f(backy - 8 * s)}Q${f(backx + 1 * s)} ${f(backy - 3 * s)} ${f(backx - 4 * s)} ${f(backy + 1)}Z`, e.light);
       break;
     case 'spark':
@@ -2763,7 +2781,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       const cy = 52 - (ry - r) * 0.9 + breathe * 1.4;
       const hr = 13 * hs;
       lean(50, cy + ry);
-      a = { back: ellFrame(50, cy, rx, ry * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - ry * 0.35, hr, bx: 50, by: cy + ry * 0.45, brx: rx * 0.8, bry: ry * 0.75, tx: 44, ty: cy + ry * 1.25, tdir: -0.9, wx: 50 - rx * 0.5, wy: cy - ry * 0.3, backx: 40, backy: cy - ry * 0.55 };
+      a = { back: ellFrame(50, cy, rx, ry * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - ry * 0.35, hr, bx: 50, by: cy + ry * 0.45, brx: rx * 0.8, bry: ry * 0.75, tx: 44, ty: cy + ry * 1.25, tdir: -0.9, wx: 50 - rx * 0.5, wy: cy - ry * 0.3, backx: 40, backy: cy - ry * 0.55, fin: [50 - rx * 0.3, cy + ry * 0.5] };
       drawWing(p, a, ph, k, flap, true);
       drawCrest(p, ph, ellSpine(50, cy, rx, ry, Math.PI + 0.1, 1.5 * Math.PI - 0.25, 5), k * b * 0.85);
       const wv = o.rig && !o.walking ? 0 : Math.sin(phase * TAU) * 1.6;

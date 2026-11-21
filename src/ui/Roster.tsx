@@ -35,6 +35,7 @@ function unseen(k: PartKey, ph: Pheno): string | null {
   if (k === 'feet' && ph.skel !== 'biped' && ph.skel !== 'quad') return 'no feet to show';
   if (k === 'ears' && ph.head === 'eared' && ph.ears !== 'none') return 'hidden by its big ears';
   if (k === 'ears' && ph.skel === 'aquatic' && ph.ears !== 'none') return 'swimmers have none';
+  if (k === 'ears' && ph.ears === 'long' && ['curved', 'spike', 'crown', 'crystal'].includes(ph.horns)) return 'hidden by its horns';
   if (k === 'crest' && ph.crest === 'sail' && ph.wings !== 'none') return 'hidden by its wings';
   if (k === 'twotone' && ph.skel === 'serpent' && (ph.twotone === 'points' || ph.twotone === 'socks')) return 'no limbs to show';
   return null;
