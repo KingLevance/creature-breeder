@@ -244,6 +244,25 @@ function shadeForm(p: Pen, cx: number, cy: number, rx: number, ry: number) {
   shadeUnder(p, cx, cy, rx, ry);
   p.ell(cx - rx * 0.28, cy - ry * 0.55, rx * 0.36, ry * 0.15, '#ffffff', { line: false, op: 0.22, rot: -10 });
 }
+/**
+ * Shading for a head made of a skull and a jaw: the underside shadow follows the true bottom edge of the two
+ * together. Shading the skull alone left the jaw's lower edge unshaded, so a band of shadow floated across the
+ * middle of the face.
+ */
+function shadeHead(p: Pen, parts: number[][], hlx: number, hly: number, hlrx: number, hlry: number) {
+  const sn = 0.15, cs = Math.sqrt(1 - sn * sn);
+  const x0 = Math.min(...parts.map(([cx, , rx]) => cx - rx * cs)), x1 = Math.max(...parts.map(([cx, , rx]) => cx + rx * cs));
+  const bottom = (x: number) => Math.max(...parts.map(([cx, cy, rx, ry]) => { const u = (x - cx) / rx; return Math.abs(u) < 1 ? cy + ry * Math.sqrt(1 - u * u) : -1e9; }));
+  const depth = Math.max(...parts.map(([, , , ry]) => ry)) * 0.42;
+  const N = 24, lo: string[] = [], hi: string[] = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N, x = x0 + (x1 - x0) * t, y = bottom(x);
+    lo.push(f(x) + ' ' + f(y));
+    hi.unshift(f(x) + ' ' + f(y - depth * Math.pow(Math.sin(Math.PI * t), 0.8)));
+  }
+  p.path('M' + lo.join('L') + 'L' + hi.join('L') + 'Z', p.pal.out, { line: false, op: 0.2 });
+  p.ell(hlx, hly, hlrx, hlry, '#ffffff', { line: false, op: 0.22, rot: -10 });
+}
 /** Just the shadow along the underside of a rounded form, for a part that sits over an already-shaded one. */
 function shadeUnder(p: Pen, cx: number, cy: number, rx: number, ry: number, op = 0.2) {
   const sn = 0.15, cs = Math.sqrt(1 - sn * sn);
@@ -610,12 +629,13 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   }
   // A wider jaw under the skull gives the head cheeks instead of a plain circle.
   const jaw = () => p.ell(hx + r * 0.1, hy + r * 0.3, r * 0.96, r * 0.62, c.base);
+  const shadeSkullJaw = () => shadeHead(p, [[hx, hy, r, r * 0.95], [hx + r * 0.1, hy + r * 0.3, r * 0.96, r * 0.62]], hx - r * 0.28, hy - r * 0.52, r * 0.36, r * 0.14);
   switch (ph.head) {
     case 'snout':
       // The head is shaded before the muzzle goes on, and the muzzle gets its own shadow underneath, so the
       // head's shadow doesn't cut across the muzzle and stop short at the head's edge.
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
-      shadeForm(p, hx, hy, r, r * 0.95);
+      shadeSkullJaw();
       p.ell(hx + r * 0.72, hy + r * 0.3, r * 0.6, r * 0.42, c.light);
       shadeUnder(p, hx + r * 0.72, hy + r * 0.3, r * 0.6, r * 0.42, 0.14);
       p.dot(hx + r * 1.15, hy + r * 0.18, r * 0.11, c.out);
@@ -630,11 +650,12 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
       const gape = ko ? 0 : pose === 'roar' ? 1 : pose === 'attack' ? 0.8 : pose === 'cast' ? 0.55 : pose === 'hurt' ? 0.4 : 0;
       const hgx = hx + r * 0.9, hgy = hy + r * 0.42, th = (gape * 32 * Math.PI) / 180, ct = Math.cos(th), st = Math.sin(th);
       const R = (x: number, y: number) => { const dx = x - hgx, dy = y - hgy; return f(hgx + dx * ct - dy * st) + ' ' + f(hgy + dx * st + dy * ct); };
-      if (gape) p.path(`M${f(hx + r * 0.7)} ${f(hy + r * 0.4)}L${f(hx + r * 1.46)} ${f(hy + r * 0.4)}L${R(hx + r * 1.4, hy + r * 0.44)}L${R(hx + r * 0.7, hy + r * 0.44)}Z`, '#3a1626', { line: false });
-      p.path(`M${R(hx + r * 0.6, hy + r * 0.38)}L${R(hx + r * 1.42, hy + r * 0.42)}Q${R(hx + r * 1.12, hy + r * 0.74)} ${R(hx + r * 0.6, hy + r * 0.7)}Z`, '#d9933a');
+      if (gape) p.path(`M${f(hx + r * 0.75)} ${f(hy + r * 0.4)}L${f(hx + r * 1.46)} ${f(hy + r * 0.4)}L${R(hx + r * 1.4, hy + r * 0.44)}L${R(hx + r * 0.75, hy + r * 0.44)}Z`, '#3a1626', { line: false });
+      // Slim, and no deeper than the face's edge where it comes out, so it doesn't hang below the chin.
+      p.path(`M${R(hx + r * 0.75, hy + r * 0.4)}L${R(hx + r * 1.42, hy + r * 0.42)}Q${R(hx + r * 1.1, hy + r * 0.58)} ${R(hx + r * 0.75, hy + r * 0.56)}Z`, '#d9933a');
       if (gape) p.path(`M${R(hx + r * 1.0, hy + r * 0.47)}L${R(hx + r * 1.32, hy + r * 0.46)}`, 'none', { stroke: '#e0677a', sw: Math.max(0.8, r * 0.12) });
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
-      shadeForm(p, hx, hy, r, r * 0.95);
+      shadeSkullJaw();
       p.path(`M${f(bx0)} ${f(hy - r * 0.04)}Q${f(hx + r * 1.22)} ${f(hy - r * 0.06)} ${f(tipx)} ${f(tipy)}Q${f(hx + r * 1.16)} ${f(hy + r * 0.44)} ${f(bx0 + r * 0.06)} ${f(hy + r * 0.38)}Z`, '#f2b84c');
       p.line(`M${f(bx0 + r * 0.14)} ${f(hy + r * 0.04)}Q${f(hx + r * 1.15)} ${f(hy + r * 0.04)} ${f(tipx - r * 0.12)} ${f(tipy - r * 0.04)}`, '#ffe2a0', Math.max(0.7, r * 0.07), 0.75);
       p.dot(hx + r * 0.9, hy + r * 0.14, Math.max(0.5, r * 0.045), '#a8702a');
@@ -661,11 +682,11 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
     case 'skull':
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
       p.ell(hx + r * 0.3, hy + r * 0.05, r * 0.78, r * 0.74, '#f1ead8');
-      shadeForm(p, hx, hy, r, r * 0.95);
+      shadeSkullJaw();
       break;
     default:
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
-      shadeForm(p, hx, hy, r, r * 0.95);
+      shadeSkullJaw();
   }
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
   p.g = 'face';
@@ -1573,8 +1594,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       drawWing(p, a, ph, k, flap, true);
       p.g = 'back';
       for (let i = 0; i < 3; i++) {
-        const lx = thx - 7 + i * 6, s2 = (i % 2 === 0 ? sw : -sw) * 4;
-        leg(lx + 2, by + 2, lx + (i - 1) * (9 + ft) + 3 - s2, 90, 3.6 * ls, 1.8 * ls, far, lx + (i - 1) * 8 + 3, by - 4, 0, i % 2 === 0 ? liftB * 0.7 : liftA * 0.7);
+        const lx = thx - 9 + i * 5.5, s2 = (i % 2 === 0 ? sw : -sw) * 4;
+        leg(lx + 2, by + 2, lx + (i - 1) * (10 + ft) + 3 - s2, 90, 3.6 * ls, 1.8 * ls, far, lx + (i - 1) * 8 + 3, by - 4, 0, i % 2 === 0 ? liftB * 0.7 : liftA * 0.7);
       }
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
@@ -1584,8 +1605,10 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       p.ell(thx, by - 1, thr, thr * 0.9, shade(pal.base, -0.04));
       shadeForm(p, thx, by - 1, thr, thr * 0.9);
       for (let i = 0; i < 3; i++) {
-        const lx = thx - 8 + i * 6, s2 = (i % 2 === 0 ? -sw : sw) * 4;
-        leg(lx, by + 3, lx + (i - 1) * (10 + ft) - s2, 90, 4.2 * ls, 2 * ls, pal.dark, lx + (i - 1) * 9, by - 6, 0, i % 2 === 0 ? liftA * 0.7 : liftB * 0.7);
+        // The legs hang from the thorax, the front pair angling forward under the head, with their hips back
+        // where they show (further forward, the head hid the top of the front leg and it seemed to grow from it).
+        const lx = thx - 10.5 + i * 5.5, s2 = (i % 2 === 0 ? -sw : sw) * 4;
+        leg(lx, by + 3, lx + (i - 1) * (11.5 + ft) - s2, 90, 4.2 * ls, 2 * ls, pal.dark, lx + (i - 1) * 9, by - 6, 0, i % 2 === 0 ? liftA * 0.7 : liftB * 0.7);
       }
       break;
     }
