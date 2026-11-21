@@ -588,24 +588,38 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           } else if (e.style === 'ranged') {
             sfx(castSfx(e.el));
             const mouthX = pa.x + dir * pa.sz * 0.3, mouthY = pa.midY - pa.sz * 0.1;
-            // Rare and legendary moves gather power first.
-            if (big) {
-              flashPose(e.u, 'cast', 420);
-              addFx({ kind: 'charge', el: e.el, x: pa.x, y: pa.midY });
-              await sleep(240 * T());
-            }
-            const recoil = () => Animated.sequence([
-              Animated.parallel([tm(a.lean, -8, 90), tm(a.stretch, 0.92, 90)]),
-              Animated.parallel([tm(a.lean, 10, 80), tm(a.stretch, 1.08, 80), tm(a.ox, dir * 8, 80)]),
-              Animated.parallel([tm(a.lean, 0, 200), tm(a.stretch, 1, 200), tm(a.ox, 0, 200)]),
-            ]).start();
+            const t0 = place(targets[0] ?? b.units[e.u]);
+            /**
+             * Every ranged attack winds up: the caster rears back and draws in, in its cast pose, while sparks
+             * stream into an orb of power at its mouth. Rare and legendary moves gather longer and bigger.
+             */
+            const gather = async (ms: number, gx = mouthX, gy = mouthY) => {
+              setAct(e.u, { pose: 'cast' });
+              addFx({ kind: 'gather', el: e.el, x: gx, y: gy, dur: Math.round(ms), big });
+              await run(Animated.parallel([tm(a.lean, -12, ms, Easing.out(Easing.quad)), tm(a.stretch, 0.88, ms, Easing.out(Easing.quad)), tm(a.ox, -dir * 5, ms, Easing.out(Easing.quad))]));
+            };
+            /** Release: snap forward with a flash at the mouth, kick back from the shot, and settle with a spring. */
+            const release = (tx: number, ty: number, pose: Pose = 'attack') => {
+              flashPose(e.u, pose, 420);
+              addFx({ kind: 'muzzle', el: e.el, x: mouthX, y: mouthY, ang: (Math.atan2(ty - mouthY, tx - mouthX) * 180) / Math.PI, big });
+              Animated.sequence([
+                Animated.parallel([tm(a.lean, 14, 70, Easing.out(Easing.quad)), tm(a.stretch, 1.14, 70), tm(a.ox, dir * 6, 70)]),
+                Animated.parallel([tm(a.lean, -7, 130, Easing.out(Easing.quad)), tm(a.stretch, 0.95, 130), tm(a.ox, -dir * 7, 130, Easing.out(Easing.quad))]),
+                Animated.parallel([
+                  Animated.spring(a.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND }),
+                  Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND }),
+                  Animated.spring(a.ox, { toValue: 0, friction: 6, tension: 90, useNativeDriver: ND }),
+                ]),
+              ]).start();
+            };
             const flair = e.flair as Flair;
             let wait = 0;
             if (flair === 'bolt') {
-              // Call lightning, or a pillar of light, down from the sky.
-              flashPose(e.u, 'cast', 500);
+              // Raise power overhead, then call lightning, or a pillar of light, down from the sky.
               Animated.sequence([tm(a.air, 10, 120, Easing.out(Easing.quad)), tm(a.air, 0, 160, Easing.in(Easing.quad))]).start();
-              await sleep(160 * T());
+              await gather(230 * T() * (big ? 1.4 : 1), pa.x, pa.midY - pa.sz * 0.55);
+              flashPose(e.u, 'roar', 450);
+              Animated.parallel([Animated.spring(a.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND }), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND }), Animated.spring(a.ox, { toValue: 0, friction: 6, tension: 90, useNativeDriver: ND })]).start();
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'bolt', el: e.el, x: p2.x, y: p2.feet - p2.sz * 0.08 }); }, i * 80));
               addFx({ kind: 'flash', color: ELEMENTS[e.el].glow });
               shakeField(4);
@@ -620,15 +634,15 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'erupt', el: e.el, x: p2.x, y: p2.feet + 2, s: p2.sz * 0.85 }); }, i * 70));
               wait = 180 + targets.length * 70;
             } else if (flair === 'breath') {
-              flashPose(e.u, 'attack', 520);
-              Animated.sequence([tm(a.lean, -10, 110), tm(a.lean, 8, 120), tm(a.lean, 0, 300)]).start();
-              await sleep(110);
-              for (const t of targets) { const p2 = place(t); addFx({ kind: 'breath', el: e.el, x1: mouthX, y1: mouthY, x2: p2.x, y2: p2.midY, dur: 520 * T() }); }
-              wait = 300 * T();
+              // A deep breath in, then a long blast, leaning into it.
+              await gather(220 * T() * (big ? 1.4 : 1));
+              release(t0.x, t0.midY);
+              Animated.sequence([Animated.delay(200), tm(a.lean, 10, 160), Animated.spring(a.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND })]).start();
+              for (const t of targets) { const p2 = place(t); addFx({ kind: 'breath', el: e.el, x1: mouthX, y1: mouthY, x2: p2.x, y2: p2.midY, dur: 560 * T() }); }
+              wait = 320 * T();
             } else if (flair === 'wave') {
-              flashPose(e.u, 'attack', 400);
-              recoil();
-              await sleep(120);
+              await gather(180 * T() * (big ? 1.4 : 1));
+              release(t0.x, t0.feet);
               let longest = 0;
               for (const t of targets) {
                 const p2 = place(t), dur = Math.round(Math.min(520, 220 + Math.abs(p2.x - pa.x) * 0.7) * T());
@@ -637,19 +651,23 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               }
               wait = longest * 0.85;
             } else {
-              if (!big) flashPose(e.u, 'cast', 450);
-              recoil();
-              await sleep(150);
+              await gather((big ? 340 : 230) * T());
+              release(t0.x, t0.midY);
+              await sleep(40);
               for (const t of targets) {
                 const p2 = place(t);
-                const x1 = mouthX, y1 = pa.midY, x2 = p2.x, y2 = p2.midY;
+                const x1 = mouthX, y1 = mouthY, x2 = p2.x, y2 = p2.midY;
                 const dur = Math.round(Math.min(380, 160 + Math.abs(x2 - x1) * 0.5) * T());
                 if (flair === 'beam' || (flair === 'proj' && isBeam(e.el))) {
-                  addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: dur + 120 });
-                  wait = Math.max(wait, 90);
+                  addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: dur + 160 });
+                  // The hit lands as the beam reaches the target.
+                  wait = Math.max(wait, (dur + 160) * 0.26);
                 } else if (flair === 'volley') {
                   // A spread of smaller shots, one after another.
-                  for (let k = 0; k < 4; k++) setTimeout(() => addFx({ kind: 'proj', el: e.el, x1, y1: y1 + (k - 1.5) * 7, x2: x2 + (k % 2 ? 5 : -5), y2: y2 + (k - 1.5) * 9, dur: Math.round(dur * 0.85) }), k * 75 * T());
+                  for (let k = 0; k < 4; k++) setTimeout(() => {
+                    if (k) addFx({ kind: 'muzzle', el: e.el, x: x1, y: y1, ang: (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI });
+                    addFx({ kind: 'proj', el: e.el, x1, y1: y1 + (k - 1.5) * 7, x2: x2 + (k % 2 ? 5 : -5), y2: y2 + (k - 1.5) * 9, dur: Math.round(dur * 0.85) });
+                  }, k * 75 * T());
                   wait = Math.max(wait, dur * 0.85 + 3 * 75 * T());
                 } else {
                   addFx({ kind: 'proj', el: e.el, x1, y1, x2, y2, dur });
@@ -665,7 +683,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               tm(a.stretch, 0.86, 220 * T()),
               Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 160, useNativeDriver: ND }),
             ]).start();
-            addFx({ kind: 'charge', el: e.el, x: pa.x, y: pa.midY });
+            addFx({ kind: 'gather', el: e.el, x: pa.x, y: pa.midY - pa.sz * 0.25, dur: Math.round(260 * T()), big: true });
             await sleep(240 * T());
             const flair = e.flair as Flair;
             if (flair === 'rain') {
@@ -739,7 +757,16 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             addFx({ kind: 'impact', el: moveEl, x: pt.x - (t.side === 0 ? -1 : 1) * pt.sz * 0.12, y: pt.midY, big: e.mult > 1 || lastBig });
             addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY });
             jolt(e.u, t.side === 0 ? -1 : 1, e.mult > 1 || lastBig ? 14 : 8);
-          } else if (e.from >= 0) addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
+          } else if (e.from >= 0) {
+            addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
+            if (lastStyle === 'ranged' || lastStyle === 'area') {
+              // A shot lands with a punch: a burst star on the near side, a knock back, and a flash.
+              addFx({ kind: 'impact', el: moveEl, x: pt.x - (t.side === 0 ? -1 : 1) * pt.sz * 0.08, y: pt.midY, big: e.mult > 1 || lastBig });
+              jolt(e.u, t.side === 0 ? -1 : 1, e.mult > 1 || lastBig ? 11 : 6);
+              const ta = A(e.u);
+              Animated.sequence([tm(ta.blink, 0.4, 40), tm(ta.blink, 1, 110)]).start();
+            }
+          }
           if (e.from >= 0 && (e.mult > 1 || e.n > t.max.hp * 0.3)) shakeField(e.mult > 1 ? 6 : 4);
           if (launch && t.alive) {
             launch = false;
