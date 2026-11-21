@@ -1046,7 +1046,13 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         const seam = mix(c.base, e.dark, 0.7);
         for (const [i, j] of [[-1, -0.5], [0, -0.5], [1, -0.5], [-0.5, 0.42], [0.5, 0.42], [1.5, 0.42]]) {
           const x = cx + i * r * 1.75, y = cy + j * r * 1.75, k = r * 0.94;
-          const pts = [0, 1, 2, 3, 4, 5].map(q => [x + Math.cos((q * Math.PI) / 3 + Math.PI / 6) * k, y + Math.sin((q * Math.PI) / 3 + Math.PI / 6) * k]);
+          // Plates near the edge are pulled in to the body's outline, so the plating wraps around the back
+          // instead of sticking out past it.
+          const pts = [0, 1, 2, 3, 4, 5].map(q => {
+            const px = x + Math.cos((q * Math.PI) / 3 + Math.PI / 6) * k, py = y + Math.sin((q * Math.PI) / 3 + Math.PI / 6) * k;
+            const u = (px - bx) / brx, w = (py - by) / bry, d = Math.hypot(u, w), lim = 0.93;
+            return d > lim ? [bx + (u * lim / d) * brx, by + (w * lim / d) * bry] : [px, py];
+          });
           p.path('M' + pts.map(([px, py]) => f(px) + ' ' + f(py)).join('L') + 'Z', shade(c.base, (i + j) % 1 === 0 ? 0.13 : 0.07), { stroke: seam, sw: 1.2 });
         }
         return done();
