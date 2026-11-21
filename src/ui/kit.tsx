@@ -411,6 +411,11 @@ export function readable(hex: string): string {
 
 export const SexMark = ({ sex }: { sex: 'M' | 'F' }) => <Text style={{ color: sex === 'M' ? C.male : C.female, fontFamily: F.bold, fontSize: 14 }}>{sex === 'M' ? '♂' : '♀'}</Text>;
 
+/** Health colours: green while healthy, yellow once it's down to half, red when it's in danger. */
+export function hpColor(frac: number): string {
+  return frac > 0.5 ? '#5ad17a' : frac > 0.2 ? '#f5c542' : '#f0616d';
+}
+
 export function Bar({ frac, color, height = 6, back = '#120d20' }: { frac: number; color: string; height?: number; back?: string }) {
   const grow = useRef(new Animated.Value(0)).current;
   const f = Math.max(0, Math.min(1, frac));

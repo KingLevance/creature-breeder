@@ -17,7 +17,7 @@ import { FightResult, Loot, Run, finishFight, startBattle, emptyLoot } from '../
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
 import { FxLayer, FxNew, FxSpec, StatusFx, isBeam } from './Fx';
-import { Bar, Btn, C, CreatureView, EggView, LiveCreature, CreatureGround, P, Stars, mixHex, readable, st } from './kit';
+import { Bar, Btn, C, CreatureView, hpColor, EggView, LiveCreature, CreatureGround, P, Stars, mixHex, readable, st } from './kit';
 import { F, FadeIn, Glow, Grad, Icon, haptic, shadow } from './look';
 import type { Pose } from '../render/creature';
 import { rng, useGame } from './store';
@@ -1052,9 +1052,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               ],
             }}>
               <View style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
-                <Bar frac={v.hp / u.max.hp} color={u.side === 0 ? C.good : C.bad} height={5} />
+                <Bar frac={v.hp / u.max.hp} color={hpColor(v.hp / u.max.hp)} height={5} />
                 {v.shield > 0 ? <View style={{ marginTop: 1 }}><Bar frac={v.shield / (u.max.hp * 0.6)} color="#9fe8ff" height={3} /></View> : null}
-                <Text style={{ color: '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>Lv{u.level} {u.name}</Text>
+                <Text style={{ color: u.side === 1 ? '#ffc2c7' : '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>Lv{u.level} {u.name}</Text>
                 {v.statuses.length ? (
                   <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 2, marginTop: 1 }}>
                     {v.statuses.slice(0, 4).map(k => (
