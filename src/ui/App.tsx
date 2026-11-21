@@ -1,7 +1,7 @@
 // App shell: starter pick, the five tabs, the tutorial banner, and the fight screen over everything.
 import { Fredoka_500Medium, Fredoka_600SemiBold, Fredoka_700Bold, useFonts } from '@expo-google-fonts/fredoka';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { preloadSfx, setAudioPrefs, setMusic, tap } from './audio';
 import { Animated, Easing, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { TUT } from '../game/save';
 import { AdventureScreen } from './Adventure';
 import { BattleScreen } from './Battle';
 import { Btn, C, Card, CreatureView, H, LiveCreature, P, Stars, TypeChips, st } from './kit';
+import { LabZoo, labRun, readLab } from './Lab';
 import { MoreScreen } from './More';
 import { BreedScreen, NurseryScreen } from './Nursery';
 import { RosterScreen } from './Roster';
@@ -154,7 +155,11 @@ function Shell() {
   useEffect(() => { setAudioPrefs(save.sound, save.music); }, [save.sound, save.music]);
   useEffect(() => { if (!run) setMusic('hub'); }, [run]);
   useEffect(() => { const t = setTimeout(preloadSfx, 1500); return () => clearTimeout(t); }, []);
+  // Test bench, web only: a capture script can ask the app to open straight into a fight or a line-up.
+  const lab = useMemo(readLab, []);
+  useEffect(() => { if (lab?.kind === 'fight') start(labRun(lab)); }, [lab]);
 
+  if (lab?.kind === 'zoo') return <LabZoo spec={lab} save={save} />;
   if (save.tutorial === TUT.PICK) return <StarterPick />;
   if (run) return <BattleScreen key={runKey} run={run} onExit={() => setRun(null)} />;
 
