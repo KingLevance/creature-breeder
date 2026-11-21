@@ -260,8 +260,10 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   /** Squash on landing, then spring back. */
   const land = (a: UA) => Animated.sequence([tm(a.stretch, 0.78, 70), Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 180, useNativeDriver: ND })]).start();
   /** Come down from a leap: squash flat, rebound in a little hop, and settle with a wobble. */
+  // Landing squashes low and wide about the feet, then springs back.
   const touchdown = (a: UA, hop: number, lean = 0) => Animated.parallel([
-    Animated.sequence([tm(a.stretch, 0.68, 60, Easing.out(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 3.2, tension: 170, useNativeDriver: ND })]),
+    tm(a.stretch, 1, 80),
+    Animated.sequence([tm(a.squash, 0.6, 60, Easing.out(Easing.quad)), Animated.spring(a.squash, { toValue: 0, friction: 3.2, tension: 170, useNativeDriver: ND })]),
     Animated.sequence([Animated.delay(50), tm(a.air, hop, 120, Easing.out(Easing.quad)), tm(a.air, 0, 130, Easing.in(Easing.quad))]),
     Animated.sequence([Animated.delay(60), Animated.spring(a.lean, { toValue: lean, friction: 4, tension: 120, useNativeDriver: ND })]),
   ]).start();
@@ -415,6 +417,17 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               await run(Animated.parallel([tm(a.ox, tx, ms * T(), Easing.inOut(Easing.quad)), tm(a.oy, ty, ms * T(), Easing.inOut(Easing.quad)), tm(a.lean, 8, 200 * T())]));
               setAct(e.u, { moving: false });
             };
+            /**
+             * Anticipation before a jump: sink low and wide at the knees (about the feet), braced, leaning back a
+             * touch, then a short tremble of held tension before the spring.
+             */
+            const crouch = async (x0: number, ms = 240) => {
+              setAct(e.u, { pose: 'guard' });
+              await run(Animated.parallel([tm(a.squash, 0.62, ms * T(), Easing.out(Easing.quad)), tm(a.lean, -5, ms * T(), Easing.out(Easing.quad)), tm(a.ox, x0 - dir * 4, ms * T(), Easing.out(Easing.quad)), tm(a.stretch, 1, ms * T())]));
+              await run(Animated.sequence([tm(a.squash, 0.7, 45 * T()), tm(a.squash, 0.6, 45 * T()), tm(a.squash, 0.68, 45 * T())]));
+            };
+            /** Out of a crouch: the squash lets go as the body snaps tall and thin leaving the ground. */
+            const unsquash = (ms = 80) => tm(a.squash, 0, ms, Easing.out(Easing.quad));
             // Wind up: lean back and crouch.
             const windUp = (ms = 130) => run(Animated.parallel([tm(a.lean, -14, ms * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.88, ms * T()), tm(a.ox, tx - dir * 6, ms * T())]));
             // Strike: snap forward with the attack pose.
@@ -428,10 +441,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 // Coil up at home (a slow sink, then a quick last squeeze), then leap the whole way in one arc and
                 // come down on the target. The body tips to follow the arc: nose up on the way up, level at the top,
                 // diving at the end.
-                await run(Animated.parallel([
-                  Animated.sequence([tm(a.stretch, 0.84, 150 * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.72, 70 * T(), Easing.in(Easing.quad))]),
-                  tm(a.lean, -14, 220 * T(), Easing.out(Easing.quad)), tm(a.ox, -dir * 6, 220 * T(), Easing.out(Easing.quad)),
-                ]));
+                await crouch(0, 280);
                 setAct(e.u, { pose: 'attack' });
                 sfx('swing');
                 addFx({ kind: 'puff', x: pa.x, y: pa.feet - 6 });
@@ -442,7 +452,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   tm(a.ox, tx + dir * 8, hang, Easing.linear),
                   tm(a.oy, ty, hang, Easing.inOut(Easing.sin)),
                   Animated.sequence([tm(a.air, high, hang * 0.5, Easing.out(Easing.quad)), tm(a.air, 0, hang * 0.5, Easing.in(Easing.quad))]),
-                  Animated.sequence([tm(a.stretch, 1.24, hang * 0.18, Easing.out(Easing.quad)), tm(a.stretch, 0.94, hang * 0.34, Easing.inOut(Easing.sin)), tm(a.stretch, 1.16, hang * 0.48, Easing.in(Easing.quad))]),
+                  unsquash(70),
+                  // Tall and thin as it springs, round at the top, then reaching forward as it dives.
+                  Animated.sequence([tm(a.stretch, 0.84, hang * 0.18, Easing.out(Easing.quad)), tm(a.stretch, 1, hang * 0.34, Easing.inOut(Easing.sin)), tm(a.stretch, 1.16, hang * 0.48, Easing.in(Easing.quad))]),
                   Animated.sequence([tm(a.lean, -18, hang * 0.22, Easing.out(Easing.quad)), tm(a.lean, 4, hang * 0.36, Easing.inOut(Easing.sin)), tm(a.lean, 32, hang * 0.42, Easing.in(Easing.quad))]),
                 ]));
                 addFx({ kind: 'shock', el: e.el, x: pt.x - dir * pt.sz * 0.2, y: pt.feet, w: pt.sz * 1.3 });
@@ -452,14 +464,15 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               }
               case 'slam': {
                 await runTo();
-                // Crouch, spring up high with a stretch, curl and rear back at the top, then dive and come down hard.
-                await run(Animated.parallel([tm(a.stretch, 0.76, 110 * T(), Easing.out(Easing.quad)), tm(a.lean, 2, 110 * T())]));
+                // Crouch, spring up high stretching tall, curl and rear back at the top, then dive and come down hard.
+                await crouch(tx, 220);
                 setAct(e.u, { pose: 'cast' });
                 addFx({ kind: 'puff', x: pa.x + tx, y: pa.feet + ty - 6 });
                 const up = Math.max(pa.sz * 0.3, Math.min(pa.sz * 0.8, pa.top + ty + pa.sz * 0.25));
                 await run(Animated.parallel([
                   tm(a.air, up, 260 * T(), Easing.out(Easing.cubic)),
-                  Animated.sequence([tm(a.stretch, 1.22, 110 * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.92, 150 * T(), Easing.inOut(Easing.sin))]),
+                  unsquash(70),
+                  Animated.sequence([tm(a.stretch, 0.82, 110 * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.96, 150 * T(), Easing.inOut(Easing.sin))]),
                   tm(a.lean, -16, 260 * T(), Easing.out(Easing.quad)), tm(a.ox, tx - dir * 2, 260 * T(), Easing.out(Easing.quad)),
                 ]));
                 // A beat of hang time, drifting a touch higher.
@@ -511,12 +524,12 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               }
               case 'roll': {
                 // Curl up and roll in like a wheel, with a whirl of wind around the hit.
-                await run(Animated.parallel([tm(a.stretch, 0.84, 130 * T()), tm(a.lean, -8, 130 * T())]));
+                await run(Animated.parallel([tm(a.squash, 0.5, 180 * T(), Easing.out(Easing.quad)), tm(a.lean, -8, 180 * T())]));
                 sfx('swing');
                 addFx({ kind: 'streak', el: e.el, x1: pa.x, x2: pt.x - dir * pt.sz * 0.3, y: pa.midY + ty * 0.5, h: pa.sz * 0.5 });
                 await run(Animated.parallel([
                   tm(a.ox, tx + dir * 10, 340 * T(), Easing.in(Easing.quad)), tm(a.oy, ty, 340 * T()),
-                  tm(a.spin, 720, 340 * T(), Easing.in(Easing.quad)), tm(a.lean, 0, 120 * T()), tm(a.stretch, 0.92, 120 * T()),
+                  tm(a.spin, 720, 340 * T(), Easing.in(Easing.quad)), tm(a.lean, 0, 120 * T()), tm(a.stretch, 0.92, 120 * T()), tm(a.squash, 0, 200 * T()),
                 ]));
                 a.spin.setValue(0);
                 addFx({ kind: 'whirl', el: e.el, x: pt.x - dir * pt.sz * 0.15, y: pt.midY, r: pt.sz * 0.5 });
@@ -524,14 +537,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 break;
               }
               case 'dash': {
-                // Blink across in a blur and cut straight through, stopping on the far side.
-                await run(Animated.parallel([tm(a.lean, -10, 120 * T()), tm(a.stretch, 0.86, 120 * T())]));
+                // Get set like a sprinter: drop low, lean into the run and draw back, dig in with a kick of dust and
+                // a tense shuffle, then blink across in a blur and cut straight through, stopping on the far side.
+                setAct(e.u, { pose: 'guard' });
+                await run(Animated.parallel([tm(a.squash, 0.45, 210 * T(), Easing.out(Easing.quad)), tm(a.lean, 14, 210 * T(), Easing.out(Easing.quad)), tm(a.ox, -dir * 8, 210 * T(), Easing.out(Easing.quad))]));
+                addFx({ kind: 'puff', x: pa.x - dir * pa.sz * 0.22, y: pa.feet - 4 });
+                await run(Animated.sequence([tm(a.ox, -dir * 11, 60 * T()), tm(a.ox, -dir * 8, 60 * T()), tm(a.ox, -dir * 10, 50 * T())]));
                 const past = pt.x + dir * pt.sz * 0.55 - pa.x;
                 meleeAt = { tx: past + dir * 16, dir };
                 sfx('swing');
                 addFx({ kind: 'streak', el: e.el, x1: pa.x, x2: pt.x + dir * pt.sz * 0.55, y: pa.midY + ty * 0.5, h: pa.sz * 0.6 });
                 setAct(e.u, { pose: 'attack' });
-                await run(Animated.parallel([tm(a.blink, 0.25, 40), tm(a.ox, past, 90, Easing.out(Easing.cubic)), tm(a.oy, ty, 90), tm(a.lean, 20, 90), tm(a.stretch, 1.15, 90)]));
+                await run(Animated.parallel([tm(a.blink, 0.25, 40), unsquash(60), tm(a.ox, past, 90, Easing.out(Easing.cubic)), tm(a.oy, ty, 90), tm(a.lean, 20, 90), tm(a.stretch, 1.15, 90)]));
                 tm(a.blink, 1, 140).start();
                 addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 1, s: pt.sz * 1.35 });
                 await sleep(100);
@@ -560,12 +577,12 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   sfx('swing');
                   await run(Animated.parallel([tm(a.lean, 32, 90, Easing.out(Easing.quad)), tm(a.stretch, 1.2, 90), tm(a.ox, tx + dir * 18, 90, Easing.out(Easing.quad))]));
                 } else if (v < 0.5) {
-                  // Uppercut: crouch, then spring up through the target and launch it.
-                  await run(Animated.parallel([tm(a.stretch, 0.78, 130 * T(), Easing.out(Easing.quad)), tm(a.lean, 8, 130 * T()), tm(a.ox, tx - dir * 2, 130 * T())]));
+                  // Uppercut: crouch low under the target, then spring up through it and launch it.
+                  await crouch(tx + dir * 2, 200);
                   setAct(e.u, { pose: 'cast' });
                   sfx('swing');
-                  // Spring up through the target, head tipping back as it rises, then drift down and land.
-                  await run(Animated.parallel([tm(a.air, pa.sz * 0.26, 120, Easing.out(Easing.cubic)), tm(a.stretch, 1.24, 90, Easing.out(Easing.quad)), tm(a.lean, -12, 120, Easing.out(Easing.quad)), tm(a.ox, tx + dir * 12, 120, Easing.out(Easing.quad))]));
+                  // Spring up through the target, stretching tall, head tipping back as it rises, then drift down and land.
+                  await run(Animated.parallel([tm(a.air, pa.sz * 0.26, 120, Easing.out(Easing.cubic)), unsquash(60), tm(a.stretch, 0.82, 90, Easing.out(Easing.quad)), tm(a.lean, -12, 120, Easing.out(Easing.quad)), tm(a.ox, tx + dir * 12, 120, Easing.out(Easing.quad))]));
                   launch = true;
                   Animated.sequence([
                     Animated.parallel([tm(a.air, pa.sz * 0.29, 80, Easing.out(Easing.sin)), tm(a.stretch, 1, 80)]),
@@ -865,7 +882,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         a.spin.setValue(0);
         // Turn with a little squash so the flip reads as a turn, then run home leaning into it.
         setAct(m, { pose: undefined, turned: true, moving: true });
-        Animated.sequence([tm(a.stretch, 0.9, 70), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 160, useNativeDriver: ND })]).start();
+        tm(a.stretch, 1, 90).start();
+        Animated.sequence([tm(a.squash, 0.28, 70), Animated.spring(a.squash, { toValue: 0, friction: 4, tension: 160, useNativeDriver: ND })]).start();
         tm(a.blink, 1, 120).start();
         await run(Animated.parallel([
           Animated.timing(a.ox, { toValue: 0, duration: 340 * T(), easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }),
@@ -875,7 +893,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         ]));
         // Arrive: turn back to face the fight and settle.
         setAct(m, { turned: false, moving: false });
-        Animated.sequence([tm(a.stretch, 0.88, 70), Animated.spring(a.stretch, { toValue: 1, friction: 3.5, tension: 150, useNativeDriver: ND })]).start();
+        Animated.sequence([tm(a.squash, 0.32, 70), Animated.spring(a.squash, { toValue: 0, friction: 3.5, tension: 150, useNativeDriver: ND })]).start();
       } else setAct(m, null);
     }
     if (live.current) { setView(snap(b)); setOrder(turnOrder(b, 8)); }
@@ -1099,8 +1117,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                     { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.03] }) },
                     { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, pos.sz * 0.03] }) },
                     { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 7}deg`] }) },
+                    // A crouch squashes low and wide about the feet, so they stay planted on the ground.
+                    { translateY: pos.sz * 0.42 },
                     { scaleX: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) },
                     { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
+                    { translateY: -pos.sz * 0.42 },
                   ],
                 }}>
                   <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive && !acts[u.uid]?.falling} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
