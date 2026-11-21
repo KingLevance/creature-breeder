@@ -620,12 +620,22 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
       shadeUnder(p, hx + r * 0.72, hy + r * 0.3, r * 0.6, r * 0.42, 0.14);
       p.dot(hx + r * 1.15, hy + r * 0.18, r * 0.11, c.out);
       break;
-    case 'beak':
+    case 'beak': {
+      // The head is shaded first, so its shadow doesn't fall across the beak. The beak is two parts: a curved
+      // upper bill with a nostril and a glint along its ridge, over a smaller, darker lower bill.
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
-      p.poly([[hx + r * 0.7, hy - r * 0.05], [hx + r * 1.65, hy + r * 0.3], [hx + r * 0.7, hy + r * 0.6]], '#f0b54a');
       shadeForm(p, hx, hy, r, r * 0.95);
-      p.line(`M${f(hx + r * 0.8)} ${f(hy + r * 0.3)}L${f(hx + r * 1.5)} ${f(hy + r * 0.3)}`, '#b9822a', 0.8);
+      const bx0 = hx + r * 0.62, tipx = hx + r * 1.62, tipy = hy + r * 0.34;
+      // Attacking, roaring or crying out, the lower bill drops open on its hinge.
+      const gape = ko ? 0 : pose === 'roar' ? 1 : pose === 'attack' ? 0.8 : pose === 'cast' ? 0.55 : pose === 'hurt' ? 0.4 : 0;
+      const dr = gape * r * 0.45;
+      if (gape) p.path(`M${f(bx0 + r * 0.06)} ${f(hy + r * 0.38)}L${f(hx + r * 1.42)} ${f(hy + r * 0.4)}L${f(hx + r * 1.3)} ${f(hy + r * 0.42 + dr)}Z`, '#3a1626', { line: false });
+      p.path(`M${f(bx0 + r * 0.06)} ${f(hy + r * 0.36)}Q${f(hx + r * 1.0)} ${f(hy + r * 0.66 + dr * 0.6)} ${f(hx + r * 1.36)} ${f(hy + r * 0.4 + dr)}L${f(bx0 + r * 0.04)} ${f(hy + r * 0.62)}Z`, '#d9933a');
+      p.path(`M${f(bx0)} ${f(hy - r * 0.04)}Q${f(hx + r * 1.22)} ${f(hy - r * 0.06)} ${f(tipx)} ${f(tipy)}Q${f(hx + r * 1.16)} ${f(hy + r * 0.44)} ${f(bx0 + r * 0.06)} ${f(hy + r * 0.38)}Z`, '#f2b84c');
+      p.line(`M${f(bx0 + r * 0.14)} ${f(hy + r * 0.04)}Q${f(hx + r * 1.15)} ${f(hy + r * 0.04)} ${f(tipx - r * 0.12)} ${f(tipy - r * 0.04)}`, '#ffe2a0', Math.max(0.7, r * 0.07), 0.75);
+      p.dot(hx + r * 0.9, hy + r * 0.14, Math.max(0.5, r * 0.045), '#a8702a');
       break;
+    }
     case 'blunt': {
       // A rounded skull with a big square jaw.
       // The skull is shaded first; the jaw goes over it with its own shadow along its bottom edge, which carries
@@ -670,8 +680,8 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
     const mx = ph.head === 'beak' || ph.head === 'long' ? hx + r * 0.75 : ph.head === 'snout' ? hx + r * 0.75 : hx + r * 0.5;
     const my = hy + r * 0.5, w = r * 0.22;
     p.line(`M${f(mx - w * 1.5)} ${f(my)}q${f(w * 0.37)} ${f(-w * 0.45)} ${f(w * 0.75)} 0q${f(w * 0.37)} ${f(w * 0.45)} ${f(w * 0.75)} 0q${f(w * 0.37)} ${f(-w * 0.45)} ${f(w * 0.75)} 0q${f(w * 0.37)} ${f(w * 0.45)} ${f(w * 0.75)} 0`, c.out, Math.max(1, r * 0.09));
-  } else if (open) {
-    // Open mouth: a roar for attacks and casts, a gasp when hurt.
+  } else if (open && ph.head !== 'beak') {
+    // Open mouth: a roar for attacks and casts, a gasp when hurt. (A beak opens its bill instead.)
     const mx = ph.head === 'beak' ? hx + r * 1.0 : ph.head === 'long' ? hx + r * 1.0 : ph.head === 'snout' ? hx + r * 0.95 : ph.head === 'blunt' ? hx + r * 0.85 : hx + r * 0.55;
     const my = ph.head === 'beak' ? hy + r * 0.5 : hy + r * 0.48;
     const mr = pose === 'hurt' ? r * 0.14 : pose === 'roar' ? r * 0.38 : pose === 'attack' ? r * 0.3 : r * 0.22;
@@ -1289,12 +1299,14 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
     }
     case 'gale': {
       // A painted wind swirl on the flank (and a small one on the cheek): a spiral that trails off into a gust.
+      // Painted soft into the hide in a pale wind colour, rather than a white ribbon with a dark edge, which
+      // read as a white sticker stuck on the creature.
       const swirl = (cx: number, cy: number, R: number) => {
-        const pts: string[] = [];
-        for (let i = 0; i <= 26; i++) { const t = i / 26, r = R * (0.18 + 0.82 * t), q = Math.PI * 0.2 - t * TAU * 1.15; pts.push(`${f(cx + Math.cos(q) * r)} ${f(cy + Math.sin(q) * r * 0.85)}`); }
-        const [ex, ey] = pts[pts.length - 1].split(' ').map(Number);
-        const d = 'M' + pts.join('L') + `Q${f(ex - R * 0.9)} ${f(ey + R * 0.25)} ${f(ex - R * 1.9)} ${f(ey - R * 0.05)}`;
-        p.line(d, e.dark, 3.4 * s + 0.6); p.line(d, '#ffffff', 2 * s + 0.4);
+        const pts: number[][] = [];
+        for (let i = 0; i <= 26; i++) { const t = i / 26, r = R * (0.18 + 0.82 * t), q = Math.PI * 0.2 - t * TAU * 1.15; pts.push([cx + Math.cos(q) * r, cy + Math.sin(q) * r * 0.85]); }
+        const [ex, ey] = pts[pts.length - 1];
+        for (let i = 1; i <= 8; i++) { const t = i / 8, u = 1 - t; pts.push([u * u * ex + 2 * u * t * (ex - R * 0.9) + t * t * (ex - R * 1.9), u * u * ey + 2 * u * t * (ey + R * 0.25) + t * t * (ey - R * 0.05)]); }
+        p.soft(pts, 1.9 * s + 0.5, mix(c.base, '#ffffff', 0.72), 0.85);
       };
       if (minor) { swirl(bx - brx * 0.05, by - bry * 0.1, 4 * s); break; }
       if (a.flatBack) swirl(bx - brx * 0.05, by - bry * 0.12, 6.5 * s); else swirl(bx + brx * 0.05, by - bry * 0.12, 6 * s);
