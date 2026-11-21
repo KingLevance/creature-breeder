@@ -169,6 +169,28 @@ class Pen {
   }
   /** A thin coloured line with no outline. */
   line(d: string, color: string, w: number, op?: number) { this.add({ t: 'path', d, fill: 'none', stroke: color, sw: w, op }); }
+  /**
+   * A soft painted stroke along a polyline: a few see-through layers, each narrower, shorter and denser than the
+   * last, so the mark is strongest down its middle and fades out at both sides and both ends, blending into the
+   * hide instead of stopping at a hard edge.
+   */
+  soft(pts: number[][], w: number, color: string, op = 0.8) {
+    const L = 5, per = 1 - Math.pow(1 - op, 1 / L);
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const total = cum[cum.length - 1] || 1;
+    const at = (d: number) => {
+      let i = 1;
+      while (i < cum.length - 1 && cum[i] < d) i++;
+      const t = (d - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+      return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t];
+    };
+    for (let k = 0; k < L; k++) {
+      const q = k / (L - 1), trim = total * (0.02 + 0.2 * q), d0 = trim, d1 = total - trim;
+      const sub = [at(d0), ...pts.filter((_, i) => cum[i] > d0 && cum[i] < d1), at(d1)];
+      this.line('M' + sub.map(([x, y]) => f(x) + ' ' + f(y)).join('L'), color, w * (1.7 - 1.15 * q), per);
+    }
+  }
   ring(cx: number, cy: number, rx: number, ry: number, color: string, w: number, op?: number) {
     this.add({ t: 'ellipse', cx, cy, rx, ry, fill: 'none', stroke: color, sw: w, op });
   }
@@ -664,20 +686,31 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno, cue = 1) {
       p.dot(bx - brx * 0.1, by + bry * 0.2, bry * 0.17, c.mark, 0.7); p.dot(bx + brx * 0.45, by - bry * 0.1, bry * 0.13, c.mark, 0.7);
       break;
     case 'stripes':
-      for (const t of [-0.45, -0.05, 0.35]) p.path(`M${f(bx + brx * t)} ${f(by - bry * 0.8)}Q${f(bx + brx * (t + 0.14))} ${f(by - bry * 0.3)} ${f(bx + brx * (t - 0.02))} ${f(by + bry * 0.05)}`, 'none', { stroke: c.mark, sw: 2.2, op: 0.8 });
+      // Soft brush strokes down the back, fading out at their edges and ends.
+      for (const t of [-0.45, -0.05, 0.35]) {
+        const x0 = bx + brx * t, y0 = by - bry * 0.84, cx = bx + brx * (t + 0.14), cy = by - bry * 0.3, x1 = bx + brx * (t - 0.02), y1 = by + bry * 0.12;
+        const pts: number[][] = [];
+        for (let i = 0; i <= 10; i++) { const u = i / 10, v = 1 - u; pts.push([v * v * x0 + 2 * v * u * cx + u * u * x1, v * v * y0 + 2 * v * u * cy + u * u * y1]); }
+        p.soft(pts, 2.4, c.mark, 0.82);
+      }
       break;
     case 'bands':
       // Each band is a slice of the body ellipse, so its ends follow the body's curve instead of poking out.
+      // It's laid down in see-through layers, each narrower and shorter than the last, so its edges fade softly
+      // into the hide on all four sides.
       for (const t of [-0.35, 0.3]) {
-        const dt = Math.max(2.5, brx * 0.2) / 2 / brx;
-        const top: string[] = [], bot: string[] = [];
-        for (let k = 0; k <= 6; k++) {
-          const tt = t - dt + (2 * dt * k) / 6;
-          const h = bry * Math.sqrt(Math.max(0, 1 - tt * tt)) * 0.96;
-          top.push(`${f(bx + brx * tt)} ${f(by - h)}`);
-          bot.unshift(`${f(bx + brx * tt)} ${f(by + h)}`);
+        const dt0 = Math.max(2.5, brx * 0.2) / 2 / brx;
+        const layers = [[1.45, 0.97], [1.2, 0.9], [0.95, 0.82], [0.7, 0.72]], per = 1 - Math.pow(1 - 0.85, 1 / layers.length);
+        for (const [kw, kh] of layers) {
+          const dt = dt0 * kw, top: string[] = [], bot: string[] = [];
+          for (let k = 0; k <= 6; k++) {
+            const tt = t - dt + (2 * dt * k) / 6;
+            const h = bry * Math.sqrt(Math.max(0, 1 - tt * tt)) * kh;
+            top.push(`${f(bx + brx * tt)} ${f(by - h)}`);
+            bot.unshift(`${f(bx + brx * tt)} ${f(by + h)}`);
+          }
+          p.path('M' + top.join('L') + 'L' + bot.join('L') + 'Z', c.accentDark, { line: false, op: per });
         }
-        p.path('M' + top.join('L') + 'L' + bot.join('L') + 'Z', c.accentDark, { line: false, op: 0.85 });
       }
       break;
     case 'stars':
@@ -840,11 +873,12 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
       return done();
     case 'spark':
       if (v === 1) {
-        // Zigzag stripes across the body.
+        // Zigzag stripes across the body. A serpent's body is a ribbon, not an oval, so it gets the lure instead.
+        if (ph.skel === 'serpent') return false;
         for (const u of [-0.45, 0, 0.42]) {
           const lim = Math.sqrt(1 - u * u) * 0.78, pts: number[][] = [];
           for (let i = 0; i <= 4; i++) pts.push(body(u + (i % 2 ? 0.09 : -0.05), -lim + (2 * lim * i) / 4));
-          line(pts, e.dark, 2 * s + 0.6);
+          p.soft(pts, 2 * s + 0.6, e.dark, 0.9);
         }
         return done();
       }
@@ -1632,7 +1666,11 @@ export function drawEgg(ph: Pheno, wobble = 0): Shape[] {
   const spot = ph.el2 ? ELEMENTS[ph.el2].base : pal.dark;
   p.dot(60, 40, 5, spot, 0.7); p.dot(44, 66, 6.5, spot, 0.7); p.dot(64, 68, 4, spot, 0.7); p.dot(36, 52, 3, pal.accent, 0.8);
   if (ph.pattern === 'stars') { star(p, 54, 54, 5, pal.glow); star(p, 40, 34, 3, pal.glow); }
-  if (ph.pattern === 'stripes' || ph.pattern === 'bands') p.path('M24 58Q50 48 76 58', 'none', { stroke: pal.dark, sw: 3, op: 0.6 });
+  if (ph.pattern === 'stripes' || ph.pattern === 'bands') {
+    const pts: number[][] = [];
+    for (let i = 0; i <= 10; i++) { const u = i / 10, v = 1 - u; pts.push([v * v * 24 + 2 * v * u * 50 + u * u * 76, v * v * 58 + 2 * v * u * 48 + u * u * 58]); }
+    p.soft(pts, 3, pal.dark, 0.6);
+  }
   return p.shapes();
 }
 
