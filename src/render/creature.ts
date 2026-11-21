@@ -241,9 +241,13 @@ class Pen {
 
 /** Soft shading on a rounded form: a shadow along the underside and a highlight on top, for a sense of volume. */
 function shadeForm(p: Pen, cx: number, cy: number, rx: number, ry: number) {
-  const sn = 0.15, cs = Math.sqrt(1 - sn * sn);
-  p.path(`M${f(cx - rx * cs)} ${f(cy + ry * sn)}A${f(rx)} ${f(ry)} 0 0 0 ${f(cx + rx * cs)} ${f(cy + ry * sn)}Q${f(cx)} ${f(cy + ry * 1.02)} ${f(cx - rx * cs)} ${f(cy + ry * sn)}Z`, p.pal.out, { line: false, op: 0.2 });
+  shadeUnder(p, cx, cy, rx, ry);
   p.ell(cx - rx * 0.28, cy - ry * 0.55, rx * 0.36, ry * 0.15, '#ffffff', { line: false, op: 0.22, rot: -10 });
+}
+/** Just the shadow along the underside of a rounded form, for a part that sits over an already-shaded one. */
+function shadeUnder(p: Pen, cx: number, cy: number, rx: number, ry: number, op = 0.2) {
+  const sn = 0.15, cs = Math.sqrt(1 - sn * sn);
+  p.path(`M${f(cx - rx * cs)} ${f(cy + ry * sn)}A${f(rx)} ${f(ry)} 0 0 0 ${f(cx + rx * cs)} ${f(cy + ry * sn)}Q${f(cx)} ${f(cy + ry * 1.02)} ${f(cx - rx * cs)} ${f(cy + ry * sn)}Z`, p.pal.out, { line: false, op });
 }
 
 const STAGE = [
@@ -608,9 +612,12 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   const jaw = () => p.ell(hx + r * 0.1, hy + r * 0.3, r * 0.96, r * 0.62, c.base);
   switch (ph.head) {
     case 'snout':
+      // The head is shaded before the muzzle goes on, and the muzzle gets its own shadow underneath, so the
+      // head's shadow doesn't cut across the muzzle and stop short at the head's edge.
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
-      p.ell(hx + r * 0.72, hy + r * 0.3, r * 0.6, r * 0.42, c.light);
       shadeForm(p, hx, hy, r, r * 0.95);
+      p.ell(hx + r * 0.72, hy + r * 0.3, r * 0.6, r * 0.42, c.light);
+      shadeUnder(p, hx + r * 0.72, hy + r * 0.3, r * 0.6, r * 0.42, 0.14);
       p.dot(hx + r * 1.15, hy + r * 0.18, r * 0.11, c.out);
       break;
     case 'beak':
@@ -621,10 +628,13 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
       break;
     case 'blunt': {
       // A rounded skull with a big square jaw.
+      // The skull is shaded first; the jaw goes over it with its own shadow along its bottom edge, which carries
+      // on from the skull's, instead of the skull's curved shadow cutting through the middle of the jaw.
       p.ell(hx - r * 0.1, hy, r * 0.95, r * 0.92, c.base);
+      shadeForm(p, hx - r * 0.1, hy, r * 0.95, r * 0.92);
       const x0 = hx + r * 0.05, x1 = hx + r * 1.2, y0 = hy - r * 0.3, y1 = hy + r * 0.88, q = r * 0.36;
       p.path(`M${f(x0)} ${f(y0)}L${f(x1 - q)} ${f(y0)}Q${f(x1)} ${f(y0)} ${f(x1)} ${f(y0 + q)}L${f(x1)} ${f(y1 - q)}Q${f(x1)} ${f(y1)} ${f(x1 - q)} ${f(y1)}L${f(x0)} ${f(y1)}Z`, c.base);
-      shadeForm(p, hx - r * 0.1, hy, r * 0.95, r * 0.92);
+      p.path(`M${f(x0)} ${f(y1 - q)}L${f(x1)} ${f(y1 - q)}Q${f(x1)} ${f(y1)} ${f(x1 - q)} ${f(y1)}L${f(x0)} ${f(y1)}Z`, c.out, { line: false, op: 0.2 });
       p.line(`M${f(hx + r * 0.4)} ${f(hy + r * 0.52)}L${f(x1 - 0.5)} ${f(hy + r * 0.52)}`, c.out, 1.1);
       p.dot(hx + r * 1.0, hy - r * 0.02, r * 0.09, c.out);
       break;
