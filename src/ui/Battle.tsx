@@ -369,6 +369,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     ]));
   }, [addFx, place]);
 
+  /**
+   * Creatures that are still playing out their faint. The fight doesn't wait for them while others are still
+   * standing; it only waits before the results, and before reviving one.
+   */
+  const fainting = useRef(new Map<number, Promise<void>>());
   const play = useCallback(async (events: Ev[]) => {
     const b = bRef.current!;
     let moveEl: ElementId = 'plain';
@@ -805,8 +810,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           await sleep(80 * T());
           break;
         case 'skip': addFloat(e.u, e.k === 'freeze' ? 'Frozen' : 'Stunned', '#f3a5ff', true); sfx('debuff'); await sleep(380 * T()); break;
-        case 'faint': patch(e.u, v => ({ ...v, alive: false, hp: 0, shield: 0, statuses: [] })); await faintAnim(b.units[e.u], attackerX); break;
-        case 'revive': patch(e.u, v => ({ ...v, alive: true, hp: e.n })); addFloat(e.u, 'Revived!', C.good, true); await reviveAnim(b.units[e.u]); break;
+        case 'faint': {
+          patch(e.u, v => ({ ...v, alive: false, hp: 0, shield: 0, statuses: [] }));
+          // Played alongside the fight rather than holding it up; several can go down together.
+          const pr = faintAnim(b.units[e.u], attackerX);
+          const uid = e.u;
+          fainting.current.set(uid, pr);
+          pr.catch(() => {}).finally(() => { if (fainting.current.get(uid) === pr) fainting.current.delete(uid); });
+          break;
+        }
+        case 'revive':
+          await fainting.current.get(e.u);
+          patch(e.u, v => ({ ...v, alive: true, hp: e.n })); addFloat(e.u, 'Revived!', C.good, true); await reviveAnim(b.units[e.u]); break;
         case 'text': addFloat(e.u, e.s, '#e7e0ff'); await sleep(130 * T()); break;
         case 'tick': {
           const p = place(b.units[e.u]);
@@ -872,7 +887,13 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     const b = bRef.current!;
     for (;;) {
       if (!live.current) return;
-      if (b.over != null || (theRun.actionLimit > 0 && b.actions[0] >= theRun.actionLimit)) { await sleep(500); if (live.current) finish(); return; }
+      if (b.over != null || (theRun.actionLimit > 0 && b.actions[0] >= theRun.actionLimit)) {
+        // Let the last creatures finish going down before the results.
+        await Promise.all([...fainting.current.values()]);
+        await sleep(400);
+        if (live.current) finish();
+        return;
+      }
       const { actor: uid, events } = nextActor(b);
       await play(events);
       if (uid == null) continue;
@@ -905,6 +926,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
   /** Set up the next chamber and walk into it: the ground scrolls and the enemies arrive with it. */
   const enterChamber = useCallback(() => {
+    fainting.current.clear();
     const b = mutate(s => startBattle(rng, s, theRun));
     bRef.current = b;
     // Send the enemy side back off screen first. The last fight's enemy views are still mounted on the same values
