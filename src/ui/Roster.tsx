@@ -6,7 +6,7 @@ import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
 import { Creature, MAX_LEVEL, PedNode, STAGE_NAMES, XpResult, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
 import { NAME_MAX, expandRoster, release, releaseMany, releaseProblem, releaseValue, renameCreature, rosterExpandCost, train, trainCost, useScan } from '../game/economy';
-import { FRAME_NAMES, HEIGHT_NAMES, PART_KEYS, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
+import { FRAME_NAMES, HEIGHT_NAMES, PARTS, PART_KEYS, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
 import { sfx } from './audio';
@@ -79,7 +79,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
               </View>
             ) : (
               <Pressable onPress={() => setEditing(c.name)} style={st.row} hitSlop={8}>
-                <Text style={{ color: C.text, fontSize: 30, fontFamily: F.bold, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }}>{c.name}</Text>
+                <Text style={{ color: C.text, fontSize: 30, fontFamily: F.bold, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }}>{c.name}{ph.shiny ? <Text style={{ color: C.gold, fontSize: 22 }}> ✦</Text> : null}</Text>
                 <SexMark sex={c.sex} />
                 <Text style={{ color: C.dim, fontSize: 16 }}>✎</Text>
               </Pressable>
@@ -164,7 +164,8 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             <GeneRow label="Body" shown={SKELETON_NAMES[ph.skel]} hid={c.scanned ? SKELETON_NAMES[hidden(c.g.skel, ph.skel) as keyof typeof SKELETON_NAMES] : undefined} scanned={c.scanned} />
             <GeneRow label="Element" shown={ELEMENTS[ph.el1].name} hid={c.scanned ? c.g.el1.filter(e => e !== ph.el1).map(e => ELEMENTS[e].name)[0] : undefined} scanned={c.scanned} />
             <GeneRow label="2nd element" shown={ph.el2 ? ELEMENTS[ph.el2].name : 'None'} hid={c.scanned ? c.g.el2.map(e => (e === 'none' ? 'None' : ELEMENTS[e].name)).filter(n => n !== (ph.el2 ? ELEMENTS[ph.el2].name : 'None'))[0] : undefined} scanned={c.scanned} />
-            {PART_KEYS.map(k => <GeneRow key={k} label={PART_LABELS[k]} shown={capital(ph[k])} hid={c.scanned ? capital(hidden(c.g[k] as [string, string], ph[k]) ?? '') || undefined : undefined} scanned={c.scanned} />)}
+            {PART_KEYS.map(k => { const v = ph[k] ?? PARTS[k][0]; return <GeneRow key={k} label={PART_LABELS[k]} shown={capital(v)} hid={c.scanned && c.g[k] ? capital(hidden(c.g[k] as [string, string], v) ?? '') || undefined : undefined} scanned={c.scanned} />; })}
+            <GeneRow label="Shiny" shown={ph.shiny ? '✦ Yes' : 'No'} hid={c.scanned && !ph.shiny && c.g.shiny && (c.g.shiny[0] === 1 || c.g.shiny[1] === 1) ? 'shiny' : undefined} scanned={c.scanned} />
             <GeneRow label="Markings" shown={`Style ${(ph.mark ?? 0) + 1}`} hid={c.scanned && c.g.mark && c.g.mark[0] !== c.g.mark[1] ? `Style ${Math.max(...c.g.mark) + 1}` : undefined} scanned={c.scanned} />
             <GeneRow label="Stance" shown={stanceName(ph.skel, ph.stance ?? 0)} hid={c.scanned && c.g.stance && c.g.stance[0] !== c.g.stance[1] ? stanceName(ph.skel, Math.max(...c.g.stance)) : undefined} scanned={c.scanned} />
             {/* Proportions blend: a child lands between its two alleles, so a scan shows both. */}
@@ -295,7 +296,7 @@ export function RosterScreen() {
             ? <CreatureTile key={c.id} c={c} width={tw} selected={picked.includes(c.id)} dimmed={!!blocked(c)} badge={picked.includes(c.id) ? '✓' : c.fav ? '★' : undefined} onPress={blocked(c) ? undefined : () => toggle(c)} />
             : <CreatureTile key={c.id} c={c} width={tw} onPress={() => setOpen(c.id)} badge={c.fav ? '★' : undefined} />)}
         </View>
-        {!picking ? <P dim style={{ marginTop: 10 }}>◆ means it carries a rare hidden gene. Tap a creature for its stats, moves, genes and pedigree.</P> : null}
+        {!picking ? <P dim style={{ marginTop: 10 }}>◆ means it carries a rare hidden gene; ✦ is a shiny, a rare colouring that breeds true. Tap a creature for its stats, moves, genes and pedigree.</P> : null}
         {!picking && cost != null ? <Btn style={{ marginTop: 10 }} kind="ghost" label={`Add 10 roster slots (${cost} gold)`} disabled={save.gold < cost} onPress={() => mutate(s => { expandRoster(s); })} /> : null}
         {gone && !picking ? (
           <FadeIn key={gone.count + '_' + gone.essence}>

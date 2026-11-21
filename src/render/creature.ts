@@ -40,11 +40,23 @@ function mix(a: string, b: string, t: number): string {
 
 export interface Palette { base: string; light: string; dark: string; glow: string; accent: string; accentDark: string; out: string; mark: string; markGlow: string }
 
+/**
+ * Shiny colourings, one per element like a species' alternate colours: a hue turn (and a saturation lift for the
+ * greyer elements). The element's own flames, sparks and glows keep their colour, so a shiny still reads as its type.
+ */
+const SHINY: Record<ElementId, [number, number]> = {
+  plain: [170, 0.12], terra: [150, 0.05], stone: [190, 0.16], tide: [62, 0], verdant: [-85, 0], ember: [200, 0],
+  gale: [130, 0], swarm: [-70, 0.05], brawn: [190, 0], frost: [130, 0], spark: [160, 0], venom: [-160, 0],
+  forge: [-170, 0.32], mind: [180, 0], shade: [100, 0.22], spirit: [-100, 0], glimmer: [-150, 0], wyrm: [120, 0],
+  radiant: [-60, 0.05], void: [-90, 0.12],
+};
+
 export function paletteFor(ph: Pheno): Palette {
   const e = ELEMENTS[ph.el1];
   const hue = ph.hue ?? 0;
+  const [sh, ss] = ph.shiny ? SHINY[ph.el1] : [0, 0];
   const tone = (c0: string): string => {
-    const c = hue ? shade(c0, 0, 0, hue) : c0;
+    const c = hue || sh ? shade(c0, 0, ss, hue + sh) : c0;
     switch (ph.tone) {
       case 'pale': return shade(c, 0.12, -0.15);
       case 'deep': return shade(c, -0.1, 0.12);
@@ -335,6 +347,12 @@ function star(p: Pen, x: number, y: number, r: number, fill: string, op = 1) {
   p.path(`M${f(x)} ${f(y - r)}L${f(x + q)} ${f(y - q)}L${f(x + r)} ${f(y)}L${f(x + q)} ${f(y + q)}L${f(x)} ${f(y + r)}L${f(x - q)} ${f(y + q)}L${f(x - r)} ${f(y)}L${f(x - q)} ${f(y - q)}Z`, fill, { line: false, op });
 }
 
+/** A slim four-point glint with long arms, for shinies. */
+function twinkle(p: Pen, x: number, y: number, r: number, fill: string, op = 1) {
+  const q = r * 0.16, h = r * 0.62;
+  p.path(`M${f(x)} ${f(y - r)}Q${f(x + q)} ${f(y - q)} ${f(x + h)} ${f(y)}Q${f(x + q)} ${f(y + q)} ${f(x)} ${f(y + r)}Q${f(x - q)} ${f(y + q)} ${f(x - h)} ${f(y)}Q${f(x - q)} ${f(y - q)} ${f(x)} ${f(y - r)}Z`, fill, { line: false, op });
+}
+
 function flame(p: Pen, x: number, y: number, r: number, c1: string, c2: string) {
   p.path(`M${f(x - r * 0.6)} ${f(y + r * 0.5)}Q${f(x - r * 1.1)} ${f(y - r * 0.4)} ${f(x - r * 0.3)} ${f(y - r * 0.6)}Q${f(x - r * 0.4)} ${f(y - r * 1.2)} ${f(x + r * 0.1)} ${f(y - r * 1.6)}Q${f(x + r * 0.9)} ${f(y - r * 0.6)} ${f(x + r * 0.6)} ${f(y + r * 0.5)}Q${f(x)} ${f(y + r)} ${f(x - r * 0.6)} ${f(y + r * 0.5)}Z`, c1);
   p.path(`M${f(x - r * 0.25)} ${f(y + r * 0.4)}Q${f(x - r * 0.5)} ${f(y - r * 0.2)} ${f(x)} ${f(y - r * 0.8)}Q${f(x + r * 0.45)} ${f(y - r * 0.1)} ${f(x + r * 0.25)} ${f(y + r * 0.4)}Z`, c2, { line: false });
@@ -539,8 +557,13 @@ const EYES = [[0.12, -0.08, 0.27], [0.62, -0.1, 0.2]];
 const EYES_MULTI = [[0.18, -0.12, 0.2], [0.56, -0.2, 0.17], [0.42, 0.14, 0.13], [-0.12, -0.3, 0.13]];
 const INK = '#1b1420';
 
-/** Iris colour: the complement of the body's hue so the eyes pop, or the second element's own hue on a dual type. */
+/** Eye colours, from the eye-colour gene. */
+const IRIS: Record<string, string> = {
+  brown: '#9a5a2e', amber: '#e3952b', green: '#3eae58', blue: '#3b8fe2', gold: '#e8c02f', violet: '#9b5ce0', red: '#d9434e', silver: '#8d9fb5',
+};
+/** Iris colour from the gene; snapshots from before it existed use the complement of the body's hue. */
 function irisColor(ph: Pheno): string {
+  if (ph.iris && IRIS[ph.iris]) return IRIS[ph.iris];
   const [h, sat] = hexToHsl(ELEMENTS[ph.el2 ?? ph.el1].base);
   return hslToHex(h + (ph.el2 ? 0 : 165), Math.max(0.6, sat), 0.47);
 }
@@ -582,10 +605,14 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
       if (pose === 'blink') p.line(`M${f(ex - k)} ${f(ey)}Q${f(ex)} ${f(ey + k * 0.6)} ${f(ex + k)} ${f(ey)}`, c.out, w);
       else p.line(`M${f(ex - k * side)} ${f(ey - k * 0.7)}L${f(ex + k * 0.5 * side)} ${f(ey)}L${f(ex - k * side)} ${f(ey + k * 0.7)}`, c.out, w);
     });
+    // A blink keeps the resting expression's brows and blush, so the face doesn't change mid-blink.
+    if (pose === 'blink') moodFace(p, x, y, r, ph, ph.mood ?? 'calm', spots, false);
     return;
   }
   const glowy = ph.eyes === 'glow' || ph.el1 === 'shade' || ph.el1 === 'void' || ph.el1 === 'spirit';
   const iris = irisColor(ph);
+  // The resting expression shows at rest and through a blink; battle poses make their own faces.
+  const mood = pose === 'idle' ? ph.mood ?? 'calm' : 'calm';
   const big = ph.eyes === 'big' ? 1.2 : 1;
   spots.forEach(([dx, dy, er0], i) => {
     const ex = x + r * dx, ey = y + r * dy, er = r * er0 * big;
@@ -614,7 +641,9 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
       return;
     }
     p.ell(ex, ey, rx, er, '#ffffff');
-    const ir = Math.min(er * (ph.eyes === 'big' ? 0.74 : 0.62), rx * 0.8), ix = ex + rx * (0.16 + p.look * 0.24), iy = ey + er * 0.06;
+    // A goofy face goes a little cross-eyed: each iris drifts toward the other eye.
+    const cross = mood === 'goofy' && ph.eyes !== 'sleepy' ? (i === 0 ? 0.26 : -0.34) : 0;
+    const ir = Math.min(er * (ph.eyes === 'big' ? 0.74 : 0.62), rx * 0.8), ix = ex + rx * (0.16 + p.look * 0.24 + cross), iy = ey + er * 0.06;
     p.dot(ix, iy, ir, iris);
     p.dot(ix + ir * 0.08, iy + ir * 0.05, ir * 0.55, INK);
     p.dot(ix - ir * 0.32, iy - ir * 0.38, ir * 0.32, '#ffffff');
@@ -625,12 +654,112 @@ function drawEyes(p: Pen, x: number, y: number, r: number, ph: Pheno, ko = false
       p.line(`M${f(ex - rx)} ${f(ey - er * 0.02)}L${f(ex + rx)} ${f(ey - er * 0.02)}`, c.out, 1);
     }
   });
+  moodFace(p, x, y, r, ph, mood, spots, true);
   if ((pose === 'roar' || pose === 'guard') && ph.eyes !== 'multi') {
     // Brows: angled down toward the nose for a roar, low and level for a determined guard.
     spots.forEach(([dx, dy, er0], i) => {
       const ex = x + r * dx, ey = y + r * dy, er = r * er0, side = i === 0 ? 1 : -1, hi = pose === 'roar' ? 1.25 : 1.05, lo = pose === 'roar' ? 0.62 : 0.92;
       p.line(`M${f(ex - er * 1.05 * side)} ${f(ey - er * hi)}L${f(ex + er * 0.95 * side)} ${f(ey - er * lo)}`, c.out, Math.max(1.2, er * 0.36));
     });
+  }
+}
+
+/**
+ * The resting expression around the eyes: brows, heavy lids, a blush. `open` is false during a blink, when there
+ * are no open eyes for lids to cover. Slit eyes have their own fierce brow and many eyes have none.
+ */
+function moodFace(p: Pen, x: number, y: number, r: number, ph: Pheno, mood: string, spots: number[][], open: boolean) {
+  if (mood === 'calm') return;
+  const c = p.pal;
+  const brows = ph.eyes !== 'multi' && ph.eyes !== 'slit';
+  const big = ph.eyes === 'big' ? 1.2 : 1;
+  spots.forEach(([dx, dy, er0], i) => {
+    if (ph.eyes === 'multi' && i > 1) return;
+    const ex = x + r * dx, ey = y + r * dy, er = r * er0 * big, rx = i === 1 && ph.eyes !== 'multi' ? er * 0.86 : er;
+    // The inner end of a brow is the end toward the other eye.
+    const side = i === 0 ? 1 : -1, bw = Math.max(1.1, er * 0.3);
+    /** A lid over the top `frac` of the eye, in the hide's colour, with a dark edge. */
+    const lid = (frac: number) => {
+      if (!open || ph.eyes === 'sleepy' || ph.eyes === 'multi') return;
+      const d = er * (1 - 2 * frac), w = rx * Math.sqrt(Math.max(0, 1 - (d / er) ** 2));
+      p.path(`M${f(ex - w - 0.2)} ${f(ey - d)}A${f(rx + 0.2)} ${f(er + 0.2)} 0 ${frac > 0.5 ? 1 : 0} 1 ${f(ex + w + 0.2)} ${f(ey - d)}Z`, c.base, { line: false });
+      p.line(`M${f(ex - w)} ${f(ey - d)}L${f(ex + w)} ${f(ey - d)}`, c.out, Math.max(0.9, er * 0.2));
+    };
+    const slant = (hi: number, lo: number) => p.line(`M${f(ex - rx * 1.05 * side)} ${f(ey - er * hi)}L${f(ex + rx * 0.95 * side)} ${f(ey - er * lo)}`, c.out, bw);
+    switch (mood) {
+      case 'cheerful':
+        // High, round brows.
+        if (brows) p.line(`M${f(ex - rx * 0.85)} ${f(ey - er * 1.2)}Q${f(ex)} ${f(ey - er * 1.62)} ${f(ex + rx * 0.85)} ${f(ey - er * 1.2)}`, c.out, bw * 0.85);
+        break;
+      case 'fierce':
+        if (brows) slant(1.32, 0.78);
+        lid(0.12);
+        break;
+      case 'grumpy':
+        // Low, knitted brows over heavy lids.
+        lid(0.38);
+        if (brows) slant(1.0, 0.72);
+        break;
+      case 'smug':
+        // Half-closed eyes; one brow up.
+        lid(0.44);
+        if (brows && i === 0) p.line(`M${f(ex - rx * 0.9)} ${f(ey - er * 1.28)}Q${f(ex)} ${f(ey - er * 1.62)} ${f(ex + rx * 0.9)} ${f(ey - er * 1.35)}`, c.out, bw * 0.85);
+        else if (brows) slant(0.98, 0.98);
+        break;
+      case 'shy':
+        // Worried brows, inner ends raised, and a blush under each eye.
+        if (brows) slant(0.95, 1.35);
+        p.ell(ex + rx * 0.05 * side, ey + er * 1.35, rx * 0.72, er * 0.34, '#ff6f9e', { line: false, op: 0.62 });
+        break;
+      case 'goofy':
+        if (brows && i === 0) p.line(`M${f(ex - rx * 0.8)} ${f(ey - er * 1.25)}Q${f(ex)} ${f(ey - er * 1.55)} ${f(ex + rx * 0.8)} ${f(ey - er * 1.3)}`, c.out, bw * 0.85);
+        break;
+    }
+  });
+}
+
+/** The resting mouth for an expression, under the eyes. Beaks and square jaws keep their own mouths. */
+function moodMouth(p: Pen, hx: number, hy: number, r: number, mood: string) {
+  const c = p.pal, my = hy + r * 0.42, w = Math.max(1, r * 0.09);
+  switch (mood) {
+    case 'cheerful': {
+      // An open grin.
+      const x0 = hx + r * 0.26, x1 = hx + r * 0.8, xm = (x0 + x1) / 2;
+      p.path(`M${f(x0)} ${f(my - r * 0.02)}Q${f(xm)} ${f(my - r * 0.06)} ${f(x1)} ${f(my - r * 0.04)}Q${f(xm + r * 0.04)} ${f(my + r * 0.4)} ${f(x0)} ${f(my - r * 0.02)}Z`, '#3a1626', { line: false });
+      p.path(`M${f(xm - r * 0.15)} ${f(my + r * 0.16)}Q${f(xm + r * 0.02)} ${f(my + r * 0.1)} ${f(xm + r * 0.18)} ${f(my + r * 0.15)}Q${f(xm + r * 0.04)} ${f(my + r * 0.3)} ${f(xm - r * 0.15)} ${f(my + r * 0.16)}Z`, '#e0677a', { line: false });
+      p.line(`M${f(x0)} ${f(my - r * 0.02)}Q${f(xm)} ${f(my - r * 0.06)} ${f(x1)} ${f(my - r * 0.04)}Q${f(xm + r * 0.04)} ${f(my + r * 0.4)} ${f(x0)} ${f(my - r * 0.02)}`, c.out, w);
+      break;
+    }
+    case 'fierce': {
+      // A flat, toothy line with a fang at the corner.
+      const fx = hx + r * 0.66, fy = my + r * 0.02;
+      p.path(`M${f(fx - r * 0.07)} ${f(fy - r * 0.01)}L${f(fx + r * 0.07)} ${f(fy - r * 0.03)}L${f(fx + r * 0.01)} ${f(fy + r * 0.17)}Z`, '#ffffff', { line: false });
+      p.line(`M${f(fx - r * 0.07)} ${f(fy - r * 0.01)}L${f(fx + r * 0.01)} ${f(fy + r * 0.17)}L${f(fx + r * 0.07)} ${f(fy - r * 0.03)}`, c.out, Math.max(0.6, w * 0.6));
+      p.line(`M${f(hx + r * 0.24)} ${f(my + r * 0.06)}Q${f(hx + r * 0.5)} ${f(my + r * 0.08)} ${f(hx + r * 0.8)} ${f(my - r * 0.04)}`, c.out, w);
+      break;
+    }
+    case 'grumpy':
+      p.line(`M${f(hx + r * 0.3)} ${f(my + r * 0.12)}Q${f(hx + r * 0.52)} ${f(my - r * 0.06)} ${f(hx + r * 0.76)} ${f(my + r * 0.1)}`, c.out, w);
+      break;
+    case 'smug':
+      // A one-sided smirk, curling up at the front.
+      p.line(`M${f(hx + r * 0.28)} ${f(my + r * 0.06)}Q${f(hx + r * 0.56)} ${f(my + r * 0.12)} ${f(hx + r * 0.8)} ${f(my - r * 0.08)}l${f(r * 0.05)} ${f(-r * 0.02)}`, c.out, w);
+      break;
+    case 'shy':
+      // A small, wobbly mouth.
+      p.line(`M${f(hx + r * 0.4)} ${f(my + r * 0.06)}q${f(r * 0.06)} ${f(r * 0.07)} ${f(r * 0.12)} 0q${f(r * 0.06)} ${f(r * 0.07)} ${f(r * 0.12)} 0`, c.out, w * 0.9);
+      break;
+    case 'goofy': {
+      // A smile with the tongue poking out.
+      const tx = hx + r * 0.62, ty = my + r * 0.12;
+      p.path(`M${f(tx - r * 0.11)} ${f(ty - r * 0.06)}L${f(tx + r * 0.11)} ${f(ty - r * 0.08)}Q${f(tx + r * 0.13)} ${f(ty + r * 0.2)} ${f(tx)} ${f(ty + r * 0.2)}Q${f(tx - r * 0.13)} ${f(ty + r * 0.2)} ${f(tx - r * 0.11)} ${f(ty - r * 0.06)}Z`, '#e86b85', { line: false });
+      p.line(`M${f(tx + r * 0.11)} ${f(ty - r * 0.08)}Q${f(tx + r * 0.13)} ${f(ty + r * 0.2)} ${f(tx)} ${f(ty + r * 0.2)}Q${f(tx - r * 0.13)} ${f(ty + r * 0.2)} ${f(tx - r * 0.11)} ${f(ty - r * 0.06)}`, c.out, w * 0.8);
+      p.line(`M${f(tx)} ${f(ty - r * 0.02)}l0 ${f(r * 0.1)}`, '#b84a60', w * 0.6);
+      p.line(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.6)} ${f(hx + r * 0.8)} ${f(hy + r * 0.38)}`, c.out, w);
+      break;
+    }
+    default:
+      p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
   }
 }
 
@@ -731,7 +860,7 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
     const mr = pose === 'hurt' ? r * 0.14 : pose === 'roar' ? r * 0.38 : pose === 'attack' ? r * 0.3 : r * 0.22;
     p.ell(mx, my, mr, mr * (pose === 'hurt' ? 1 : 0.8), '#3a1626');
     if (pose !== 'hurt') p.ell(mx, my + mr * 0.35, mr * 0.55, mr * 0.3, '#e0677a', { line: false });
-  } else if (ph.head !== 'beak' && ph.head !== 'blunt') p.path(`M${f(hx + r * 0.25)} ${f(hy + r * 0.42)}Q${f(hx + r * 0.5)} ${f(hy + r * 0.62)} ${f(hx + r * 0.78)} ${f(hy + r * 0.4)}`, 'none', { stroke: c.out, sw: 1.1 });
+  } else if (ph.head !== 'beak' && ph.head !== 'blunt') moodMouth(p, hx, hy, r, pose === 'idle' || pose === 'blink' ? ph.mood ?? 'calm' : 'calm');
 }
 
 /** Marking styles that are painted on the hide rather than attached to it. */
@@ -1856,6 +1985,17 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       p.dot(26 + ((i * 37) % 50), 88 - t * 60, 1.4 + (i % 2) * 0.6, i % 2 ? e.light : e.base, 0.85 * (1 - t));
     }
     p.part = 'main';
+  }
+  if (ph.shiny && !o.ko) {
+    // Shiny: little four-point glints that twinkle in turn around the body and head.
+    const spots2 = [[a.hx + a.hr * 1.05, a.hy - a.hr * 0.95, 4.4], [a.bx - a.brx * 1.05, a.by - a.bry * 0.55, 3.6], [a.bx + a.brx * 0.55, a.by + a.bry * 0.95, 3], [a.hx - a.hr * 1.2, a.hy - a.hr * 0.2, 2.6]];
+    spots2.forEach(([x, y, r], i) => {
+      const tw = 0.35 + 0.65 * Math.max(0, Math.sin((phase + i * 0.27) * TAU));
+      const X = Math.max(4, Math.min(96, x)), Y = Math.max(4, Math.min(96, y));
+      if (tw * r < 0.5) return;
+      twinkle(p, X, Y, r * tw, '#ffffff', 0.95);
+      p.dot(X, Y, r * tw * 0.55, '#fff1a8', 0.55);
+    });
   }
   if (o.stage === 4) {
     for (let i = 0; i < 5; i++) {

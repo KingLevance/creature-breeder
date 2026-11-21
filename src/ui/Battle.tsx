@@ -1128,7 +1128,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               <View style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
                 <Bar frac={v.hp / u.max.hp} color={hpColor(v.hp / u.max.hp)} height={5} />
                 {v.shield > 0 ? <View style={{ marginTop: 1 }}><Bar frac={v.shield / (u.max.hp * 0.6)} color="#9fe8ff" height={3} /></View> : null}
-                <Text style={{ color: u.side === 1 ? '#ffc2c7' : '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>Lv{u.level} {u.name}</Text>
+                <Text style={{ color: u.side === 1 ? '#ffc2c7' : '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>{u.ph.shiny ? '✦ ' : ''}Lv{u.level} {u.name}</Text>
                 {v.statuses.length ? (
                   <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 2, marginTop: 1 }}>
                     {v.statuses.slice(0, 4).map(k => (

@@ -512,6 +512,7 @@ export const CreatureTile = memo(function CreatureTile({ c, onPress, selected, b
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
             <Text numberOfLines={1} style={{ color: C.text, fontFamily: F.semi, fontSize: 14, flexShrink: 1 }}>{c.name}</Text>
             <SexMark sex={c.sex} />
+            {ph.shiny ? <Text style={{ color: C.gold, fontSize: 12 }}>✦</Text> : null}
             {carrier ? <Text style={{ color: C.accent2, fontSize: 11 }}>◆</Text> : null}
           </View>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>

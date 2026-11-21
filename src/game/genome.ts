@@ -41,12 +41,23 @@ export const PARTS = {
   tail: ['stub', 'long', 'tuft', 'fan', 'club', 'whip', 'stinger', 'plume'],
   pattern: ['plain', 'belly', 'spots', 'stripes', 'bands', 'mask', 'stars'],
   tone: ['base', 'pale', 'deep', 'warm', 'cool', 'ashen', 'gilded', 'melanic', 'albino'],
+  // Eye colour: brown is dominant, as in people; the bright colours are recessive.
+  iris: ['brown', 'amber', 'green', 'blue', 'gold', 'violet', 'red', 'silver'],
+  // The face it makes at rest.
+  mood: ['calm', 'cheerful', 'fierce', 'grumpy', 'smug', 'shy', 'goofy'],
 } as const;
 export type PartKey = keyof typeof PARTS;
 export const PART_KEYS = Object.keys(PARTS) as PartKey[];
 export const PART_LABELS: Record<PartKey, string> = {
   head: 'Head', eyes: 'Eyes', horns: 'Horns', wings: 'Wings', tail: 'Tail', pattern: 'Pattern', tone: 'Color tone',
+  iris: 'Eye color', mood: 'Expression',
 };
+/** Looks genes added after the first release. Older saves get them from fillGenome, each from its own stream. */
+export const LATE_PARTS: PartKey[] = ['iris', 'mood'];
+/** How often a wild allele takes its element's favourite. The later looks genes vary more within an element. */
+const PREF_RATE: Partial<Record<PartKey, number>> = { iris: 0.45, mood: 0.3 };
+/** Wild chance of the recessive shiny allele: about 1 in 200 wild creatures shows it (0.07²), 1 in 8 carries it. */
+export const SHINY_ALLELE = 0.07;
 
 /** Secondary element alleles: 'none' sits between the common and uncommon elements, so rare second types hide behind it. */
 const firstUncommon = ELEMENT_IDS.findIndex(e => ELEMENTS[e].tier > 0);
@@ -67,6 +78,10 @@ export interface Genome {
   tail: Pair<string>;
   pattern: Pair<string>;
   tone: Pair<string>;
+  iris: Pair<string>;
+  mood: Pair<string>;
+  /** Shiny gene: 1 is the recessive shiny allele, which only shows when both are 1 (a rare alternate colouring). */
+  shiny: Pair<number>;
   /** Glass cannon (+2) to tank (-2). Averaged. */
   build: Pair<number>;
   /** Stat potential, 1..10 per allele. Averaged. A hidden ceiling. */
@@ -107,6 +122,10 @@ export interface Pheno {
   tail: string;
   pattern: string;
   tone: string;
+  /** Later looks genes: optional, because pedigree snapshots from older saves don't have them. */
+  iris?: string;
+  mood?: string;
+  shiny?: boolean;
   build: number;
   pot: Record<StatKey, number>;
   growth: number;
@@ -140,6 +159,8 @@ export function express(g: Genome): Pheno {
     tail: dom(PARTS.tail, g.tail),
     pattern: dom(PARTS.pattern, g.pattern),
     tone: dom(PARTS.tone, g.tone),
+    ...Object.fromEntries(LATE_PARTS.map(k => [k, dom(PARTS[k], g[k] ?? [PARTS[k][0], PARTS[k][0]])])),
+    shiny: !!g.shiny && g.shiny[0] === 1 && g.shiny[1] === 1,
     build: avg(g.build),
     pot: { hp: avg(g.hp), atk: avg(g.atk), def: avg(g.def), spd: avg(g.spd) },
     growth: avg(g.growth),
@@ -155,25 +176,25 @@ export function express(g: Genome): Pheno {
 
 /** Parts an element tends to bring, used when making wild creatures so they look like their type. */
 const EL_PARTS: Partial<Record<ElementId, Partial<Record<PartKey, string[]>>>> = {
-  ember: { tail: ['plume', 'tuft'], horns: ['curved', 'nubs'] },
-  tide: { wings: ['fin', 'flipper'], tail: ['fan'] },
-  verdant: { horns: ['antlers', 'nubs'], tail: ['tuft', 'fan'], pattern: ['spots', 'belly'] },
-  spark: { pattern: ['stripes'], tail: ['whip'], horns: ['spike'] },
-  frost: { horns: ['crystal', 'spike'], wings: ['flipper'] },
-  brawn: { head: ['blunt'], pattern: ['bands'], tail: ['club', 'stub'] },
-  venom: { tail: ['stinger', 'whip'], head: ['long'], eyes: ['slit'] },
-  terra: { head: ['snout', 'blunt'], tail: ['club'], pattern: ['belly'] },
-  gale: { wings: ['feather'], head: ['beak'], tail: ['fan'] },
-  mind: { eyes: ['big', 'glow'], horns: ['crown'], pattern: ['mask'] },
-  swarm: { wings: ['insect'], horns: ['antenna'], eyes: ['multi'] },
-  stone: { head: ['blunt'], horns: ['nubs', 'spike'], tail: ['club'] },
-  spirit: { eyes: ['glow'], tail: ['plume'], head: ['skull', 'round'] },
-  wyrm: { wings: ['bat'], horns: ['curved', 'crown'], tail: ['long', 'whip'], head: ['frill', 'long'] },
-  shade: { eyes: ['glow', 'slit'], head: ['eared'], pattern: ['mask'] },
-  forge: { pattern: ['bands'], horns: ['spike'], head: ['blunt'] },
-  glimmer: { wings: ['insect', 'energy'], horns: ['antenna'], pattern: ['stars'] },
-  radiant: { wings: ['energy', 'feather'], horns: ['crown'], pattern: ['stars'] },
-  void: { wings: ['energy'], pattern: ['stars'], eyes: ['glow'], horns: ['crystal'] },
+  ember: { tail: ['plume', 'tuft'], horns: ['curved', 'nubs'], iris: ['amber', 'red', 'gold'], mood: ['fierce', 'cheerful'] },
+  tide: { wings: ['fin', 'flipper'], tail: ['fan'], iris: ['blue'], mood: ['calm', 'cheerful'] },
+  verdant: { horns: ['antlers', 'nubs'], tail: ['tuft', 'fan'], pattern: ['spots', 'belly'], iris: ['green', 'amber'], mood: ['calm', 'cheerful', 'shy'] },
+  spark: { pattern: ['stripes'], tail: ['whip'], horns: ['spike'], iris: ['gold', 'blue'], mood: ['cheerful', 'goofy'] },
+  frost: { horns: ['crystal', 'spike'], wings: ['flipper'], iris: ['blue', 'silver'], mood: ['calm', 'shy'] },
+  brawn: { head: ['blunt'], pattern: ['bands'], tail: ['club', 'stub'], iris: ['brown', 'red'], mood: ['fierce', 'grumpy'] },
+  venom: { tail: ['stinger', 'whip'], head: ['long'], eyes: ['slit'], iris: ['green', 'violet'], mood: ['smug', 'fierce'] },
+  terra: { head: ['snout', 'blunt'], tail: ['club'], pattern: ['belly'], iris: ['brown', 'amber'], mood: ['grumpy', 'calm'] },
+  gale: { wings: ['feather'], head: ['beak'], tail: ['fan'], iris: ['silver', 'blue'], mood: ['cheerful', 'smug'] },
+  mind: { eyes: ['big', 'glow'], horns: ['crown'], pattern: ['mask'], iris: ['violet'], mood: ['calm', 'smug'] },
+  swarm: { wings: ['insect'], horns: ['antenna'], eyes: ['multi'], iris: ['amber', 'red'], mood: ['goofy', 'fierce'] },
+  stone: { head: ['blunt'], horns: ['nubs', 'spike'], tail: ['club'], iris: ['brown', 'silver'], mood: ['grumpy', 'calm'] },
+  spirit: { eyes: ['glow'], tail: ['plume'], head: ['skull', 'round'], iris: ['silver', 'blue'], mood: ['shy', 'calm'] },
+  wyrm: { wings: ['bat'], horns: ['curved', 'crown'], tail: ['long', 'whip'], head: ['frill', 'long'], iris: ['gold', 'red'], mood: ['fierce', 'smug'] },
+  shade: { eyes: ['glow', 'slit'], head: ['eared'], pattern: ['mask'], iris: ['red', 'violet'], mood: ['smug', 'fierce'] },
+  forge: { pattern: ['bands'], horns: ['spike'], head: ['blunt'], iris: ['amber', 'red'], mood: ['grumpy', 'fierce'] },
+  glimmer: { wings: ['insect', 'energy'], horns: ['antenna'], pattern: ['stars'], iris: ['violet', 'gold'], mood: ['cheerful', 'shy'] },
+  radiant: { wings: ['energy', 'feather'], horns: ['crown'], pattern: ['stars'], iris: ['gold'], mood: ['calm', 'cheerful'] },
+  void: { wings: ['energy'], pattern: ['stars'], eyes: ['glow'], horns: ['crystal'], iris: ['violet', 'silver'], mood: ['calm', 'smug'] },
 };
 
 /** Wild marking alleles: the dominant style 0 is the rarest allele, so all three styles turn up often. */
@@ -209,7 +230,7 @@ export interface WildOpts {
 
 function rollPart(rng: Rng, key: PartKey, el: ElementId): string {
   const pref = EL_PARTS[el]?.[key];
-  if (pref && rng() < 0.6) return pick(rng, pref);
+  if (pref && rng() < (PREF_RATE[key] ?? 0.6)) return pick(rng, pref);
   const list: readonly string[] = PARTS[key];
   // Earlier (commoner) variants are likelier.
   return weighted(rng, list, v => 1 / (1 + list.indexOf(v) * 0.5));
@@ -260,12 +281,15 @@ export function wildGenome(rng: Rng, o: WildOpts): Genome {
     stance: [rollStance(rng), rollStance(rng)],
     girth: [rollShape(rng), rollShape(rng)],
     height: [rollShape(rng), rollShape(rng)],
+    ...lateParts(k => part(k)),
+    shiny: [rng() < SHINY_ALLELE ? 1 : 0, rng() < SHINY_ALLELE ? 1 : 0],
   };
 }
+/** The later looks genes as an object, rolled in a fixed order. */
+const lateParts = (roll: (k: PartKey) => Pair<string>) => Object.fromEntries(LATE_PARTS.map(k => [k, roll(k)])) as Pick<Genome, 'iris' | 'mood'>;
 
 /** Saves from before marking styles and hue existed: give those genomes alleles, stable per creature. */
 export function fillGenome(g: Genome, key: string) {
-  if (g.mark && g.hue && g.stance && g.girth && g.height) return;
   const seed = (k: string) => { let h = 2166136261; for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 16777619); return mulberry32(h >>> 0); };
   const rng = seed(key);
   if (!g.mark) g.mark = [rollMark(rng), rollMark(rng)];
@@ -275,6 +299,14 @@ export function fillGenome(g: Genome, key: string) {
   const r2 = seed(key + '#shape');
   if (!g.girth) g.girth = [rollShape(r2), rollShape(r2)];
   if (!g.height) g.height = [rollShape(r2), rollShape(r2)];
+  // The later looks genes: one stream each, so adding another later never changes these. They follow the
+  // creature's element, and its hidden element for the second allele, like a wild one's.
+  for (const k of LATE_PARTS) {
+    if (g[k]) continue;
+    const r = seed(key + '#' + k), a = rollPart(r, k, g.el1[0]);
+    g[k] = r() < 0.35 ? [a, rollPart(r, k, g.el1[1])] : [a, a];
+  }
+  if (!g.shiny) { const r = seed(key + '#shiny'); g.shiny = [r() < SHINY_ALLELE ? 1 : 0, r() < SHINY_ALLELE ? 1 : 0]; }
 }
 
 export interface BreedOpts {
@@ -303,12 +335,13 @@ function mutateAllele(rng: Rng, g: Genome, key: keyof Genome, idx: 0 | 1) {
     case 'stance': g.stance[idx] = rint(rng, 0, 3); break;
     case 'girth': g.girth[idx] = clamp(g.girth[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
     case 'height': g.height[idx] = clamp(g.height[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
+    case 'shiny': g.shiny[idx] = 1; break;
     case 'bias': break;
     default: (g[key] as Pair<string>)[idx] = pick(rng, PARTS[key as PartKey] as readonly string[]);
   }
 }
 
-const GENE_KEYS: (keyof Genome)[] = ['skel', 'el1', 'el2', 'head', 'eyes', 'horns', 'wings', 'tail', 'pattern', 'tone', 'build', 'hp', 'atk', 'def', 'spd', 'growth', 'slots', 'leg', 'mark', 'hue', 'stance', 'girth', 'height'];
+const GENE_KEYS: (keyof Genome)[] = ['skel', 'el1', 'el2', 'head', 'eyes', 'horns', 'wings', 'tail', 'pattern', 'tone', 'build', 'hp', 'atk', 'def', 'spd', 'growth', 'slots', 'leg', 'mark', 'hue', 'stance', 'girth', 'height', ...LATE_PARTS, 'shiny'];
 
 /** Each parent passes one random allele per gene slot. Returns the child genome and how many genes mutated. */
 export function breed(rng: Rng, mom: Genome, dad: Genome, o: BreedOpts = {}): { g: Genome; mutations: number } {
@@ -333,6 +366,8 @@ export function breed(rng: Rng, mom: Genome, dad: Genome, o: BreedOpts = {}): { 
     stance: pair(mom.stance ?? [0, 0], dad.stance ?? [0, 0]),
     girth: pair(mom.girth ?? [0, 0], dad.girth ?? [0, 0]),
     height: pair(mom.height ?? [0, 0], dad.height ?? [0, 0]),
+    ...lateParts(k => pair(mom[k] ?? [PARTS[k][0], PARTS[k][0]], dad[k] ?? [PARTS[k][0], PARTS[k][0]])),
+    shiny: pair(mom.shiny ?? [0, 0], dad.shiny ?? [0, 0]),
     bias: [0, 1, 2, 3, 4].map(i => [biasFrom(mom, o.momMoves, i), biasFrom(dad, o.dadMoves, i)] as Pair<string | null>),
   };
   let mutations = 0;
@@ -387,6 +422,7 @@ export function rareCarrierCount(g: Genome): number {
   for (const e of g.el1) if (e !== p.el1 && ELEMENTS[e].tier >= 2) n++;
   for (const e of g.el2) if (e !== 'none' && e !== p.el2 && e !== p.el1 && ELEMENTS[e].tier >= 2) n++;
   if (!p.leg && (g.leg[0] === 1 || g.leg[1] === 1)) n++;
+  if (!p.shiny && g.shiny && (g.shiny[0] === 1 || g.shiny[1] === 1)) n++;
   return n;
 }
 
@@ -408,5 +444,8 @@ export function starterGenome(el: ElementId, skel: Skeleton, parts: Partial<Reco
     stance: [0, 0],
     girth: [0, 0],
     height: [0, 0],
+    ...lateParts(k => same(parts[k] ?? STARTER_LOOKS[k] ?? PARTS[k][0])),
+    shiny: [0, 0],
   };
 }
+const STARTER_LOOKS: Partial<Record<PartKey, string>> = { mood: 'cheerful', iris: 'amber' };

@@ -5,7 +5,7 @@ import { MOVE_LIST, MOVES, movePool } from '../src/game/data/moves';
 import { act, aiChoose, autoResolve, createBattle, makeUnit, nextActor, turnOrder, usable, validTargets } from '../src/game/battle';
 import { Creature, makeCreature, slotRarities, stageLevels, stageOf, statsFor } from '../src/game/creature';
 import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan, releaseMany, discardEgg, train, trainCost, hatchAll, fillIncubators } from '../src/game/economy';
-import { breed, express, fillGenome, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
+import { breed, express, fillGenome, LATE_PARTS, mulberry32, PARTS, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
 import { bossPreview, finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
 import { TUT, newSave } from '../src/game/save';
 
@@ -280,6 +280,40 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
     const copy = JSON.parse(JSON.stringify(old));
     fillGenome(old, 'abc'); fillGenome(copy, 'abc');
     ok(old.mark && old.hue && old.stance && JSON.stringify(old) === JSON.stringify(copy), 'old saves get stable markings, hue and stance');
+  }
+  // The later looks genes (eye colour, expression, ...) and shinies.
+  {
+    const N = 20000;
+    let shiny = 0, carriers = 0;
+    const seen: Record<string, Set<string>> = {};
+    for (let i = 0; i < N; i++) {
+      const g = wildGenome(rng, { els: ELEMENT_IDS, quality: 0.5 }), ph = express(g);
+      if (ph.shiny) shiny++; else if (rareCarrierCount(g) > 0 && g.shiny.includes(1)) carriers++;
+      for (const k of LATE_PARTS) (seen[k] ??= new Set()).add(ph[k] ?? '');
+    }
+    console.log(`     shiny ${shiny}/${N} wild (${(shiny / N * 100).toFixed(2)}%), hidden shiny carriers ${carriers}`);
+    ok(shiny > N * 0.002 && shiny < N * 0.009, 'about 1 in 200 wild creatures is shiny');
+    ok(carriers > N * 0.08, 'many more carry the shiny gene hidden');
+    ok(LATE_PARTS.every(k => seen[k].size === PARTS[k].length), `every eye colour and expression turns up in the wild (${LATE_PARTS.map(k => k + ' ' + seen[k].size).join(', ')})`);
+    // Two hidden carriers have a shiny child about a quarter of the time.
+    const c1 = wildGenome(rng, { els: ['spark'], quality: 0.5 }), c2 = wildGenome(rng, { els: ['spark'], quality: 0.5 });
+    c1.shiny = [1, 0]; c2.shiny = [0, 1];
+    let kids = 0;
+    for (let i = 0; i < 2000; i++) if (express(breed(rng, c1, c2, { mutation: 0 }).g).shiny) kids++;
+    ok(!express(c1).shiny && kids > 400 && kids < 600, `two carriers breed shiny about 1 in 4 (${kids}/2000)`);
+    // Old saves get the new genes, stable per creature, without any older gene changing.
+    const old = wildGenome(rng, { els: ['tide'], quality: 0.5 }) as any;
+    for (const k of [...LATE_PARTS, 'shiny']) delete old[k];
+    const before = JSON.stringify(old), copy = JSON.parse(before);
+    fillGenome(old, 'c_9'); fillGenome(copy, 'c_9');
+    const kept = Object.keys(JSON.parse(before)).every(k => JSON.stringify(old[k]) === JSON.stringify(JSON.parse(before)[k]));
+    ok(LATE_PARTS.every(k => old[k]) && old.shiny && kept && JSON.stringify(old) === JSON.stringify(copy), 'old saves get eye colour, expression and the shiny gene without other genes changing');
+    // Brown eyes are dominant over blue.
+    const b1 = { ...c1, iris: ['brown', 'blue'] as [string, string] }, b2 = { ...c2, iris: ['blue', 'blue'] as [string, string] };
+    ok(express(b1).iris === 'brown' && express(b2).iris === 'blue', 'brown eyes are dominant, blue recessive');
+    // An old genome without the new genes still breeds.
+    const k2 = breed(rng, JSON.parse(before), c2, { mutation: 0 }).g;
+    ok(!!k2.iris && !!k2.mood && !!k2.shiny, 'a genome from an older save still breeds');
   }
   JSON.parse(JSON.stringify(s));
   ok(true, 'save is plain JSON');

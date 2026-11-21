@@ -53,6 +53,7 @@ function HatchAllReveal({ cs, onClose }: { cs: Creature[]; onClose: () => void }
                   </View>
                   <View style={st.row}>
                     <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }} numberOfLines={1}>{c.name}</Text>
+                    {ph.shiny ? <Text style={{ color: C.gold, fontSize: 14 }}>✦</Text> : null}
                     <SexMark sex={c.sex} />
                   </View>
                   <Stars n={starRating(c.g)} size={13} />
@@ -172,6 +173,7 @@ function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
                   <Text style={{ color: C.text, fontSize: 24, fontWeight: '900' }}>{c.name}</Text>
                   <SexMark sex={c.sex} />
                 </View>
+                {ph.shiny ? <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 18, marginTop: 2 }}>✦ A shiny! ✦</Text> : null}
                 <View style={{ marginVertical: 6 }}><TypeChips ph={ph} /></View>
                 <P dim>{SKELETON_NAMES[ph.skel]} · {c.origin === 'bred' ? 'Bred' : 'Wild-born'}</P>
                 {c.mom && c.dad ? <P dim>Child of {c.mom.name} and {c.dad.name}</P> : null}
