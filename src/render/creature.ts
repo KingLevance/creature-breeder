@@ -765,31 +765,48 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         return done();
       }
       {
-        // A shell that grows over the back like a turtle's: it follows the body's curve, with a pale rim and plates.
+        // A sea-turtle carapace: a dome that rises above the back, a row of hexagonal plates down the spine,
+        // seams out to a scalloped pale rim, and a gloss on top.
         if (ph.skel === 'serpent') return false;
-        const shell = mix('#b9824e', e.dark, 0.25), plate = shade(shell, -0.14), rim = '#f1dfb8';
-        const rimW = Math.min(brx, bry) * 0.13, N = 12, outer: number[][] = [], inner: number[][] = [];
-        for (let i = 0; i <= N; i++) {
-          const t = i / N;
-          if (a.flatBack) {
-            const u = -0.85 + 1.3 * t, h = bry * Math.sqrt(Math.max(0, 1 - u * u));
-            outer.push([bx + brx * u, by - h - rimW * 0.6]);
-            inner.unshift([bx + brx * u, by - bry * (0.02 + 0.2 * Math.sin(t * Math.PI))]);
-          } else {
-            const w = -0.85 + 1.5 * t, h = brx * Math.sqrt(Math.max(0, 1 - w * w));
-            outer.push([bx - h - rimW * 0.6, by + bry * w]);
-            inner.unshift([bx - brx * (0.25 + 0.2 * Math.sin(t * Math.PI)), by + bry * w]);
-          }
+        const shell = '#5e8c6a', scute = '#7aa784', seam = '#3b5c45', rim = '#dfe9c6';
+        const dome = Math.min(brx, bry) * 0.34;
+        const crest = (t: number): number[] => {
+          if (a.flatBack) { const u = -0.82 + 1.28 * t, h = bry * Math.sqrt(Math.max(0, 1 - u * u)); return [bx + brx * u, by - h - dome * Math.sin(t * Math.PI)]; }
+          const w = -0.82 + 1.42 * t, h = brx * Math.sqrt(Math.max(0, 1 - w * w));
+          return [bx - h - dome * Math.sin(t * Math.PI), by + bry * w];
+        };
+        // The rim runs low across the flank in the middle and rises to meet the dome at both ends.
+        const rimAt = (t: number): number[] => {
+          const c = crest(t), k = Math.pow(Math.sin(Math.PI * t), 0.55);
+          const base = a.flatBack ? [c[0], by - bry * (0.02 + 0.12 * Math.sin(t * Math.PI))] : [bx - brx * (0.18 + 0.12 * Math.sin(t * Math.PI)), c[1]];
+          return [c[0] + (base[0] - c[0]) * k, c[1] + (base[1] - c[1]) * k];
+        };
+        const P = (t: number, r: number) => { const c = crest(t), q = rimAt(t); return [q[0] + (c[0] - q[0]) * r, q[1] + (c[1] - q[1]) * r]; };
+        const pts = (list: number[][]) => list.map(([x, y]) => f(x) + ' ' + f(y)).join('L');
+        const N = 18, outerL: number[][] = [], innerL: number[][] = [];
+        for (let i = 0; i <= N; i++) { outerL.push(P(i / N, 1)); innerL.unshift(P(i / N, 0)); }
+        p.poly([...outerL, ...innerL], shell);
+        // The scalloped rim.
+        const K = 7, bandTop: number[][] = [];
+        for (let i = 0; i <= N; i++) bandTop.push(P(i / N, 0.22));
+        let d = 'M' + pts(bandTop);
+        for (let k = K; k > 0; k--) {
+          const t0 = k / K, t1 = (k - 1) / K, [mx, my] = P((t0 + t1) / 2, -0.16), [ex, ey] = P(t1, 0);
+          d += `Q${f(mx)} ${f(my)} ${f(ex)} ${f(ey)}`;
         }
-        p.poly([...outer, ...inner], shell);
-        // Plates: seams from the rim up over the dome.
-        for (const t of [0.3, 0.55, 0.8]) {
-          const i = Math.round(t * N), [ox2, oy2] = outer[i], [ix, iy] = inner[N - i];
-          line([[ix + (ox2 - ix) * 0.12, iy + (oy2 - iy) * 0.12], [ix + (ox2 - ix) * 0.85, iy + (oy2 - iy) * 0.85]], plate, 1.2);
+        p.path(d + 'Z', rim, { stroke: seam, sw: 0.8 });
+        // Seams from the spine plates down to the rim, then the plates themselves.
+        const cuts = [0.16, 0.39, 0.61, 0.84];
+        for (const t of cuts) { const [x1, y1] = P(t, 0.24), [x2, y2] = P(t, 0.42); p.line(`M${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}`, seam, 1); }
+        for (let j = 0; j < 3; j++) {
+          const t0 = cuts[j], t1 = cuts[j + 1], w = t1 - t0;
+          const hex = [P(t0, 0.66), P(t0 + w * 0.18, 0.9), P(t1 - w * 0.18, 0.9), P(t1, 0.66), P(t1 - w * 0.18, 0.42), P(t0 + w * 0.18, 0.42)];
+          p.path('M' + pts(hex) + 'Z', scute, { stroke: seam, sw: 1 });
         }
-        line(outer.slice(2, N - 1).map(([x, y], i) => { const [ix, iy] = inner[N - 2 - i]; return [x + (ix - x) * 0.45, y + (iy - y) * 0.45]; }), plate, 1.1);
-        // The pale rim along the lower edge.
-        p.line('M' + inner.map(([x, y]) => f(x) + ' ' + f(y)).join('L'), rim, rimW);
+        // A gloss along the top of the dome.
+        const gl: number[][] = [];
+        for (let i = 0; i <= 6; i++) gl.push(P(0.3 + (0.28 * i) / 6, 0.95));
+        p.line('M' + pts(gl), '#ffffff', Math.max(1, dome * 0.18), 0.35);
         return done();
       }
     case 'verdant':

@@ -939,7 +939,6 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const isActor = actor === u.uid;
           const walking = mode === 'walk' && v.alive && u.side === 0;
           const fallDir = u.side === 0 ? -1 : 1;
-          const showBars = v.alive && (mode === 'fight' || u.side === 0);
           return (
             <Animated.View key={`${fightNo}_${u.uid}`} style={{
               position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz,
@@ -985,24 +984,41 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} /> : null}
                 </Animated.View>
                 </Animated.View>
-                {showBars ? (
-                  <View pointerEvents="none" style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
-                    <Bar frac={v.hp / u.max.hp} color={u.side === 0 ? C.good : C.bad} height={5} />
-                    {v.shield > 0 ? <View style={{ marginTop: 1 }}><Bar frac={v.shield / (u.max.hp * 0.6)} color="#9fe8ff" height={3} /></View> : null}
-                    <Text style={{ color: '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>Lv{u.level} {u.name}</Text>
-                  </View>
-                ) : null}
-                {v.alive && v.statuses.length ? (
-                  <View pointerEvents="none" style={{ position: 'absolute', bottom: -9, left: -6, right: -6, flexDirection: 'row', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
-                    {v.statuses.slice(0, 4).map(k => (
-                      <Text key={k} style={{ fontSize: 7, fontWeight: '800', color: '#fff', backgroundColor: isBuff(k) ? '#2e8b57' : '#a8324a', paddingHorizontal: 2, borderRadius: 3, overflow: 'hidden' }}>{STATUS_TAG[k]}</Text>
-                    ))}
-                  </View>
-                ) : null}
               </Pressable>
             </Animated.View>
           );
         })}
+
+        {b ? b.units.map(u => {
+          const v = view[u.uid];
+          if (!v || !v.alive || !(mode === 'fight' || u.side === 0)) return null;
+          const pos = place(u);
+          const a = A(u.uid);
+          return (
+            <Animated.View key={`hud${fightNo}_${u.uid}`} pointerEvents="none" style={{
+              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz,
+              transform: [
+                { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind)) },
+                { translateY: a.oy },
+              ],
+            }}>
+              <View style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
+                <Bar frac={v.hp / u.max.hp} color={u.side === 0 ? C.good : C.bad} height={5} />
+                {v.shield > 0 ? <View style={{ marginTop: 1 }}><Bar frac={v.shield / (u.max.hp * 0.6)} color="#9fe8ff" height={3} /></View> : null}
+                <Text style={{ color: '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>Lv{u.level} {u.name}</Text>
+                {v.statuses.length ? (
+                  <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 2, marginTop: 1 }}>
+                    {v.statuses.slice(0, 4).map(k => (
+                      <View key={k} style={{ backgroundColor: isBuff(k) ? '#2e8b57' : '#a8324a', borderRadius: 4, paddingHorizontal: 3, borderWidth: 1, borderColor: 'rgba(0,0,0,0.35)' }}>
+                        <Text style={{ fontSize: 7.5, fontFamily: F.bold, color: '#fff' }}>{STATUS_TAG[k]}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            </Animated.View>
+          );
+        }) : null}
 
         {b && sel && (sel.target === 'fallen' || sel.target === 'allFallen') ? leftBehind.map(uid => {
           const u = b.units[uid];
