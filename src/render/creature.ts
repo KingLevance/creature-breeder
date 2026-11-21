@@ -763,10 +763,192 @@ function moodMouth(p: Pen, hx: number, hy: number, r: number, mood: string) {
   }
 }
 
+/** Points along the back, rear to front: where each sits on the outline and which way is out. */
+type Spine = { x: number; y: number; nx: number; ny: number }[];
+/** n points along an ellipse's rim between angles t0 and t1 (radians, 0 is the front, -π/2 the top). */
+function ellSpine(cx: number, cy: number, rx: number, ry: number, t0: number, t1: number, n: number): Spine {
+  const out: Spine = [];
+  for (let i = 0; i < n; i++) {
+    const t = t0 + ((t1 - t0) * i) / (n - 1), nx = Math.cos(t) / rx, ny = Math.sin(t) / ry, L = Math.hypot(nx, ny);
+    out.push({ x: cx + rx * Math.cos(t), y: cy + ry * Math.sin(t), nx: nx / L, ny: ny / L });
+  }
+  return out;
+}
+
+/**
+ * A crest along the back from the crest gene: spikes, a mane, plates, quills, a sail or crystals. It goes down
+ * behind the body, with each piece's base a little inside the outline so the body covers it and it grows out
+ * of the back. z scales it to the creature.
+ */
+function drawCrest(p: Pen, ph: Pheno, sp: Spine, z: number) {
+  const kind = ph.crest ?? 'none';
+  if (kind === 'none' || sp.length < 2) return;
+  const c = p.pal, g0 = p.g;
+  p.g = 'back';
+  const n = sp.length;
+  /** Toward the tail along the back, at point i. */
+  const rear = (i: number) => {
+    const a2 = sp[Math.max(0, i - 1)], b2 = sp[Math.min(n - 1, i + 1)], dx = a2.x - b2.x, dy = a2.y - b2.y, L = Math.hypot(dx, dy) || 1;
+    return [dx / L, dy / L];
+  };
+  const P = (q: [number, number]) => f(q[0]) + ' ' + f(q[1]);
+  /** Where a piece at point i reaches: `out` along the outward normal and `back` toward the tail, from `sink` inside. */
+  const at = (i: number, out: number, back = 0, sink = 1.6): [number, number] => {
+    const { x, y, nx, ny } = sp[i], [rx, ry] = rear(i);
+    return [x - nx * sink + nx * out + rx * back, y - ny * sink + ny * out + ry * back];
+  };
+  const side = (i: number, w: number, sink = 1.6): [[number, number], [number, number]] => {
+    const [rx, ry] = rear(i), { x, y, nx, ny } = sp[i];
+    return [[x - nx * sink + rx * w, y - ny * sink + ry * w], [x - nx * sink - rx * w, y - ny * sink - ry * w]];
+  };
+  const swell = (i: number) => 0.55 + 0.45 * Math.sin((Math.PI * (i + 0.5)) / n);
+  z *= 1.7;
+  switch (kind) {
+    case 'spikes':
+      for (let i = 0; i < n; i++) {
+        const h = z * 6.5 * swell(i), [r0, f0] = side(i, z * 2.2), tip = at(i, h, h * 0.35);
+        p.path(`M${P(r0)}L${P(tip)}L${P(f0)}Z`, c.accent);
+        p.line(`M${P(at(i, h * 0.15, z * 0.6))}L${P(at(i, h * 0.8, h * 0.3))}`, '#ffffff', Math.max(0.5, z * 0.5), 0.3);
+      }
+      break;
+    case 'plates':
+      // Rounded, alternating plates like a stegosaur's, each with a darker rim inside.
+      for (let i = 0; i < n; i++) {
+        const h = z * (i % 2 ? 6 : 8) * swell(i), w = z * 3.2 * swell(i), [r0, f0] = side(i, w), tip = at(i, h, h * 0.2);
+        const cr = at(i, h * 0.7, w * 1.05 + h * 0.15), cf = at(i, h * 0.75, -w * 0.9 + h * 0.15);
+        p.path(`M${P(r0)}Q${P(cr)} ${P(tip)}Q${P(cf)} ${P(f0)}Z`, c.accent);
+        p.line(`M${P(at(i, h * 0.18, w * 0.55))}Q${P(at(i, h * 0.62, w * 0.6 + h * 0.15))} ${P(at(i, h * 0.8, h * 0.18))}`, c.accentDark, Math.max(0.6, z * 0.45), 0.55);
+      }
+      break;
+    case 'mane': {
+      // Tufts of hair swept back, growing fuller toward the front.
+      const hair = mix(c.dark, c.accentDark, 0.4);
+      for (let i = 0; i < n; i++) {
+        const k2 = 0.6 + 0.4 * (i / (n - 1)), h = z * 6.5 * k2, w = z * 2.6 * k2, [r0, f0] = side(i, w), tip = at(i, h * 0.75, h * 0.95);
+        p.path(`M${P(f0)}Q${P(at(i, h * 0.95, -w * 0.2))} ${P(tip)}Q${P(at(i, h * 0.3, h * 0.5))} ${P(r0)}Z`, hair);
+      }
+      break;
+    }
+    case 'quills':
+      // Long, thin spines laid back, pale with dark tips.
+      for (let i = 0; i < n * 2 - 1; i++) {
+        const j = i / 2, i0 = Math.floor(j), w2 = j - i0, k2 = swell(Math.min(n - 1, Math.round(j)));
+        const blend = (q: [number, number], q2: [number, number]): [number, number] => [q[0] + (q2[0] - q[0]) * w2, q[1] + (q2[1] - q[1]) * w2];
+        const i1 = Math.min(n - 1, i0 + 1), h = z * (i % 2 ? 6 : 8) * k2;
+        const [r0, f0] = side(i0, z * 0.9), [r1, f1] = side(i1, z * 0.9), tip = blend(at(i0, h * 0.7, h * 0.75), at(i1, h * 0.7, h * 0.75));
+        const a1 = blend(r0, r1), b1 = blend(f0, f1);
+        p.path(`M${P(a1)}L${P(tip)}L${P(b1)}Z`, mix(c.light, '#ffffff', 0.35));
+        const m: [number, number] = [a1[0] + (tip[0] - a1[0]) * 0.62, a1[1] + (tip[1] - a1[1]) * 0.62], m2: [number, number] = [b1[0] + (tip[0] - b1[0]) * 0.62, b1[1] + (tip[1] - b1[1]) * 0.62];
+        p.path(`M${P(m)}L${P(tip)}L${P(m2)}Z`, c.dark, { line: false });
+      }
+      break;
+    case 'sail': {
+      // A webbed sail held up by spines, scooped between them.
+      const tips = sp.map((_, i) => at(i, z * 9 * Math.sin((Math.PI * (i + 0.6)) / (n + 0.2)), z * 1.2));
+      let d = `M${P(at(0, 0, 0, 2.2))}`;
+      tips.forEach((t, i) => {
+        if (i === 0) { d += `L${P(t)}`; return; }
+        const pr = tips[i - 1], mid = at(i, z * 9 * Math.sin((Math.PI * (i + 0.1)) / (n + 0.2)) * 0.62, z * 2.2);
+        d += `Q${P([(pr[0] + t[0]) / 2 * 0.5 + mid[0] * 0.5, (pr[1] + t[1]) / 2 * 0.5 + mid[1] * 0.5])} ${P(t)}`;
+      });
+      d += `L${P(at(n - 1, 0, 0, 2.2))}Z`;
+      p.path(d, mix(c.accent, c.base, 0.25));
+      p.line(tips.map((t, i) => `M${P(at(i, 0.4, 0))}L${P(t)}`).join(''), c.accentDark, Math.max(0.6, z * 0.5), 0.75);
+      break;
+    }
+    case 'crystals':
+      // Gem shards of different heights, each with a lit face and a shaded one.
+      for (let i = 0; i < n; i++) {
+        const h = z * (i % 2 ? 6.5 : 9) * swell(i), w = z * 2.3, lean = (i % 3 - 1) * z * 1.5;
+        const [r0, f0] = side(i, w), sr = at(i, h * 0.72, w * 1.05 + lean * 0.7), sf = at(i, h * 0.72, -w * 1.0 + lean * 0.7), tip = at(i, h, lean), mid = at(i, 0, 0);
+        const glass = mix(c.light, '#ffffff', 0.3);
+        p.path(`M${P(r0)}L${P(sr)}L${P(tip)}L${P(sf)}L${P(f0)}Z`, glass);
+        p.path(`M${P(mid)}L${P(tip)}L${P(sf)}L${P(f0)}Z`, mix(glass, ELEMENTS[ph.el1].glow, 0.35), { line: false });
+        p.path(`M${P(r0)}L${P(sr)}L${P(tip)}L${P(mid)}Z`, c.out, { line: false, op: 0.12 });
+      }
+      break;
+  }
+  p.g = g0;
+}
+
+/**
+ * Ears from the ears gene, on top of the head toward the back. `front` draws only what overlaps the face (the
+ * near floppy ear, which hangs over the side of the head); everything else goes down before the skull, so the
+ * bases tuck under it. A head that is already eared keeps its own big ears.
+ */
+function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
+  const kind = ph.ears ?? 'none';
+  if (kind === 'none' || ph.head === 'eared') return;
+  const c = p.pal, { hx, hy, hr: r } = a;
+  const inner = mix(c.accent, '#ff9fbf', 0.35), back = shade(c.base, -0.07);
+  /** A point at angle t on the skull's rim (0 is the front, -90 the crown), pushed out by `out` radii. */
+  const rim = (t: number, out = 0): [number, number] => { const q = (t * Math.PI) / 180; return [hx + Math.cos(q) * r * (0.92 + out), hy + Math.sin(q) * r * (0.88 + out)]; };
+  /** A pointed ear rising from the rim at angle t, leaning by `tilt` degrees, `h` radii long and `w` wide. */
+  const pointed = (t: number, tilt: number, h: number, w: number, col: string, tuft: boolean) => {
+    const [bx, by] = rim(t, -0.12), q = ((t + tilt) * Math.PI) / 180, ux = Math.cos(q), uy = Math.sin(q), nx = -uy, ny = ux;
+    const tip: [number, number] = [bx + ux * h * r, by + uy * h * r];
+    const L: [number, number] = [bx - nx * w * r, by - ny * w * r], R: [number, number] = [bx + nx * w * r, by + ny * w * r];
+    p.path(`M${f(L[0])} ${f(L[1])}Q${f(L[0] + ux * h * r * 0.6)} ${f(L[1] + uy * h * r * 0.6)} ${f(tip[0])} ${f(tip[1])}Q${f(R[0] + ux * h * r * 0.5)} ${f(R[1] + uy * h * r * 0.5)} ${f(R[0])} ${f(R[1])}Z`, col);
+    const ix = bx + ux * h * r * 0.18, iy = by + uy * h * r * 0.18;
+    p.path(`M${f(ix - nx * w * r * 0.5)} ${f(iy - ny * w * r * 0.5)}Q${f(ix - nx * w * r * 0.3 + ux * h * r * 0.45)} ${f(iy - ny * w * r * 0.3 + uy * h * r * 0.45)} ${f(tip[0] - ux * h * r * 0.16)} ${f(tip[1] - uy * h * r * 0.16)}Q${f(ix + nx * w * r * 0.25 + ux * h * r * 0.4)} ${f(iy + ny * w * r * 0.25 + uy * h * r * 0.4)} ${f(ix + nx * w * r * 0.5)} ${f(iy + ny * w * r * 0.5)}Z`, inner, { line: false });
+    if (tuft) p.path(`M${f(tip[0] - nx * r * 0.06)} ${f(tip[1] - ny * r * 0.06)}L${f(tip[0] + ux * r * 0.42 - nx * r * 0.1)} ${f(tip[1] + uy * r * 0.42 - ny * r * 0.1)}L${f(tip[0] + nx * r * 0.08)} ${f(tip[1] + ny * r * 0.08)}Z`, c.dark, { line: false });
+  };
+  switch (kind) {
+    case 'pointed':
+      if (!front) { pointed(-128, -8, 0.7, 0.26, back, false); pointed(-82, -14, 0.72, 0.27, c.base, false); }
+      break;
+    case 'tufted':
+      if (!front) { pointed(-128, -6, 0.86, 0.24, back, true); pointed(-84, -12, 0.9, 0.25, c.base, true); }
+      break;
+    case 'long':
+      // Tall rabbit ears, leaning back.
+      if (!front) { pointed(-120, -14, 1.35, 0.2, back, false); pointed(-92, -20, 1.42, 0.21, c.base, false); }
+      break;
+    case 'round':
+      if (!front) {
+        for (const [t, col] of [[-132, back], [-80, c.base]] as [number, string][]) {
+          const [ex, ey] = rim(t, 0.12);
+          p.ell(ex, ey, r * 0.32, r * 0.3, col);
+          p.ell(ex + r * 0.03, ey + r * 0.02, r * 0.18, r * 0.17, inner, { line: false });
+        }
+      }
+      break;
+    case 'floppy': {
+      // Long ears that hang down the sides of the head: the far one behind the head, the near one over it.
+      const ear = (x0: number, y0: number, x1: number, y1: number, w: number, col: string) => {
+        const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+        p.path(`M${f(x0 - w * 0.4)} ${f(y0)}Q${f(mx - w * 1.25)} ${f(my - w * 0.2)} ${f(x1 - w * 0.25)} ${f(y1)}Q${f(x1 + w * 0.35)} ${f(y1 + w * 0.6)} ${f(x1 + w * 0.5)} ${f(y1 - w * 0.2)}Q${f(mx + w * 0.55)} ${f(my)} ${f(x0 + w * 0.5)} ${f(y0)}Z`, col);
+      };
+      if (!front) ear(hx - r * 0.42, hy - r * 0.78, hx - r * 1.12, hy + r * 0.28, r * 0.42, back);
+      else ear(hx - r * 0.12, hy - r * 0.86, hx - r * 0.66, hy + r * 0.36, r * 0.4, c.base);
+      break;
+    }
+    case 'fins': {
+      // Fanned fins swept back from the cheek, with ribs, and a smaller one peeking over the crown.
+      if (front) break;
+      const fin = (bx0: number, by0: number, bx1: number, by1: number, tips: [number, number][], col: string) => {
+        let d = `M${f(bx0)} ${f(by0)}`;
+        tips.forEach(([tx, ty], i) => {
+          const [px, py] = i ? tips[i - 1] : [bx0, by0];
+          d += `Q${f((px + tx) / 2 + (bx0 - bx1) * 0.08)} ${f((py + ty) / 2 + (by0 - by1) * 0.08)} ${f(tx)} ${f(ty)}`;
+        });
+        d += `L${f(bx1)} ${f(by1)}Z`;
+        p.path(d, col);
+        const mx = (bx0 + bx1) / 2, my = (by0 + by1) / 2;
+        p.line(tips.map(([tx, ty]) => `M${f(mx)} ${f(my)}L${f(mx + (tx - mx) * 0.85)} ${f(my + (ty - my) * 0.85)}`).join(''), c.accentDark, Math.max(0.6, r * 0.05), 0.7);
+      };
+      fin(hx - r * 0.2, hy - r * 0.82, hx - r * 0.05, hy - r * 0.7, [[hx - r * 0.5, hy - r * 1.42], [hx - r * 0.18, hy - r * 1.3]], mix(c.accent, c.base, 0.3));
+      fin(hx - r * 0.72, hy - r * 0.42, hx - r * 0.7, hy + r * 0.28, [[hx - r * 1.45, hy - r * 0.78], [hx - r * 1.58, hy - r * 0.2], [hx - r * 1.32, hy + r * 0.4]], c.accent);
+      break;
+    }
+  }
+}
+
 function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose: Pose = 'idle') {
   const c = p.pal;
   const { hx, hy, hr: r } = a;
   drawHorns(p, a, ph, feat);
+  drawEars(p, a, ph, false);
   if (ph.head === 'eared') {
     p.poly([[hx - r * 0.85, hy - r * 0.3], [hx - r * 0.75, hy - r * 1.45], [hx - r * 0.1, hy - r * 0.8]], c.base);
     p.poly([[hx + r * 0.1, hy - r * 0.8], [hx + r * 0.6, hy - r * 1.5], [hx + r * 0.85, hy - r * 0.45]], c.base);
@@ -837,6 +1019,13 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
       shadeSkullJaw();
   }
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
+  if (ph.ears === 'floppy' && ph.head !== 'eared') {
+    // The near floppy ear hangs over the side of the head, so it gets its own outline against it.
+    const g0 = p.g;
+    p.g = 'front';
+    drawEars(p, a, ph, true);
+    p.g = g0;
+  }
   p.g = 'face';
   drawEyes(p, hx, hy, r, ph, ko, pose);
   const open = !ko && (pose === 'attack' || pose === 'cast' || pose === 'hurt' || pose === 'roar');
@@ -1747,15 +1936,70 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       return `M${f(bx)} ${f(by2)}L${f(bx + ux * hr * 0.55)} ${f(by2 + uy * hr * 0.55)}`;
     };
     p.line(crease(0.3) + crease(-0.3), pal.out, Math.max(0.5, hr * 0.14), 0.6);
+    if (ph.feet === 'claws' || ph.feet === 'talons') {
+      // Clawed creatures have claws on their hands too.
+      const ink = ph.feet === 'talons' ? '#2b2330' : '#f4ecd8';
+      for (const o of [-0.45, 0, 0.45]) {
+        const bx = hx + ux * hr * 0.9 + nx * hr * o, by2 = hy + uy * hr * 0.9 + ny * hr * o;
+        p.path(`M${f(bx - nx * hr * 0.16)} ${f(by2 - ny * hr * 0.16)}L${f(bx + ux * hr * 0.5)} ${f(by2 + uy * hr * 0.5)}L${f(bx + nx * hr * 0.16)} ${f(by2 + ny * hr * 0.16)}Z`, ink, { line: false });
+      }
+    }
   };
   /** An arm, blended from its resting place toward a strike, a raised cast, or a guard. Each target: [x, y, bendx, bendy]. */
   const blendArm = (rest: number[], strike: number[], up: number[], block: number[]) =>
     rest.map((v, i) => v + (strike[i] - v) * reach + (up[i] - v) * raise + (block[i] - v) * guard);
   let a: Anchors;
-  /** A foot with two toe lines, pointing forward; the toes tip up as the foot lifts. */
+  /**
+   * A foot, pointing forward, from the feet gene: a paw with two toe lines, a paw with claws, a hoof, a bird's
+   * talons, or a webbed foot. The toes tip up as the foot lifts.
+   */
   const paw = (x: number, y: number, w: number, col: string, lift = 0) => {
-    p.ell(x + w * 0.22, y, w * 0.82, w * 0.46, col, lift ? { rot: -lift * 4 } : undefined);
-    p.line(`M${f(x + w * 0.5)} ${f(y - w * 0.08)}l0 ${f(w * 0.36)}M${f(x + w * 0.8)} ${f(y - w * 0.02)}l0 ${f(w * 0.3)}`, pal.out, 0.7);
+    const ang = (-lift * 4 * Math.PI) / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+    /** A point on the foot, relative to its centre in foot widths, turned with the lift. */
+    const P = (u: number, v: number): [number, number] => [x + (u * ca - v * sa) * w, y + (u * sa + v * ca) * w];
+    const M = (pts: [number, number][]) => 'M' + pts.map(q => f(q[0]) + ' ' + f(q[1])).join('L') + 'Z';
+    const Q = (u: number, v: number) => P(u, v).map(f).join(' ');
+    switch (ph.feet) {
+      case 'hooves': {
+        // A hoof: a dark, slanted horn block under a band of hide, with a shine on its face.
+        const horn = shade(mix(pal.dark, '#3b2f2b', 0.55), col === far ? -0.06 : 0);
+        p.path(M([P(-0.5, -0.42), P(0.5, -0.46), P(0.9, 0.46), P(-0.56, 0.46)]), horn);
+        p.path(`M${Q(-0.51, -0.52)}L${Q(0.51, -0.56)}L${Q(0.56, -0.3)}Q${Q(0.05, -0.2)} ${Q(-0.52, -0.26)}Z`, col, { line: false });
+        p.line(`M${Q(0.5, -0.08)}L${Q(0.7, 0.34)}`, '#ffffff', Math.max(0.5, w * 0.1), 0.3);
+        p.line(`M${Q(0.28, -0.08)}L${Q(0.36, 0.44)}`, pal.out, Math.max(0.5, w * 0.08), 0.6);
+        return;
+      }
+      case 'talons': {
+        // A bird's foot: three toes forward and one back, each ending in a dark hooked claw.
+        const claw = '#2b2330';
+        const toes: [number, number][] = [[1.18, 0.36], [0.8, 0.42], [-0.62, 0.4]];
+        for (const [u, v] of toes) {
+          const [x0, y0] = P(0, 0), [x1, y1] = P(u, v);
+          p.taper(x0, y0, x1, y1, w * 0.48, w * 0.28, col);
+        }
+        p.ell(...P(0, 0.02), w * 0.44, w * 0.38, col);
+        for (const [u, v] of toes) {
+          const d = u > 0 ? 1 : -1;
+          p.path(`M${Q(u - 0.02 * d, v - 0.16)}Q${Q(u + 0.36 * d, v - 0.14)} ${Q(u + 0.4 * d, v + 0.14)}Q${Q(u + 0.16 * d, v + 0.04)} ${Q(u, v + 0.12)}Z`, claw, { line: false });
+        }
+        return;
+      }
+      case 'webbed': {
+        // A wide flipper of a foot: three long toes with webbing scooped between them.
+        const web = mix(col, pal.light, 0.25);
+        p.path(`M${Q(-0.45, -0.2)}L${Q(0.25, -0.34)}L${Q(1.28, -0.02)}Q${Q(0.86, 0.12)} ${Q(1.38, 0.26)}Q${Q(0.88, 0.36)} ${Q(1.2, 0.5)}L${Q(-0.5, 0.48)}Z`, web);
+        p.path(`M${Q(-0.45, -0.2)}L${Q(0.25, -0.34)}Q${Q(0.4, 0.05)} ${Q(-0.1, 0.12)}Q${Q(-0.5, 0.15)} ${Q(-0.45, -0.2)}Z`, col, { line: false });
+        p.line(`M${Q(0.1, -0.05)}L${Q(1.2, 0.04)}M${Q(0.1, 0.1)}L${Q(1.28, 0.28)}M${Q(0.05, 0.25)}L${Q(1.1, 0.46)}`, pal.out, Math.max(0.5, w * 0.08), 0.45);
+        return;
+      }
+      default:
+        p.ell(x + w * 0.22, y, w * 0.82, w * 0.46, col, lift ? { rot: -lift * 4 } : undefined);
+        if (ph.feet === 'claws') {
+          // Three pale claws poking out of the front of the paw.
+          for (const v of [-0.22, 0.02, 0.24]) p.path(M([P(0.92, v - 0.1), P(1.28, v + 0.1), P(0.9, v + 0.1)]), '#f4ecd8');
+        }
+        p.line(`M${f(x + w * 0.5)} ${f(y - w * 0.08)}l0 ${f(w * 0.36)}M${f(x + w * 0.8)} ${f(y - w * 0.02)}l0 ${f(w * 0.3)}`, pal.out, 0.7);
+    }
   };
 
   p.g = 'aura';
@@ -1778,6 +2022,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       lean(48, hip);
       a = { back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.9), hx: 53 + sp.hdx, hy: by - bry - hr * 0.5 + breathe * 0.4 + sp.hdy, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 44, wy: by - bry * 0.45, backx: 40, backy: by - bry * 0.72 };
       drawWing(p, a, ph, k, flap, true);
+      drawCrest(p, ph, ellSpine(48, by, brx, bry, Math.PI - 0.1, 1.5 * Math.PI - 0.3, 5), k * b);
       p.g = 'back';
       leg(52, hip, 54 - sw * 6 + ft, 87.6, 8.5 * ls, 5.4 * ls, far, undefined, undefined, 1, liftB);
       freePaw(54 - sw * 6 + ft, 89.2, 5.6 * ls, far, liftB);
@@ -1823,6 +2068,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       lean(46 + brx * (sp.px ?? 0), by);
       a = { flatBack: true, back: ellFrame(46, by, brx, bry, -Math.PI / 2 - 0.3), hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
+      drawCrest(p, ph, ellSpine(46, by, brx, bry, Math.PI + 0.55, 1.5 * Math.PI + 0.65, 6), k * b);
       const hip = by + bry * 0.3;
       const fx = 46 + brx * 0.55, rx = 46 - brx * 0.6;
       p.g = 'back';
@@ -1857,6 +2103,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       lean(thx + thr * (sp.px ?? 0), by);
       a = { flatBack: true, back: ellFrame(abx, by - 2, arx, ary, -Math.PI / 2 - 0.2), hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
       drawWing(p, a, ph, k, flap, true);
+      drawCrest(p, ph, ellSpine(abx, by - 2, arx, ary, Math.PI + 0.55, 1.5 * Math.PI + 0.75, 5), k * b * 0.9);
       p.g = 'back';
       for (let i = 0; i < 3; i++) {
         const lx = thx - 9 + i * 5.5, s2 = (i % 2 === 0 ? sw : -sw) * 4;
@@ -1897,6 +2144,19 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
           ws.push(w * (g < 0.3 ? 0.32 + 0.68 * (g / 0.3) : g < 0.7 ? 1 : 1 - 0.2 * ((g - 0.7) / 0.3)));
         }
       }
+      {
+        // The crest runs along the top of the coils and up the neck, on the side away from the belly.
+        const spn: Spine = [];
+        for (let i = 0; i < pts.length; i++) {
+          const g = i / (pts.length - 1);
+          if (g < 0.32 || g > 0.9 || i % 2) continue;
+          const a0 = pts[Math.max(0, i - 1)], a1 = pts[Math.min(pts.length - 1, i + 1)];
+          const dx = a1[0] - a0[0], dy = a1[1] - a0[1], L = Math.hypot(dx, dy) || 1, nx = dy / L, ny = -dx / L;
+          spn.push({ x: pts[i][0] + nx * ws[i] / 2, y: pts[i][1] + ny * ws[i] / 2, nx, ny });
+        }
+        drawCrest(p, ph, spn, k * b * 0.85);
+        p.g = 'body';
+      }
       p.ribbon(pts, ws, pal.base);
       if (ph.pattern === 'belly') {
         // The pale belly follows the underside of the ribbon (its left edge as drawn, which is the underside of
@@ -1928,6 +2188,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       lean(48, by);
       a = { flatBack: true, back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.35), hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
+      drawCrest(p, ph, ellSpine(48, by, brx, bry, Math.PI + 0.45, 1.5 * Math.PI + 0.45, 6), k * b);
       p.g = 'body';
       // Every swimmer has a fluke; the tail gene adds to it.
       const fl = sw * 4 + breathe * 2;
@@ -1953,6 +2214,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       lean(50, cy + ry);
       a = { back: ellFrame(50, cy, rx, ry * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - ry * 0.35, hr, bx: 50, by: cy + ry * 0.45, brx: rx * 0.8, bry: ry * 0.75, tx: 44, ty: cy + ry * 1.25, tdir: -0.9, wx: 43, wy: cy - ry * 0.1, backx: 40, backy: cy - ry * 0.55 };
       drawWing(p, a, ph, k, flap, true);
+      drawCrest(p, ph, ellSpine(50, cy, rx, ry, Math.PI + 0.1, 1.5 * Math.PI - 0.25, 5), k * b * 0.85);
       const wv = o.rig && !o.walking ? 0 : Math.sin(phase * TAU) * 1.6;
       p.g = 'back';
       p.ell(50 - rx * 0.75, cy + ry * 0.6 - wv, 3.4 * ls * lw, 3 * ls * lw, far);

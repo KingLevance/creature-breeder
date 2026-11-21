@@ -6,7 +6,7 @@ import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
 import { Creature, MAX_LEVEL, PedNode, STAGE_NAMES, XpResult, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
 import { NAME_MAX, expandRoster, release, releaseMany, releaseProblem, releaseValue, renameCreature, rosterExpandCost, train, trainCost, useScan } from '../game/economy';
-import { FRAME_NAMES, HEIGHT_NAMES, PARTS, PART_KEYS, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
+import { FRAME_NAMES, HEIGHT_NAMES, PartKey, PARTS, PART_KEYS, Pheno, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
 import { sfx } from './audio';
@@ -30,6 +30,12 @@ function PedCard({ n, label, size }: { n?: PedNode; label: string; size: number 
 }
 
 function capital(s: string) { return s.charAt(0).toUpperCase() + s.slice(1); }
+/** Why a looks gene doesn't show on this body, if it doesn't. It still passes down. */
+function unseen(k: PartKey, ph: Pheno): string | null {
+  if (k === 'feet' && ph.skel !== 'biped' && ph.skel !== 'quad') return 'no feet to show';
+  if (k === 'ears' && ph.head === 'eared' && ph.ears !== 'none') return 'hidden by its big ears';
+  return null;
+}
 
 export function CreatureDetail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const { save, mutate } = useGame();
@@ -164,7 +170,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             <GeneRow label="Body" shown={SKELETON_NAMES[ph.skel]} hid={c.scanned ? SKELETON_NAMES[hidden(c.g.skel, ph.skel) as keyof typeof SKELETON_NAMES] : undefined} scanned={c.scanned} />
             <GeneRow label="Element" shown={ELEMENTS[ph.el1].name} hid={c.scanned ? c.g.el1.filter(e => e !== ph.el1).map(e => ELEMENTS[e].name)[0] : undefined} scanned={c.scanned} />
             <GeneRow label="2nd element" shown={ph.el2 ? ELEMENTS[ph.el2].name : 'None'} hid={c.scanned ? c.g.el2.map(e => (e === 'none' ? 'None' : ELEMENTS[e].name)).filter(n => n !== (ph.el2 ? ELEMENTS[ph.el2].name : 'None'))[0] : undefined} scanned={c.scanned} />
-            {PART_KEYS.map(k => { const v = ph[k] ?? PARTS[k][0]; return <GeneRow key={k} label={PART_LABELS[k]} shown={capital(v)} hid={c.scanned && c.g[k] ? capital(hidden(c.g[k] as [string, string], v) ?? '') || undefined : undefined} scanned={c.scanned} />; })}
+            {PART_KEYS.map(k => { const v = ph[k] ?? PARTS[k][0]; return <GeneRow key={k} label={PART_LABELS[k]} shown={capital(v) + (unseen(k, ph) ? ` · ${unseen(k, ph)}` : '')} hid={c.scanned && c.g[k] ? capital(hidden(c.g[k] as [string, string], v) ?? '') || undefined : undefined} scanned={c.scanned} />; })}
             <GeneRow label="Shiny" shown={ph.shiny ? '✦ Yes' : 'No'} hid={c.scanned && !ph.shiny && c.g.shiny && (c.g.shiny[0] === 1 || c.g.shiny[1] === 1) ? 'shiny' : undefined} scanned={c.scanned} />
             <GeneRow label="Markings" shown={`Style ${(ph.mark ?? 0) + 1}`} hid={c.scanned && c.g.mark && c.g.mark[0] !== c.g.mark[1] ? `Style ${Math.max(...c.g.mark) + 1}` : undefined} scanned={c.scanned} />
             <GeneRow label="Stance" shown={stanceName(ph.skel, ph.stance ?? 0)} hid={c.scanned && c.g.stance && c.g.stance[0] !== c.g.stance[1] ? stanceName(ph.skel, Math.max(...c.g.stance)) : undefined} scanned={c.scanned} />

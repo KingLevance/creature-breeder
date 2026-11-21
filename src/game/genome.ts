@@ -35,10 +35,14 @@ export const SKELETON_NAMES: Record<Skeleton, string> = {
 };
 export const PARTS = {
   head: ['round', 'snout', 'beak', 'blunt', 'long', 'eared', 'frill', 'skull'],
+  ears: ['none', 'pointed', 'round', 'floppy', 'tufted', 'long', 'fins'],
   eyes: ['round', 'big', 'slit', 'sleepy', 'multi', 'glow'],
   horns: ['none', 'nubs', 'curved', 'spike', 'antenna', 'antlers', 'crown', 'crystal'],
+  // Along the back.
+  crest: ['none', 'spikes', 'mane', 'plates', 'quills', 'sail', 'crystals'],
   wings: ['none', 'feather', 'bat', 'insect', 'flipper', 'fin', 'energy'],
   tail: ['stub', 'long', 'tuft', 'fan', 'club', 'whip', 'stinger', 'plume'],
+  feet: ['paws', 'claws', 'hooves', 'talons', 'webbed'],
   pattern: ['plain', 'belly', 'spots', 'stripes', 'bands', 'mask', 'stars'],
   tone: ['base', 'pale', 'deep', 'warm', 'cool', 'ashen', 'gilded', 'melanic', 'albino'],
   // Eye colour: brown is dominant, as in people; the bright colours are recessive.
@@ -50,12 +54,12 @@ export type PartKey = keyof typeof PARTS;
 export const PART_KEYS = Object.keys(PARTS) as PartKey[];
 export const PART_LABELS: Record<PartKey, string> = {
   head: 'Head', eyes: 'Eyes', horns: 'Horns', wings: 'Wings', tail: 'Tail', pattern: 'Pattern', tone: 'Color tone',
-  iris: 'Eye color', mood: 'Expression',
+  iris: 'Eye color', mood: 'Expression', ears: 'Ears', crest: 'Back', feet: 'Feet',
 };
 /** Looks genes added after the first release. Older saves get them from fillGenome, each from its own stream. */
-export const LATE_PARTS: PartKey[] = ['iris', 'mood'];
+export const LATE_PARTS: PartKey[] = ['iris', 'mood', 'ears', 'crest', 'feet'];
 /** How often a wild allele takes its element's favourite. The later looks genes vary more within an element. */
-const PREF_RATE: Partial<Record<PartKey, number>> = { iris: 0.45, mood: 0.3 };
+const PREF_RATE: Partial<Record<PartKey, number>> = { iris: 0.45, mood: 0.3, ears: 0.4, crest: 0.35, feet: 0.45 };
 /** Wild chance of the recessive shiny allele: about 1 in 200 wild creatures shows it (0.07²), 1 in 8 carries it. */
 export const SHINY_ALLELE = 0.07;
 
@@ -80,6 +84,9 @@ export interface Genome {
   tone: Pair<string>;
   iris: Pair<string>;
   mood: Pair<string>;
+  ears: Pair<string>;
+  crest: Pair<string>;
+  feet: Pair<string>;
   /** Shiny gene: 1 is the recessive shiny allele, which only shows when both are 1 (a rare alternate colouring). */
   shiny: Pair<number>;
   /** Glass cannon (+2) to tank (-2). Averaged. */
@@ -125,6 +132,9 @@ export interface Pheno {
   /** Later looks genes: optional, because pedigree snapshots from older saves don't have them. */
   iris?: string;
   mood?: string;
+  ears?: string;
+  crest?: string;
+  feet?: string;
   shiny?: boolean;
   build: number;
   pot: Record<StatKey, number>;
@@ -176,25 +186,25 @@ export function express(g: Genome): Pheno {
 
 /** Parts an element tends to bring, used when making wild creatures so they look like their type. */
 const EL_PARTS: Partial<Record<ElementId, Partial<Record<PartKey, string[]>>>> = {
-  ember: { tail: ['plume', 'tuft'], horns: ['curved', 'nubs'], iris: ['amber', 'red', 'gold'], mood: ['fierce', 'cheerful'] },
-  tide: { wings: ['fin', 'flipper'], tail: ['fan'], iris: ['blue'], mood: ['calm', 'cheerful'] },
-  verdant: { horns: ['antlers', 'nubs'], tail: ['tuft', 'fan'], pattern: ['spots', 'belly'], iris: ['green', 'amber'], mood: ['calm', 'cheerful', 'shy'] },
-  spark: { pattern: ['stripes'], tail: ['whip'], horns: ['spike'], iris: ['gold', 'blue'], mood: ['cheerful', 'goofy'] },
-  frost: { horns: ['crystal', 'spike'], wings: ['flipper'], iris: ['blue', 'silver'], mood: ['calm', 'shy'] },
-  brawn: { head: ['blunt'], pattern: ['bands'], tail: ['club', 'stub'], iris: ['brown', 'red'], mood: ['fierce', 'grumpy'] },
-  venom: { tail: ['stinger', 'whip'], head: ['long'], eyes: ['slit'], iris: ['green', 'violet'], mood: ['smug', 'fierce'] },
-  terra: { head: ['snout', 'blunt'], tail: ['club'], pattern: ['belly'], iris: ['brown', 'amber'], mood: ['grumpy', 'calm'] },
-  gale: { wings: ['feather'], head: ['beak'], tail: ['fan'], iris: ['silver', 'blue'], mood: ['cheerful', 'smug'] },
-  mind: { eyes: ['big', 'glow'], horns: ['crown'], pattern: ['mask'], iris: ['violet'], mood: ['calm', 'smug'] },
-  swarm: { wings: ['insect'], horns: ['antenna'], eyes: ['multi'], iris: ['amber', 'red'], mood: ['goofy', 'fierce'] },
-  stone: { head: ['blunt'], horns: ['nubs', 'spike'], tail: ['club'], iris: ['brown', 'silver'], mood: ['grumpy', 'calm'] },
-  spirit: { eyes: ['glow'], tail: ['plume'], head: ['skull', 'round'], iris: ['silver', 'blue'], mood: ['shy', 'calm'] },
-  wyrm: { wings: ['bat'], horns: ['curved', 'crown'], tail: ['long', 'whip'], head: ['frill', 'long'], iris: ['gold', 'red'], mood: ['fierce', 'smug'] },
-  shade: { eyes: ['glow', 'slit'], head: ['eared'], pattern: ['mask'], iris: ['red', 'violet'], mood: ['smug', 'fierce'] },
-  forge: { pattern: ['bands'], horns: ['spike'], head: ['blunt'], iris: ['amber', 'red'], mood: ['grumpy', 'fierce'] },
-  glimmer: { wings: ['insect', 'energy'], horns: ['antenna'], pattern: ['stars'], iris: ['violet', 'gold'], mood: ['cheerful', 'shy'] },
-  radiant: { wings: ['energy', 'feather'], horns: ['crown'], pattern: ['stars'], iris: ['gold'], mood: ['calm', 'cheerful'] },
-  void: { wings: ['energy'], pattern: ['stars'], eyes: ['glow'], horns: ['crystal'], iris: ['violet', 'silver'], mood: ['calm', 'smug'] },
+  ember: { tail: ['plume', 'tuft'], horns: ['curved', 'nubs'], iris: ['amber', 'red', 'gold'], mood: ['fierce', 'cheerful'], ears: ['pointed'], crest: ['spikes', 'mane'], feet: ['claws'] },
+  tide: { wings: ['fin', 'flipper'], tail: ['fan'], iris: ['blue'], mood: ['calm', 'cheerful'], ears: ['fins'], crest: ['sail'], feet: ['webbed'] },
+  verdant: { horns: ['antlers', 'nubs'], tail: ['tuft', 'fan'], pattern: ['spots', 'belly'], iris: ['green', 'amber'], mood: ['calm', 'cheerful', 'shy'], ears: ['floppy', 'long', 'round'], crest: ['quills'], feet: ['paws', 'hooves'] },
+  spark: { pattern: ['stripes'], tail: ['whip'], horns: ['spike'], iris: ['gold', 'blue'], mood: ['cheerful', 'goofy'], ears: ['pointed', 'tufted', 'long'], crest: ['quills', 'spikes'], feet: ['paws'] },
+  frost: { horns: ['crystal', 'spike'], wings: ['flipper'], iris: ['blue', 'silver'], mood: ['calm', 'shy'], ears: ['round', 'pointed'], crest: ['crystals'], feet: ['paws', 'claws'] },
+  brawn: { head: ['blunt'], pattern: ['bands'], tail: ['club', 'stub'], iris: ['brown', 'red'], mood: ['fierce', 'grumpy'], ears: ['round'], crest: ['mane'], feet: ['hooves', 'claws'] },
+  venom: { tail: ['stinger', 'whip'], head: ['long'], eyes: ['slit'], iris: ['green', 'violet'], mood: ['smug', 'fierce'], ears: ['fins'], crest: ['spikes', 'quills'], feet: ['claws'] },
+  terra: { head: ['snout', 'blunt'], tail: ['club'], pattern: ['belly'], iris: ['brown', 'amber'], mood: ['grumpy', 'calm'], ears: ['round', 'floppy'], crest: ['plates'], feet: ['hooves', 'claws'] },
+  gale: { wings: ['feather'], head: ['beak'], tail: ['fan'], iris: ['silver', 'blue'], mood: ['cheerful', 'smug'], ears: ['tufted', 'long'], crest: ['mane'], feet: ['talons'] },
+  mind: { eyes: ['big', 'glow'], horns: ['crown'], pattern: ['mask'], iris: ['violet'], mood: ['calm', 'smug'], ears: ['long', 'round'], crest: ['mane'], feet: ['paws'] },
+  swarm: { wings: ['insect'], horns: ['antenna'], eyes: ['multi'], iris: ['amber', 'red'], mood: ['goofy', 'fierce'], ears: ['none'], crest: ['spikes'], feet: ['claws'] },
+  stone: { head: ['blunt'], horns: ['nubs', 'spike'], tail: ['club'], iris: ['brown', 'silver'], mood: ['grumpy', 'calm'], ears: ['round'], crest: ['plates', 'crystals'], feet: ['hooves'] },
+  spirit: { eyes: ['glow'], tail: ['plume'], head: ['skull', 'round'], iris: ['silver', 'blue'], mood: ['shy', 'calm'], ears: ['floppy', 'long'], crest: ['none'], feet: ['paws'] },
+  wyrm: { wings: ['bat'], horns: ['curved', 'crown'], tail: ['long', 'whip'], head: ['frill', 'long'], iris: ['gold', 'red'], mood: ['fierce', 'smug'], ears: ['fins', 'pointed'], crest: ['spikes', 'sail', 'plates'], feet: ['talons', 'claws'] },
+  shade: { eyes: ['glow', 'slit'], head: ['eared'], pattern: ['mask'], iris: ['red', 'violet'], mood: ['smug', 'fierce'], ears: ['pointed', 'tufted'], crest: ['quills', 'spikes'], feet: ['claws'] },
+  forge: { pattern: ['bands'], horns: ['spike'], head: ['blunt'], iris: ['amber', 'red'], mood: ['grumpy', 'fierce'], ears: ['round'], crest: ['plates'], feet: ['hooves'] },
+  glimmer: { wings: ['insect', 'energy'], horns: ['antenna'], pattern: ['stars'], iris: ['violet', 'gold'], mood: ['cheerful', 'shy'], ears: ['long', 'pointed'], crest: ['crystals'], feet: ['paws'] },
+  radiant: { wings: ['energy', 'feather'], horns: ['crown'], pattern: ['stars'], iris: ['gold'], mood: ['calm', 'cheerful'], ears: ['pointed'], crest: ['mane'], feet: ['talons', 'paws'] },
+  void: { wings: ['energy'], pattern: ['stars'], eyes: ['glow'], horns: ['crystal'], iris: ['violet', 'silver'], mood: ['calm', 'smug'], ears: ['none'], crest: ['crystals'], feet: ['claws'] },
 };
 
 /** Wild marking alleles: the dominant style 0 is the rarest allele, so all three styles turn up often. */
@@ -286,7 +296,7 @@ export function wildGenome(rng: Rng, o: WildOpts): Genome {
   };
 }
 /** The later looks genes as an object, rolled in a fixed order. */
-const lateParts = (roll: (k: PartKey) => Pair<string>) => Object.fromEntries(LATE_PARTS.map(k => [k, roll(k)])) as Pick<Genome, 'iris' | 'mood'>;
+const lateParts = (roll: (k: PartKey) => Pair<string>) => Object.fromEntries(LATE_PARTS.map(k => [k, roll(k)])) as Pick<Genome, 'iris' | 'mood' | 'ears' | 'crest' | 'feet'>;
 
 /** Saves from before marking styles and hue existed: give those genomes alleles, stable per creature. */
 export function fillGenome(g: Genome, key: string) {
