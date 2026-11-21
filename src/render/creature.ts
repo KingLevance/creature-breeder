@@ -735,7 +735,19 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno, cue = 1) {
   // Painted element markings go first, so the belly patch, the arms and the shading all sit over them.
   if (isSkin(ph)) markStyle(p, a, ph.el1, cue, 0, ph, ph.mark ?? 0);
   switch (ph.pattern) {
-    case 'belly': p.ell(bx + brx * 0.1, by + bry * 0.38, brx * 0.68, bry * 0.5, c.light, { line: false }); break;
+    case 'belly':
+      if (a.flatBack) {
+        // On a long body the pale belly runs along the underside, out to the outline and following its curve,
+        // tapering off toward chest and hips; a floating oval on the flank looked stuck on, worst on bulky ones.
+        const lo: string[] = [], hi: string[] = [], N = 14, u0 = -0.86, u1 = 0.88;
+        for (let i = 0; i <= N; i++) {
+          const t = i / N, u = u0 + (u1 - u0) * t, yb = by + bry * Math.sqrt(Math.max(0, 1 - u * u)) * 0.99;
+          lo.push(f(bx + brx * u) + ' ' + f(yb));
+          hi.unshift(f(bx + brx * u) + ' ' + f(yb - bry * 0.46 * Math.pow(Math.sin(Math.PI * t), 0.75)));
+        }
+        p.path('M' + lo.join('L') + 'L' + hi.join('L') + 'Z', c.light, { line: false });
+      } else p.ell(bx + brx * 0.1, by + bry * 0.38, brx * 0.68, bry * 0.5, c.light, { line: false });
+      break;
     case 'spots':
       p.dot(bx - brx * 0.4, by - bry * 0.25, bry * 0.2, c.mark, 0.7); p.dot(bx + brx * 0.05, by - bry * 0.45, bry * 0.15, c.mark, 0.7);
       p.dot(bx - brx * 0.1, by + bry * 0.2, bry * 0.17, c.mark, 0.7); p.dot(bx + brx * 0.45, by - bry * 0.1, bry * 0.13, c.mark, 0.7);
@@ -1411,7 +1423,7 @@ interface StancePose { lean: number; drop: number; hdx: number; hdy: number; px?
 const S0: StancePose = { lean: 0, drop: 0, hdx: 0, hdy: 0 };
 const STANCES: Record<Skeleton, StancePose[]> = {
   // Ready: a boxer's crouch, upright with knees bent, feet wide and fists up. Proud: chest out, leaning back.
-  // Relaxed: settled back on its heels, chin tucked, hands resting on its belly.
+  // Relaxed: settled back on its heels, chin up a little, a hand on its hip with the elbow out behind.
   biped: [S0, { lean: 2, drop: 5, hdx: 1, hdy: 2, ft: 9 }, { lean: -9, drop: 0, hdx: -1, hdy: -3, ft: 2, sx: 2 }, { lean: -5, drop: 1, hdx: -1, hdy: 3, ft: -1, sx: -1 }],
   // Prowl: low, stalking, head at shoulder height. Proud: chest and neck up. Hunched: a play-bow, front down.
   quad: [S0, { lean: 3, drop: 8, hdx: 3, hdy: 11, ft: 4 }, { lean: -12, drop: 0, hdx: -2, hdy: -8, sx: 4 }, { lean: 16, drop: 1, hdx: 1, hdy: 2, px: -0.7, ft: 2 }],
@@ -1619,7 +1631,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
         const rest = o.ko ? [restX, by + 5, (50 + restX) / 2, (by - bry * 0.3 + by + 5) / 2]
           : ph.stance === 1 ? [62, by - bry * 0.4, 60, by + bry * 0.12]
           : ph.stance === 2 ? [46 - sw * 3, by + bry * 0.38, 51, by + bry * 0.05]
-          : ph.stance === 3 ? [55 - sw * 2, by + bry * 0.24, 59, by + bry * 0.02]
+          : ph.stance === 3 ? [45, by + bry * 0.3, 38, by - bry * 0.02]
           : [restX, by + 5, (50 + restX) / 2 + 1, (by - bry * 0.3 + by + 5) / 2];
         const [ex, ey, cx, cy] = blendArm(rest, [66, by - bry * 0.45, 60, by - bry * 0.05], [60, by - bry * 1.05, 59, by - bry * 0.4], [61, by - bry * 0.42, 59, by + bry * 0.1]);
         arm(50, by - bry * 0.3, ex, ey, cx, cy, 6.6 * ls, 4.3 * ls, pal.base, true);
