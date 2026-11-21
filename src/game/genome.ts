@@ -88,6 +88,11 @@ export interface Genome {
   hue: Pair<number>;
   /** How it stands: 0 upright, 1 prowling low, 2 proud and chest-out, 3 hunched. The lower number is dominant. */
   stance: Pair<number>;
+  /** Body proportions, -2..2 per allele and averaged, so children land between their parents: */
+  /** how thick the body and limbs are, slender (-2) to bulky (+2), */
+  girth: Pair<number>;
+  /** and how tall it stands, squat and short-legged (-2) to long-legged and lanky (+2). */
+  height: Pair<number>;
 }
 
 /** What actually shows. */
@@ -111,6 +116,9 @@ export interface Pheno {
   mark?: number;
   hue?: number;
   stance?: number;
+  /** Proportions, -1..1: thin to thick, and short to tall. Optional for older snapshots. */
+  girth?: number;
+  height?: number;
 }
 
 function dom<T>(order: readonly T[], pair: Pair<T>): T {
@@ -140,6 +148,8 @@ export function express(g: Genome): Pheno {
     mark: g.mark ? Math.min(g.mark[0], g.mark[1]) : 0,
     hue: g.hue ? ((g.hue[0] + g.hue[1]) / 2) * 8 : 0,
     stance: g.stance ? Math.min(g.stance[0], g.stance[1]) : 0,
+    girth: g.girth ? avg(g.girth) / 2 : 0,
+    height: g.height ? avg(g.height) / 2 : 0,
   };
 }
 
@@ -172,6 +182,11 @@ export const rollMark = (rng: Rng) => { const r = rng(); return r < 0.2 ? 0 : r 
 export const rollStance = (rng: Rng) => { const r = rng(); return r < 0.134 ? 0 : r < 0.293 ? 1 : r < 0.5 ? 2 : 3; };
 export const STANCE_NAMES = ['Upright', 'Prowling', 'Proud', 'Hunched'];
 export const rollHue = (rng: Rng) => rint(rng, -2, 2);
+export const rollShape = (rng: Rng) => rint(rng, -2, 2);
+export const FRAME_NAMES = ['Slender', 'Lean', 'Average', 'Stocky', 'Bulky'];
+export const HEIGHT_NAMES = ['Squat', 'Short', 'Average', 'Tall', 'Lanky'];
+/** A name for a proportion allele (-2..2) or an expressed value (-1..1, pass it times 2). */
+export const shapeName = (names: string[], v: number) => names[Math.max(0, Math.min(4, Math.round(v) + 2))];
 
 export interface WildOpts {
   /** Elements that can show. */
@@ -234,18 +249,23 @@ export function wildGenome(rng: Rng, o: WildOpts): Genome {
     mark: [rollMark(rng), rollMark(rng)],
     hue: [rollHue(rng), rollHue(rng)],
     stance: [rollStance(rng), rollStance(rng)],
+    girth: [rollShape(rng), rollShape(rng)],
+    height: [rollShape(rng), rollShape(rng)],
   };
 }
 
 /** Saves from before marking styles and hue existed: give those genomes alleles, stable per creature. */
 export function fillGenome(g: Genome, key: string) {
-  if (g.mark && g.hue && g.stance) return;
-  let h = 2166136261;
-  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
-  const rng = mulberry32(h >>> 0);
+  if (g.mark && g.hue && g.stance && g.girth && g.height) return;
+  const seed = (k: string) => { let h = 2166136261; for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 16777619); return mulberry32(h >>> 0); };
+  const rng = seed(key);
   if (!g.mark) g.mark = [rollMark(rng), rollMark(rng)];
   if (!g.hue) g.hue = [rollHue(rng), rollHue(rng)];
   if (!g.stance) { rng(); g.stance = [rollStance(rng), rollStance(rng)]; }
+  // Proportions came later still: their own stream, so the genes filled in above stay exactly as they were.
+  const r2 = seed(key + '#shape');
+  if (!g.girth) g.girth = [rollShape(r2), rollShape(r2)];
+  if (!g.height) g.height = [rollShape(r2), rollShape(r2)];
 }
 
 export interface BreedOpts {
@@ -272,12 +292,14 @@ function mutateAllele(rng: Rng, g: Genome, key: keyof Genome, idx: 0 | 1) {
     case 'mark': g.mark[idx] = rint(rng, 0, 2); break;
     case 'hue': g.hue[idx] = clamp(g.hue[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
     case 'stance': g.stance[idx] = rint(rng, 0, 3); break;
+    case 'girth': g.girth[idx] = clamp(g.girth[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
+    case 'height': g.height[idx] = clamp(g.height[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
     case 'bias': break;
     default: (g[key] as Pair<string>)[idx] = pick(rng, PARTS[key as PartKey] as readonly string[]);
   }
 }
 
-const GENE_KEYS: (keyof Genome)[] = ['skel', 'el1', 'el2', 'head', 'eyes', 'horns', 'wings', 'tail', 'pattern', 'tone', 'build', 'hp', 'atk', 'def', 'spd', 'growth', 'slots', 'leg', 'mark', 'hue', 'stance'];
+const GENE_KEYS: (keyof Genome)[] = ['skel', 'el1', 'el2', 'head', 'eyes', 'horns', 'wings', 'tail', 'pattern', 'tone', 'build', 'hp', 'atk', 'def', 'spd', 'growth', 'slots', 'leg', 'mark', 'hue', 'stance', 'girth', 'height'];
 
 /** Each parent passes one random allele per gene slot. Returns the child genome and how many genes mutated. */
 export function breed(rng: Rng, mom: Genome, dad: Genome, o: BreedOpts = {}): { g: Genome; mutations: number } {
@@ -300,6 +322,8 @@ export function breed(rng: Rng, mom: Genome, dad: Genome, o: BreedOpts = {}): { 
     mark: pair(mom.mark ?? [0, 0], dad.mark ?? [0, 0]),
     hue: pair(mom.hue ?? [0, 0], dad.hue ?? [0, 0]),
     stance: pair(mom.stance ?? [0, 0], dad.stance ?? [0, 0]),
+    girth: pair(mom.girth ?? [0, 0], dad.girth ?? [0, 0]),
+    height: pair(mom.height ?? [0, 0], dad.height ?? [0, 0]),
     bias: [0, 1, 2, 3, 4].map(i => [biasFrom(mom, o.momMoves, i), biasFrom(dad, o.dadMoves, i)] as Pair<string | null>),
   };
   let mutations = 0;
@@ -373,5 +397,7 @@ export function starterGenome(el: ElementId, skel: Skeleton, parts: Partial<Reco
     mark: [0, 0],
     hue: [0, 0],
     stance: [0, 0],
+    girth: [0, 0],
+    height: [0, 0],
   };
 }

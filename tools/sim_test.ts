@@ -231,6 +231,24 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
     console.log(`     essence to train 1 -> 100: ${total}; level 10: ${trainCost({ ...keep, level: 10, xp: 0 })}, level 50: ${trainCost({ ...keep, level: 50, xp: 0 })}`);
   }
 
+  // Proportions: varied in the wild, blended in children, mutate a step at a time, filled in for old saves
+  // without disturbing the genes that were filled in before them.
+  {
+    const gs = Array.from({ length: 600 }, () => wildGenome(rng, { els: ['tide'], quality: 0.5 }));
+    const thin = gs.filter(g => express(g).girth! <= -0.5).length, thick = gs.filter(g => express(g).girth! >= 0.5).length;
+    const short = gs.filter(g => express(g).height! <= -0.5).length, tall = gs.filter(g => express(g).height! >= 0.5).length;
+    ok(thin > 60 && thick > 60 && short > 60 && tall > 60, `wild proportions vary (thin ${thin}, thick ${thick}, short ${short}, tall ${tall} of 600)`);
+    const mom = { ...gs[0], girth: [2, 2] as [number, number], height: [-2, -2] as [number, number] };
+    const dad = { ...gs[1], girth: [-2, -2] as [number, number], height: [2, 2] as [number, number] };
+    const kid = express(breed(rng, mom, dad, { mutation: 0 }).g);
+    ok(kid.girth === 0 && kid.height === 0, 'a bulky squat parent and a slender lanky one have an in-between child');
+    const old = { ...gs[2] } as Partial<typeof gs[2]>;
+    const keep = JSON.stringify([old.mark, old.hue, old.stance]);
+    delete old.girth; delete old.height;
+    fillGenome(old as typeof gs[2], 'c_old');
+    ok(!!old.girth && !!old.height && JSON.stringify([old.mark, old.hue, old.stance]) === keep, 'old saves get proportions without other genes changing');
+  }
+
   // Markings, hue and stance: varied in the wild, inherited, and filled in for old saves.
   {
     const marks = [0, 0, 0], stances = [0, 0, 0, 0];

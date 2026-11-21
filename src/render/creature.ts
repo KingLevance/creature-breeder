@@ -1415,19 +1415,27 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   // A fainted creature slumps upright-ish; otherwise it holds its stance.
   const sp = o.ko ? KO_POSE[ph.skel] : STANCES[ph.skel][ph.stance ?? 0] ?? S0;
   const [tiltL, tiltD] = poseTilt(ph.skel, reach, raise, guard);
+  // Proportions: gw thickens the body and limbs (-1 slender .. 1 bulky); ht lifts a legged body higher on longer
+  // legs, or makes a legless one taller (-1 squat .. 1 lanky).
+  const gw = ph.girth ?? 0, ht = ph.height ?? 0;
+  const legged = ph.skel === 'biped' || ph.skel === 'quad' || ph.skel === 'multi';
+  // (Lying knocked out, every creature rests on the ground whatever its leg length.)
+  const rise = legged && !o.ko ? ht * (ph.skel === 'biped' ? 6 : 8) : 0;
+  const lw = 1 + 0.28 * gw;
   /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks or the foot lifts. */
   const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col: string, kx?: number, ky?: number, knee = 1, lift = 0) => {
     const [x1, y1] = p.at(hx0, hy0);
     p.free(() => {
-      const bend = (Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop) * 0.6) * 0.9 + lift * 0.9) * knee;
+      // Height changes the leg length, not the knee: a short-legged creature stands on short straight legs.
+      const bend = (Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop + rise) * 0.6) * 0.9 + lift * 0.9) * knee;
       const mx = kx ?? (x1 + fx) / 2, my = ky ?? (y1 + fy) / 2;
-      p.taper(x1, y1, fx, fy - lift, w0, w1, col, mx + bend, my - lift * 0.5 + (ky == null ? 0 : (y1 - hy0) * 0.5));
+      p.taper(x1, y1, fx, fy - lift, w0 * lw, w1 * lw, col, mx + bend, my - lift * 0.5 + (ky == null ? 0 : (y1 - hy0) * 0.5));
     });
   };
-  const freePaw = (x: number, y: number, w: number, col: string, lift = 0) => p.free(() => paw(x, y - lift, w, col, lift));
+  const freePaw = (x: number, y: number, w: number, col: string, lift = 0) => p.free(() => paw(x, y - lift, w * (1 + 0.1 * gw), col, lift));
   const ft = sp.ft ?? 0;
   const lean = (cx: number, cy: number) => {
-    const L = sp.lean + tiltL, D = sp.drop + tiltD + bob;
+    const L = sp.lean + tiltL, D = sp.drop + tiltD + bob - rise;
     p.tf = L || D || sp.sx ? mkTf(cx, cy, L, sp.sx ?? 0, D) : null;
   };
   /** An arm, blended from its resting place toward a strike, a raised cast, or a guard. Each target: [x, y, bendx, bendy]. */
@@ -1454,7 +1462,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
 
   switch (ph.skel) {
     case 'biped': {
-      const by = 64 - 3 * (b - 0.8), brx = 14.5 * b, bry = 18 * b;
+      const by = 64 - 3 * (b - 0.8), brx = 14.5 * b * (1 + 0.24 * gw - 0.04 * ht), bry = 18 * b * (1 + 0.12 * ht + 0.04 * gw);
       const hr = 12.5 * hs;
       const hip = by + bry * 0.5;
       lean(48, hip);
@@ -1497,7 +1505,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       break;
     }
     case 'quad': {
-      const by = 63, brx = 23 * b, bry = 13.5 * b;
+      const by = 63, brx = 23 * b * (1 + 0.06 * gw + 0.08 * ht), bry = 13.5 * b * (1 + 0.25 * gw - 0.05 * ht);
       const hr = 12 * hs;
       const hx = 48 + brx * 0.82 + sp.hdx, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4 + sp.hdy;
       lean(46 + brx * (sp.px ?? 0), by);
@@ -1531,8 +1539,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     }
     case 'multi': {
       const by = 66, hr = 10.5 * hs;
-      const abx = 34, arx = 17 * b, ary = 12 * b;
-      const thx = 34 + arx + 9 * b, thr = 11.5 * b;
+      const abx = 34, arx = 17 * b * (1 + 0.1 * ht), ary = 12 * b * (1 + 0.25 * gw);
+      const thx = 34 + arx + 9 * b, thr = 11.5 * b * (1 + 0.12 * gw);
       const hx = thx + thr + hr * 0.45 + sp.hdx, hy = by - 6 + breathe * 0.3 + sp.hdy;
       lean(thx + thr * (sp.px ?? 0), by);
       a = { flatBack: true, back: ellFrame(abx, by - 2, arx, ary, -Math.PI / 2 - 0.2), hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
@@ -1556,9 +1564,9 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       break;
     }
     case 'serpent': {
-      const hr = 11.5 * hs, w = 12.5 * b;
+      const hr = 11.5 * hs, w = 12.5 * b * (1 + 0.28 * gw);
       const wv = o.walking ? Math.sin(phase * TAU) * 3 : breathe;
-      const hx = 68 + sp.hdx + reach * (sp.hdx > 5 ? 1 : 4) - raise * 2, hy = 40 + breathe * 0.5 + sp.hdy - raise * 5 + reach * 2;
+      const hx = 68 + sp.hdx + reach * (sp.hdx > 5 ? 1 : 4) - raise * 2, hy = 40 - 7 * ht + breathe * 0.5 + sp.hdy - raise * 5 + reach * 2;
       p.tf = null;
       a = { back: [24.5, 79.25 + wv * 0.125 - w * 0.3, 0], hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
       drawWing(p, a, ph, k, flap, true);
@@ -1601,7 +1609,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       break;
     }
     case 'aquatic': {
-      const by = 58 + breathe, brx = 25 * b, bry = 15 * b;
+      const by = 58 - 4 * ht + breathe, brx = 25 * b * (1 + 0.12 * ht), bry = 15 * b * (1 + 0.25 * gw);
       const hr = 12 * hs;
       lean(48, by);
       a = { flatBack: true, back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.35), hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
@@ -1624,22 +1632,23 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       break;
     }
     default: {
-      // floater
-      const cy = 52 + breathe * 1.4, r = 17 * b;
+      // floater: rx is its width, ry its height, from the proportion genes.
+      const r = 17 * b, rx = r * (1 + 0.2 * gw - 0.04 * ht), ry = r * (1 + 0.16 * ht);
+      const cy = 52 - (ry - r) * 0.9 + breathe * 1.4;
       const hr = 13 * hs;
-      lean(50, cy + r);
-      a = { back: ellFrame(50, cy, r, r * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - r * 0.35, hr, bx: 50, by: cy + r * 0.45, brx: r * 0.8, bry: r * 0.75, tx: 44, ty: cy + r * 1.25, tdir: -0.9, wx: 43, wy: cy - r * 0.1, backx: 40, backy: cy - r * 0.55 };
+      lean(50, cy + ry);
+      a = { back: ellFrame(50, cy, rx, ry * 1.1, -Math.PI / 2 - 0.75), hx: 52, hy: cy - ry * 0.35, hr, bx: 50, by: cy + ry * 0.45, brx: rx * 0.8, bry: ry * 0.75, tx: 44, ty: cy + ry * 1.25, tdir: -0.9, wx: 43, wy: cy - ry * 0.1, backx: 40, backy: cy - ry * 0.55 };
       drawWing(p, a, ph, k, flap, true);
       const wv = o.rig && !o.walking ? 0 : Math.sin(phase * TAU) * 1.6;
       p.g = 'back';
-      p.ell(50 - r * 0.75, cy + r * 0.6 - wv, 3.4 * ls, 3 * ls, far);
+      p.ell(50 - rx * 0.75, cy + ry * 0.6 - wv, 3.4 * ls * lw, 3 * ls * lw, far);
       p.g = 'body';
-      p.path(`M${f(50 - r)} ${f(cy)}Q${f(50 - r)} ${f(cy - r * 1.1)} 50 ${f(cy - r * 1.1)}Q${f(50 + r)} ${f(cy - r * 1.1)} ${f(50 + r)} ${f(cy)}Q${f(50 + r)} ${f(cy + r * 1.1)} ${f(50 + r * 0.55)} ${f(cy + r * 1.45 + wv)}Q${f(50 + r * 0.35)} ${f(cy + r * 1.05)} ${f(50 + r * 0.1)} ${f(cy + r * 1.6 - wv)}Q${f(50 - r * 0.15)} ${f(cy + r * 1.1)} ${f(50 - r * 0.45)} ${f(cy + r * 1.7 + wv)}Q${f(50 - r * 0.95)} ${f(cy + r * 1.1)} ${f(50 - r)} ${f(cy)}Z`, pal.base);
+      p.path(`M${f(50 - rx)} ${f(cy)}Q${f(50 - rx)} ${f(cy - ry * 1.1)} 50 ${f(cy - ry * 1.1)}Q${f(50 + rx)} ${f(cy - ry * 1.1)} ${f(50 + rx)} ${f(cy)}Q${f(50 + rx)} ${f(cy + ry * 1.1)} ${f(50 + rx * 0.55)} ${f(cy + ry * 1.45 + wv)}Q${f(50 + rx * 0.35)} ${f(cy + ry * 1.05)} ${f(50 + rx * 0.1)} ${f(cy + ry * 1.6 - wv)}Q${f(50 - rx * 0.15)} ${f(cy + ry * 1.1)} ${f(50 - rx * 0.45)} ${f(cy + ry * 1.7 + wv)}Q${f(50 - rx * 0.95)} ${f(cy + ry * 1.1)} ${f(50 - rx)} ${f(cy)}Z`, pal.base);
       drawPattern(p, a, ph, st.cue);
-      shadeForm(p, 50, cy + r * 0.1, r * 0.86, r * 0.8);
-      if (ph.tail !== 'stub') drawTail(p, { ...a, tx: 50 - r * 0.5, ty: cy + r * 1.2, tdir: -0.6 }, ph, k * 0.7, wv);
+      shadeForm(p, 50, cy + ry * 0.1, rx * 0.86, ry * 0.8);
+      if (ph.tail !== 'stub') drawTail(p, { ...a, tx: 50 - rx * 0.5, ty: cy + ry * 1.2, tdir: -0.6 }, ph, k * 0.7, wv);
       // The near nub of an arm: forward to strike, up to cast.
-      p.ell(50 + r * 0.95 + reach * 4, cy + r * 0.45 + wv - raise * r * 0.7 - reach * 2, 3.6 * ls, 3.2 * ls, pal.base);
+      p.ell(50 + rx * 0.95 + reach * 4, cy + ry * 0.45 + wv - raise * ry * 0.7 - reach * 2, 3.6 * ls * lw, 3.2 * ls * lw, pal.base);
     }
   }
   // A roar throws the head back; a guard tucks it in.
