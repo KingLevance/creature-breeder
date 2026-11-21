@@ -181,6 +181,15 @@ export const rollMark = (rng: Rng) => { const r = rng(); return r < 0.2 ? 0 : r 
 /** Wild stance alleles, weighted so each of the four stances shows in about a quarter of wild creatures. */
 export const rollStance = (rng: Rng) => { const r = rng(); return r < 0.134 ? 0 : r < 0.293 ? 1 : r < 0.5 ? 2 : 3; };
 export const STANCE_NAMES = ['Upright', 'Prowling', 'Proud', 'Hunched'];
+const STANCE_NAMES_BY: Partial<Record<Skeleton, string[]>> = {
+  biped: ['Upright', 'Ready', 'Proud', 'Relaxed'],
+  quad: ['Upright', 'Prowling', 'Proud', 'Playful'],
+  serpent: ['Upright', 'Striking', 'Rearing', 'Coiled'],
+  aquatic: ['Level', 'Diving', 'Rising', 'Lunging'],
+  floater: ['Upright', 'Drifting', 'Proud', 'Swooping'],
+};
+/** What a stance looks like on this body plan. */
+export const stanceName = (skel: Skeleton, i: number) => (STANCE_NAMES_BY[skel] ?? STANCE_NAMES)[i] ?? STANCE_NAMES[0];
 export const rollHue = (rng: Rng) => rint(rng, -2, 2);
 export const rollShape = (rng: Rng) => rint(rng, -2, 2);
 export const FRAME_NAMES = ['Slender', 'Lean', 'Average', 'Stocky', 'Bulky'];

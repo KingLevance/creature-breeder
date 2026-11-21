@@ -17,7 +17,7 @@ import { FightResult, Loot, Run, finishFight, startBattle, emptyLoot } from '../
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
 import { FxLayer, FxNew, FxSpec, StatusFx, isBeam } from './Fx';
-import { Bar, Btn, C, CreatureView, hpColor, EggView, LiveCreature, CreatureGround, P, Stars, mixHex, readable, st } from './kit';
+import { Bar, Btn, C, CreatureView, bodyBoundsCached, hpColor, EggView, LiveCreature, CreatureGround, P, Stars, mixHex, readable, st } from './kit';
 import { F, FadeIn, Glow, Grad, Icon, haptic, shadow } from './look';
 import type { Pose } from '../render/creature';
 import { rng, useGame } from './store';
@@ -1077,7 +1077,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   ],
                 }}>
                   <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive && !acts[u.uid]?.falling} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
-                  {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} part="body" /> : null}
+                  {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} part="body" bounds={bodyBoundsCached(u.ph, u.stage)} flip={u.side === 1} /> : null}
                 </Animated.View>
                 </Animated.View>
               </Pressable>

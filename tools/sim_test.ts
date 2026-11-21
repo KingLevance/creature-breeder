@@ -247,6 +247,8 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
     delete old.girth; delete old.height;
     fillGenome(old as typeof gs[2], 'c_old');
     ok(!!old.girth && !!old.height && JSON.stringify([old.mark, old.hue, old.stance]) === keep, 'old saves get proportions without other genes changing');
+    const bulky = statsFor({ ...gs[3], girth: [2, 2], height: [0, 0] }, 30), slim = statsFor({ ...gs[3], girth: [-2, -2], height: [0, 0] }, 30);
+    ok(bulky.spd < slim.spd && bulky.hp > slim.hp && bulky.def > slim.def, `bulky is tougher but slower (spd ${bulky.spd} vs ${slim.spd}, hp ${bulky.hp} vs ${slim.hp})`);
   }
 
   // Markings, hue and stance: varied in the wild, inherited, and filled in for old saves.

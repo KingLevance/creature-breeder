@@ -1388,7 +1388,9 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
 interface StancePose { lean: number; drop: number; hdx: number; hdy: number; px?: number; ft?: number; sx?: number }
 const S0: StancePose = { lean: 0, drop: 0, hdx: 0, hdy: 0 };
 const STANCES: Record<Skeleton, StancePose[]> = {
-  biped: [S0, { lean: 9, drop: 4, hdx: 1, hdy: 1, ft: 6 }, { lean: -9, drop: 0, hdx: -1, hdy: -3, ft: 2, sx: 2 }, { lean: 14, drop: 3, hdx: 3, hdy: 6, ft: 3 }],
+  // Ready: a boxer's crouch, upright with knees bent, feet wide and fists up. Proud: chest out, leaning back.
+  // Relaxed: settled back on its heels, chin tucked, hands resting on its belly.
+  biped: [S0, { lean: 2, drop: 5, hdx: 1, hdy: 2, ft: 9 }, { lean: -9, drop: 0, hdx: -1, hdy: -3, ft: 2, sx: 2 }, { lean: -5, drop: 1, hdx: -1, hdy: 3, ft: -1, sx: -1 }],
   // Prowl: low, stalking, head at shoulder height. Proud: chest and neck up. Hunched: a play-bow, front down.
   quad: [S0, { lean: 3, drop: 8, hdx: 3, hdy: 11, ft: 4 }, { lean: -12, drop: 0, hdx: -2, hdy: -8, sx: 4 }, { lean: 16, drop: 1, hdx: 1, hdy: 2, px: -0.7, ft: 2 }],
   multi: [S0, { lean: 0, drop: 7, hdx: 0, hdy: 4, ft: 3, sx: -1 }, { lean: -13, drop: 0, hdx: 0, hdy: -4, sx: 4 }, { lean: 12, drop: 1, hdx: 0, hdy: 3, px: 1, sx: -2 }],
@@ -1426,6 +1428,39 @@ export interface Rig {
 export function drawCreatureRig(ph: Pheno, o: DrawOpts): Rig {
   const p = buildCreature(ph, { ...o, rig: true });
   return { main: p.shapes('main'), tail: p.shapes('tail'), wingFar: p.shapes('wingFar'), wingNear: p.shapes('wingNear'), ground: p.shapes('ground'), pivots: p.pivots };
+}
+
+/**
+ * The box (in drawing units, 0..100) that a creature's body fills, legs and head included but not the tail or
+ * wings: what a shield bubble or a block of ice should fit around. Path extents count their control points,
+ * so it errs a touch large.
+ */
+export function bodyBounds(ph: Pheno, stage: number): { x0: number; y0: number; x1: number; y1: number } {
+  const sh = drawCreatureRig(ph, { stage, phase: 0, shadow: false }).main;
+  let x0 = 100, y0 = 100, x1 = 0, y1 = 0;
+  const add = (x: number, y: number, rx = 0, ry = rx) => { x0 = Math.min(x0, x - rx); x1 = Math.max(x1, x + rx); y0 = Math.min(y0, y - ry); y1 = Math.max(y1, y + ry); };
+  for (const s of sh) {
+    if (s.op != null && s.op < 0.5) continue; // glows and soft shading
+    if (s.t === 'circle') add(s.cx, s.cy, s.r);
+    else if (s.t === 'ellipse') add(s.cx, s.cy, Math.max(s.rx, s.ry) * (s.rot ? 1 : 0) + (s.rot ? 0 : s.rx), s.rot ? Math.max(s.rx, s.ry) : s.ry);
+    else {
+      const tok = s.d.match(TOKEN) ?? [];
+      let i = 0, cmd = '', cx = 0, cy = 0;
+      const n = () => parseFloat(tok[i++]);
+      while (i < tok.length) {
+        if (/[A-Za-z]/.test(tok[i])) cmd = tok[i++];
+        const lo = cmd.toLowerCase(), rel = cmd !== cmd.toUpperCase();
+        if (lo === 'z') continue;
+        const pairs = lo === 'q' ? 2 : lo === 'c' ? 3 : lo === 'a' ? 0 : 1;
+        if (lo === 'a') { n(); n(); n(); n(); n(); const x = n(), y = n(); cx = rel ? cx + x : x; cy = rel ? cy + y : y; add(cx, cy); continue; }
+        let lx = cx, ly = cy;
+        for (let k = 0; k < pairs; k++) { const x = n(), y = n(); lx = rel ? cx + x : x; ly = rel ? cy + y : y; add(lx, ly); }
+        cx = lx; cy = ly;
+        if (lo === 'm') cmd = rel ? 'l' : 'L';
+      }
+    }
+  }
+  return { x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(100, x1), y1: Math.min(100, y1) };
 }
 
 /** How a pose tips the whole body: a quadruped rears up to cast, a swimmer noses down to strike. */
@@ -1520,7 +1555,9 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       freePaw(54 - sw * 6 + ft, 89.2, 5.6 * ls, far, liftB);
       // The far arm: up in a guard for a ready stance, otherwise hanging and swinging against the legs.
       {
-        const restX = 63 + sw * 4, rest = ph.stance === 1 && !o.ko ? [66, by - bry * 0.55, 64, by - bry * 0.05] : [restX, by + 3, (55 + restX) / 2 + 1, (by - bry * 0.35 + by + 3) / 2];
+        const restX = 63 + sw * 4, rest = ph.stance === 1 && !o.ko ? [66, by - bry * 0.55, 64, by - bry * 0.05]
+          : ph.stance === 3 && !o.ko ? [60, by + bry * 0.22, 63, by - bry * 0.05]
+          : [restX, by + 3, (55 + restX) / 2 + 1, (by - bry * 0.35 + by + 3) / 2];
         const [ex, ey, cx, cy] = blendArm(rest, [65, by - bry * 0.2, 62, by + bry * 0.12], [58, by - bry * 1.0, 61, by - bry * 0.45], [65, by - bry * 0.5, 63, by]);
         p.taper(55, by - bry * 0.35, ex, ey, 5 * ls, 3.8 * ls, far, cx, cy);
       }
@@ -1543,7 +1580,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
         const rest = o.ko ? [restX, by + 5, (50 + restX) / 2, (by - bry * 0.3 + by + 5) / 2]
           : ph.stance === 1 ? [62, by - bry * 0.4, 60, by + bry * 0.12]
           : ph.stance === 2 ? [46 - sw * 3, by + bry * 0.38, 51, by + bry * 0.05]
-          : ph.stance === 3 ? [58 - sw * 4, by + bry * 0.32, 56, by + bry * 0.02]
+          : ph.stance === 3 ? [55 - sw * 2, by + bry * 0.24, 59, by + bry * 0.02]
           : [restX, by + 5, (50 + restX) / 2 + 1, (by - bry * 0.3 + by + 5) / 2];
         const [ex, ey, cx, cy] = blendArm(rest, [66, by - bry * 0.45, 60, by - bry * 0.05], [60, by - bry * 1.05, 59, by - bry * 0.4], [61, by - bry * 0.42, 59, by + bry * 0.1]);
         p.taper(50, by - bry * 0.3, ex, ey, 5.6 * ls, 4.4 * ls, pal.base, cx, cy);

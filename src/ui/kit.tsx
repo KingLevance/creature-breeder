@@ -7,7 +7,7 @@ import { MoveDef, RARITY_COLORS, RARITY_NAMES } from '../game/data/moves';
 import { Creature, STAGE_NAMES, stageOf, typeLabel } from '../game/creature';
 import { Pheno, express, rareCarrierCount, starRating } from '../game/genome';
 import { tap } from './audio';
-import { Pose, Rig, Shape, creatureOpacity, drawCreature, drawCreatureRig, drawEgg, poseWeights } from '../render/creature';
+import { Pose, Rig, Shape, bodyBounds, creatureOpacity, drawCreature, drawCreatureRig, drawEgg, poseWeights } from '../render/creature';
 import { F, Glow, Grad, Icon, IconName, ND as LOOK_ND, PANEL, haptic, pulse, shadow, useLoop, usePress } from './look';
 
 export const C = {
@@ -50,6 +50,15 @@ function lruFor<K, V>(store: Map<string, Map<K, V>>, ph: Pheno, cap = 40): Map<K
   store.set(k, m);
   if (store.size > cap) store.delete(store.keys().next().value as string);
   return m;
+}
+
+/** The box a creature's body fills (see bodyBounds), measured once per creature and stage. */
+const boundsCache = new Map<string, Map<number, ReturnType<typeof bodyBounds>>>();
+export function bodyBoundsCached(ph: Pheno, stage: number) {
+  const m = lruFor(boundsCache, ph, 60);
+  let v = m.get(stage);
+  if (!v) { v = bodyBounds(ph, stage); m.set(stage, v); }
+  return v;
 }
 
 /** Drawn frames per creature. Idle and walk cycles repeat the same dozen frames, so each is drawn once. */

@@ -587,7 +587,11 @@ const Stat = memo(function Stat({ s, done }: { s: Extract<FxSpec, { kind: 'stat'
 });
 
 /** Lasting signs of a creature's conditions, drawn over it while they last: flames, bubbles, dizzy stars, ice, a shield. */
-export const StatusFx = memo(function StatusFx({ statuses, shield, size, part }: { statuses: string[]; shield: boolean; size: number; part?: 'ground' | 'body' }) {
+export const StatusFx = memo(function StatusFx({ statuses, shield, size, part, bounds, flip }: {
+  statuses: string[]; shield: boolean; size: number; part?: 'ground' | 'body';
+  /** The body's box in drawing units (0..100), so the shield and ice fit this creature's shape. */
+  bounds?: { x0: number; y0: number; x1: number; y1: number }; flip?: boolean;
+}) {
   const t = useRef(new Animated.Value(0)).current;
   const buff = statuses.includes('atkUp') ? '#ff7a59' : statuses.includes('defUp') ? '#6fb7ff' : statuses.includes('haste') ? '#ffd34d' : statuses.includes('boost') ? '#b48cff' : statuses.includes('regen') ? '#5ad17a' : null;
   // Split for creatures that leap: the buff glow and its sparks belong on the ground, the rest on the body.
@@ -619,11 +623,28 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size, part }:
           })}
         </>
       ) : null}
-      {shield && body ? (
-        <Animated.View style={{ position: 'absolute', left: S * 0.12, top: S * 0.2, width: S * 0.76, height: S * 0.76, borderRadius: S, borderWidth: 2, borderColor: '#bff3ff', backgroundColor: 'rgba(159,232,255,0.12)',
-          opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 0.85, 0.55] }) }} />
-      ) : null}
-      {has('freeze') ? <View style={{ position: 'absolute', left: S * 0.2, top: S * 0.3, width: S * 0.6, height: S * 0.6, borderRadius: S * 0.2, backgroundColor: 'rgba(170,230,255,0.35)', borderWidth: 1.5, borderColor: '#e6fbff' }} /> : null}
+      {shield && body ? (() => {
+        // An oval bubble around this creature's own outline (tall for a biped, long and low for a quadruped).
+        const B = bounds ?? { x0: 12, y0: 20, x1: 88, y1: 96 };
+        const k = S / 100, pad = 6;
+        const w = (B.x1 - B.x0 + pad * 2) * k, h = (B.y1 - B.y0 + pad * 2) * k;
+        const left = (flip ? 100 - B.x1 - pad : B.x0 - pad) * k, top = (B.y0 - pad) * k;
+        return (
+          <Animated.View style={{ position: 'absolute', left, top, width: w, height: h, opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.6, 0.9, 0.6] }) }}>
+            <Svg width={w} height={h}>
+              <Ellipse cx={w / 2} cy={h / 2} rx={w / 2 - 1.5} ry={h / 2 - 1.5} fill="#9fe8ff" fillOpacity={0.12} stroke="#bff3ff" strokeWidth={2} />
+              <Ellipse cx={w * 0.34} cy={h * 0.24} rx={w * 0.14} ry={h * 0.06} fill="#ffffff" opacity={0.45} transform={`rotate(-25 ${w * 0.34} ${h * 0.24})`} />
+            </Svg>
+          </Animated.View>
+        );
+      })() : null}
+      {has('freeze') ? (() => {
+        // A block of ice over the body.
+        const B = bounds ?? { x0: 20, y0: 30, x1: 80, y1: 90 };
+        const k = S / 100, w = (B.x1 - B.x0) * 0.9 * k, h = (B.y1 - B.y0) * 0.85 * k;
+        const left = ((flip ? 100 - B.x1 : B.x0) + (B.x1 - B.x0) * 0.05) * k, top = (B.y0 + (B.y1 - B.y0) * 0.1) * k;
+        return <View style={{ position: 'absolute', left, top, width: w, height: h, borderRadius: Math.min(w, h) * 0.25, backgroundColor: 'rgba(170,230,255,0.35)', borderWidth: 1.5, borderColor: '#e6fbff' }} />;
+      })() : null}
       {has('burn') ? [0, 1].map(i => (
         <Animated.View key={'b' + i} style={{ position: 'absolute', left: S * (0.36 + i * 0.22), top: S * (0.5 + i * 0.08), width: S * 0.12, height: S * 0.18,
           opacity: cyc(i * 0.5, 4).interpolate({ inputRange: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], outputRange: [0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9, 0.6, 0.9] }),

@@ -94,11 +94,14 @@ export function statsFor(g: Genome, level: number): Stats {
   const b = ph.build;
   const pot = (k: StatKey) => 0.75 + 0.05 * ph.pot[k];
   const sk = SKEL_MODS[ph.skel];
+  // Body shape matters a little: a bulky frame is tougher but slower, a slender one quicker but frailer, and a
+  // tall one reaches a bit harder but is also a touch slower.
+  const gw = ph.girth ?? 0, ht = ph.height ?? 0;
   return {
-    hp: Math.round((50 + 11 * level) * pot('hp') * sk.hp * (1 - 0.09 * b)),
-    atk: Math.round((14 + 3.1 * level) * pot('atk') * sk.atk * (1 + 0.05 * b)),
-    def: Math.round((12 + 2.8 * level) * pot('def') * sk.def * (1 - 0.05 * b)),
-    spd: Math.round((95 + 0.35 * level) * (0.9 + 0.02 * ph.pot.spd) * sk.spd * (1 + 0.06 * b)),
+    hp: Math.round((50 + 11 * level) * pot('hp') * sk.hp * (1 - 0.09 * b) * (1 + 0.06 * gw + 0.02 * ht)),
+    atk: Math.round((14 + 3.1 * level) * pot('atk') * sk.atk * (1 + 0.05 * b) * (1 + 0.03 * ht)),
+    def: Math.round((12 + 2.8 * level) * pot('def') * sk.def * (1 - 0.05 * b) * (1 + 0.04 * gw)),
+    spd: Math.round((95 + 0.35 * level) * (0.9 + 0.02 * ph.pot.spd) * sk.spd * (1 + 0.06 * b) * (1 - 0.06 * gw - 0.02 * ht)),
   };
 }
 
