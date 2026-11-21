@@ -38,7 +38,11 @@ function mix(a: string, b: string, t: number): string {
   return '#' + ch(16) + ch(8) + ch(0);
 }
 
-export interface Palette { base: string; light: string; dark: string; glow: string; accent: string; accentDark: string; out: string; mark: string; markGlow: string }
+export interface Palette {
+  base: string; light: string; dark: string; glow: string; accent: string; accentDark: string; out: string; mark: string; markGlow: string;
+  /** Two-tone colours: legs, arms, tail and ears (darker on a pointed coat), a darker back, pale socks, pale patches. */
+  limb: string; dorsal: string; sock: string; patch: string;
+}
 
 /**
  * Shiny colourings, one per element like a species' alternate colours: a hue turn (and a saturation lift for the
@@ -73,8 +77,10 @@ export function paletteFor(ph: Pheno): Palette {
   const acc = ph.el2 ? ELEMENTS[ph.el2].base : tone(e.light);
   // A second element shows in the markings (spots, stripes, bands, stars) and in the tail tip.
   const e2 = ph.el2 ? ELEMENTS[ph.el2] : null;
-  return { base, light: tone(e.light), dark: tone(e.dark), glow: e.glow, accent: acc, accentDark: shade(acc, -0.18), out: shade(tone(e.dark), -0.14),
-    mark: e2 ? e2.dark : tone(e.dark), markGlow: e2 ? e2.glow : e.glow };
+  const dark = tone(e.dark);
+  return { base, light: tone(e.light), dark, glow: e.glow, accent: acc, accentDark: shade(acc, -0.18), out: shade(dark, -0.14),
+    mark: e2 ? e2.dark : dark, markGlow: e2 ? e2.glow : e.glow,
+    limb: ph.twotone === 'points' ? mix(base, dark, 0.72) : base, dorsal: mix(base, dark, 0.42), sock: mix(base, '#fff8ee', 0.72), patch: mix(base, '#fffaf2', 0.78) };
 }
 
 // ---------- Drawing helpers
@@ -362,7 +368,11 @@ function drawTail(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
   const was = p.part;
   p.part = 'tail';
   p.pivots.tail = p.at(a.tx, a.ty);
+  // A pointed coat darkens the tail like the legs.
+  const pal = p.pal;
+  if (pal.limb !== pal.base) p.pal = { ...pal, base: pal.limb };
   drawTailShape(p, a, ph, k, p.rig ? 0 : sway);
+  p.pal = pal;
   p.part = was;
 }
 
@@ -765,6 +775,248 @@ function moodMouth(p: Pen, hx: number, hy: number, r: number, mood: string) {
 
 /** Points along the back, rear to front: where each sits on the outline and which way is out. */
 type Spine = { x: number; y: number; nx: number; ny: number }[];
+
+/**
+ * A body's shape for coats and two-tone: the ellipses it's built from (the first is the main one), or a
+ * serpent's ribbon (centre points and widths).
+ */
+type Body = { hull: number[][]; rib?: undefined } | { rib: { pts: number[][]; ws: number[] }; hull?: undefined };
+function inBody(b: Body, x: number, y: number, s = 1, skip = -1): boolean {
+  if (b.hull) return b.hull.some(([cx, cy, rx, ry], i) => i !== skip && ((x - cx) / (rx * s)) ** 2 + ((y - cy) / (ry * s)) ** 2 < 1);
+  const { pts, ws } = b.rib;
+  for (let i = 0; i < pts.length; i++) if (Math.hypot(x - pts[i][0], y - pts[i][1]) < (ws[i] / 2) * s) return true;
+  return false;
+}
+function bodyBox(b: Body): [number, number, number, number] {
+  if (b.hull) return [Math.min(...b.hull.map(h => h[0] - h[2])), Math.min(...b.hull.map(h => h[1] - h[3])), Math.max(...b.hull.map(h => h[0] + h[2])), Math.max(...b.hull.map(h => h[1] + h[3]))];
+  const { pts, ws } = b.rib;
+  return [Math.min(...pts.map((q, i) => q[0] - ws[i])), Math.min(...pts.map((q, i) => q[1] - ws[i])), Math.max(...pts.map((q, i) => q[0] + ws[i])), Math.max(...pts.map((q, i) => q[1] + ws[i]))];
+}
+/** Points about `gap` apart around the outside of a body, with outward normals. `arc` limits a hull to some angles. */
+function bodyRim(b: Body, gap: number, arc?: [number, number]): Spine {
+  const out: Spine = [];
+  if (b.hull) {
+    b.hull.forEach(([cx, cy, rx, ry], i) => {
+      const [t0, t1] = arc ?? [0, TAU];
+      const per = Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry)));
+      const n = Math.max(3, Math.round((per * (t1 - t0)) / TAU / gap));
+      for (let j = 0; j < n; j++) {
+        const t = t0 + ((t1 - t0) * (j + 0.5)) / n, x = cx + rx * Math.cos(t), y = cy + ry * Math.sin(t);
+        if (inBody(b, x, y, 0.97, i)) continue;
+        const nx = Math.cos(t) / rx, ny = Math.sin(t) / ry, L = Math.hypot(nx, ny);
+        out.push({ x, y, nx: nx / L, ny: ny / L });
+      }
+    });
+    return out;
+  }
+  const { pts, ws } = b.rib;
+  let run = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    run += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    if (run < gap) continue;
+    run = 0;
+    const dx = pts[i + 1][0] - pts[i - 1][0], dy = pts[i + 1][1] - pts[i - 1][1], L = Math.hypot(dx, dy) || 1;
+    for (const sd of [1, -1]) { const nx = (sd * -dy) / L, ny = (sd * dx) / L; out.push({ x: pts[i][0] + (nx * ws[i]) / 2, y: pts[i][1] + (ny * ws[i]) / 2, nx, ny }); }
+  }
+  return out;
+}
+/** A small number from a creature's looks, so its patches and cracks sit in the same places every time. */
+function looksRng(ph: Pheno): () => number {
+  let h = 2166136261;
+  for (const ch of `${ph.el1}${ph.head}${ph.tail}${ph.eyes}${ph.horns}${ph.mark}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  let a = h >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = Math.imul(a ^ (a >>> 15), a | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+/** A soft, irregular blob through `k` points around (x, y). */
+function blob(p: Pen, x: number, y: number, r: number, col: string, rng: () => number, o: { op?: number } = {}, k = 7) {
+  const pts = Array.from({ length: k }, (_, i) => { const t = (i / k) * TAU, q = r * (0.72 + rng() * 0.4); return [x + Math.cos(t) * q, y + Math.sin(t) * q * 0.85]; });
+  const mid = (i: number) => { const a2 = pts[i % k], b2 = pts[(i + 1) % k]; return [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2]; };
+  let d = `M${f(mid(0)[0])} ${f(mid(0)[1])}`;
+  for (let i = 1; i <= k; i++) d += `Q${f(pts[i % k][0])} ${f(pts[i % k][1])} ${f(mid(i)[0])} ${f(mid(i)[1])}`;
+  p.path(d + 'Z', col, { line: false, op: o.op });
+}
+
+/**
+ * What a coat adds to the outline, drawn just before the body in the same layer so it merges into the
+ * silhouette: fluffy scallops, a shaggy fringe hanging below, feather tips swept back, or rocky lumps.
+ */
+function coatRim(p: Pen, ph: Pheno, b: Body, z: number, arc?: [number, number]) {
+  const coat = ph.coat ?? 'smooth', c = p.pal;
+  if (coat === 'smooth' || coat === 'scaly') return;
+  const rim = bodyRim(b, z * (coat === 'shaggy' ? 3.4 : coat === 'rocky' ? 5.2 : coat === 'feathered' ? 4.4 : 3.9), arc);
+  const rng = looksRng(ph), stone = mix(c.base, '#8d8778', 0.45);
+  // Every piece goes into one path (one shape to draw, however many tufts), merged into the body's outline.
+  let d = '', shine = '';
+  /** An ellipse as path arcs, turned by rot degrees. */
+  const oval = (cx: number, cy: number, rx: number, ry: number, rot = 0) => {
+    const q = (rot * Math.PI) / 180, ux = Math.cos(q) * rx, uy = Math.sin(q) * rx;
+    return `M${f(cx + ux)} ${f(cy + uy)}A${f(rx)} ${f(ry)} ${f(rot)} 1 0 ${f(cx - ux)} ${f(cy - uy)}A${f(rx)} ${f(ry)} ${f(rot)} 1 0 ${f(cx + ux)} ${f(cy + uy)}Z`;
+  };
+  rim.forEach(({ x, y, nx, ny }, i) => {
+    switch (coat) {
+      case 'fluffy':
+        d += oval(x - nx * z * 0.7, y - ny * z * 0.7, z * 2.9, z * 2.9);
+        break;
+      case 'shaggy': {
+        // Long hair hangs from the lower half of the body.
+        if (ny < 0.2) break;
+        const L = z * (3.6 + (i % 3) * 1.1), w = z * 1.9, tx = x + nx * L * 0.35 - z * 0.8, ty = y + ny * L * 0.3 + L * 0.75;
+        d += `M${f(x - ny * w - nx * z)} ${f(y + nx * w - ny * z)}Q${f(x + nx * L * 0.2)} ${f(y + L * 0.3)} ${f(tx)} ${f(ty)}Q${f(x + nx * L * 0.1 + ny * w * 0.3)} ${f(y + L * 0.2)} ${f(x + ny * w - nx * z)} ${f(y - nx * w - ny * z)}Z`;
+        break;
+      }
+      case 'feathered': {
+        // Rounded feather ends, laid back toward the tail and overlapping like a bird's, on the upper body.
+        if (ny > 0.3) break;
+        const L = z * 4.2, w = z * 2.2;
+        d += oval(x + nx * z * 0.6 - z * 1.6, y + ny * z * 0.6 + z * 0.4, L * 0.62, w * 0.78, (Math.atan2(ny + 0.6, nx - 0.9) * 180) / Math.PI);
+        break;
+      }
+      case 'rocky': {
+        // Angular stone lumps along the top and sides.
+        if (ny > 0.35) break;
+        const r = z * (2.4 + rng() * 1.4), k = 5, pts: number[][] = [];
+        for (let j = 0; j < k; j++) { const t = (j / k) * TAU + rng() * 0.5, q = r * (0.75 + rng() * 0.35); pts.push([x + nx * r * 0.05 + Math.cos(t) * q, y + ny * r * 0.05 + Math.sin(t) * q]); }
+        d += 'M' + pts.map(q => f(q[0]) + ' ' + f(q[1])).join('L') + 'Z';
+        shine += `M${f(pts[0][0])} ${f(pts[0][1])}L${f(pts[1][0])} ${f(pts[1][1])}`;
+        break;
+      }
+    }
+  });
+  if (d) p.path(d, coat === 'rocky' ? stone : c.base);
+  if (shine) p.line(shine, '#ffffff', Math.max(0.5, z * 0.35), 0.3);
+}
+
+/** What a coat paints on the hide, over the markings: scales, fur flicks, long strands, feather rows, or cracks. */
+function coatSkin(p: Pen, ph: Pheno, b: Body, z: number) {
+  const coat = ph.coat ?? 'smooth', c = p.pal;
+  if (coat === 'smooth') return;
+  const [x0, y0, x1, y1] = bodyBox(b), rng = looksRng(ph);
+  let d = '', d2 = '';
+  switch (coat) {
+    case 'scaly': {
+      // Overlapping scales in offset rows.
+      const s = z * 3;
+      for (let j = 0, y = y0 + s * 0.5; y < y1; y += s * 0.62, j++) for (let x = x0 + (j % 2 ? s * 0.5 : 0); x < x1; x += s) {
+        if (!inBody(b, x - s * 0.5, y, 0.86) || !inBody(b, x + s * 0.5, y + s * 0.4, 0.86)) continue;
+        d += `M${f(x - s * 0.5)} ${f(y)}Q${f(x)} ${f(y + s * 0.62)} ${f(x + s * 0.5)} ${f(y)}`;
+      }
+      p.line(d, c.out, Math.max(0.5, z * 0.32), 0.24);
+      break;
+    }
+    case 'feathered': {
+      // Rows of feather edges, lit along the top.
+      const s = z * 5.6;
+      for (let j = 0, y = y0 + s * 0.4; y < y1; y += s * 0.55, j++) for (let x = x0 + (j % 2 ? s * 0.5 : 0); x < x1; x += s) {
+        if (!inBody(b, x - s * 0.5, y, 0.84) || !inBody(b, x + s * 0.5, y + s * 0.4, 0.84)) continue;
+        d += `M${f(x - s * 0.5)} ${f(y)}Q${f(x)} ${f(y + s * 0.6)} ${f(x + s * 0.5)} ${f(y)}`;
+        d2 += `M${f(x - s * 0.3)} ${f(y + s * 0.12)}Q${f(x)} ${f(y + s * 0.42)} ${f(x + s * 0.3)} ${f(y + s * 0.12)}`;
+      }
+      p.line(d, c.out, Math.max(0.5, z * 0.34), 0.16);
+      p.line(d2, '#ffffff', Math.max(0.5, z * 0.36), 0.28);
+      break;
+    }
+    case 'fluffy':
+    case 'shaggy': {
+      // Fur: short flicks just inside the edge; shaggy adds long strands down the flanks.
+      for (const { x, y, nx, ny } of bodyRim(b, z * 4.2)) {
+        const ax = x - nx * z * 1.6, ay = y - ny * z * 1.6, bx = x - nx * z * 3.4 - ny * z * 0.8, by = y - ny * z * 3.4 + nx * z * 0.8;
+        if (inBody(b, bx, by, 0.9)) d += `M${f(ax)} ${f(ay)}Q${f((ax + bx) / 2 + nx * z * 0.5)} ${f((ay + by) / 2 + ny * z * 0.5)} ${f(bx)} ${f(by)}`;
+      }
+      if (coat === 'shaggy') {
+        const s = z * 3.2;
+        for (let x = x0 + s; x < x1; x += s) for (let y = y0 + s; y < y1; y += s * 2.2) {
+          const yy = y + (rng() - 0.5) * s, L = z * (4 + rng() * 2.5);
+          if (!inBody(b, x, yy, 0.82) || !inBody(b, x - z, yy + L, 0.86)) continue;
+          d2 += `M${f(x)} ${f(yy)}Q${f(x + z * 0.6)} ${f(yy + L * 0.5)} ${f(x - z)} ${f(yy + L)}`;
+        }
+      }
+      p.line(d, c.out, Math.max(0.5, z * 0.36), 0.16);
+      if (d2) p.line(d2, c.out, Math.max(0.5, z * 0.4), 0.18);
+      break;
+    }
+    case 'rocky': {
+      // A few stone patches and cracks.
+      const tries = 40, spots: number[][] = [];
+      for (let i = 0; i < tries && spots.length < 5; i++) {
+        const x = x0 + rng() * (x1 - x0), y = y0 + rng() * (y1 - y0);
+        if (inBody(b, x, y, 0.62)) spots.push([x, y]);
+      }
+      spots.forEach(([x, y], i) => {
+        if (i < 2) blob(p, x, y, z * (2.4 + rng() * 1.2), mix(c.base, '#8d8778', 0.45), rng, { op: 0.75 }, 5);
+        else {
+          let px = x, py = y;
+          d += `M${f(px)} ${f(py)}`;
+          for (let k = 0; k < 3; k++) {
+            const nx2 = px + (rng() - 0.3) * z * 3, ny2 = py + (rng() - 0.5) * z * 3;
+            if (!inBody(b, nx2, ny2, 0.8)) break;
+            d += `L${f(nx2)} ${f(ny2)}`; px = nx2; py = ny2;
+          }
+        }
+      });
+      if (d) p.line(d, c.out, Math.max(0.5, z * 0.38), 0.4);
+      break;
+    }
+  }
+}
+
+/**
+ * Two-tone over the body, under the markings: a darker back (the side of the line through P facing N), or pale
+ * patches. Points and socks are on the limbs and are drawn with them.
+ */
+function twoTone(p: Pen, ph: Pheno, b: Body, P: [number, number], N: [number, number], z: number) {
+  const c = p.pal, kind = ph.twotone ?? 'solid';
+  if (kind === 'dorsal') {
+    if (b.rib) {
+      // A serpent: the back half of the ribbon, darker.
+      const { pts, ws } = b.rib, top: string[] = [], mid: string[] = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a0 = pts[Math.max(0, i - 1)], a1 = pts[Math.min(pts.length - 1, i + 1)], dx = a1[0] - a0[0], dy = a1[1] - a0[1], L = Math.hypot(dx, dy) || 1, nx = dy / L, ny = -dx / L;
+        const h = ws[i] / 2;
+        top.push(f(pts[i][0] + nx * h * 0.98) + ' ' + f(pts[i][1] + ny * h * 0.98));
+        mid.unshift(f(pts[i][0] - nx * h * 0.1) + ' ' + f(pts[i][1] - ny * h * 0.1));
+      }
+      p.path('M' + top.join('L') + 'L' + mid.join('L') + 'Z', c.dorsal, { line: false });
+      return;
+    }
+    const [nx, ny] = N, dx = -ny, dy = nx;
+    const ends: number[] = [];
+    for (const [cx, cy, rx, ry] of b.hull) {
+      // Where the cut line crosses this ellipse.
+      const ux = (P[0] - cx) / rx, uy = (P[1] - cy) / ry, vx = dx / rx, vy = dy / ry;
+      const A = vx * vx + vy * vy, B = 2 * (ux * vx + uy * vy), C = ux * ux + uy * uy - 1, disc = B * B - 4 * A * C;
+      const centreDorsal = (cx - P[0]) * nx + (cy - P[1]) * ny > 0;
+      if (disc <= 0) { if (centreDorsal) p.ell(cx, cy, rx, ry, c.dorsal, { line: false }); continue; }
+      const s1 = (-B - Math.sqrt(disc)) / (2 * A), s2 = (-B + Math.sqrt(disc)) / (2 * A);
+      ends.push(s1, s2);
+      const ax = P[0] + dx * s1, ay = P[1] + dy * s1, bx = P[0] + dx * s2, by = P[1] + dy * s2;
+      const sweep = dx * ny - dy * nx < 0 ? 1 : 0;
+      p.path(`M${f(ax)} ${f(ay)}A${f(rx)} ${f(ry)} 0 ${centreDorsal ? 1 : 0} ${sweep} ${f(bx)} ${f(by)}Z`, c.dorsal, { line: false });
+    }
+    if (ends.length) {
+      // Feather the edge so it fades into the belly colour.
+      const s0 = Math.min(...ends) + z * 1.5, s1 = Math.max(...ends) - z * 1.5, pts: number[][] = [];
+      for (let i = 0; i <= 8; i++) { const sv = s0 + ((s1 - s0) * i) / 8; pts.push([P[0] + dx * sv - nx * z * 0.3, P[1] + dy * sv - ny * z * 0.3]); }
+      if (s1 > s0) p.soft(pts, z * 2.2, c.dorsal, 0.4);
+    }
+  } else if (kind === 'piebald') {
+    const rng = looksRng(ph);
+    if (b.rib) {
+      const { pts, ws } = b.rib;
+      for (const g of [0.38, 0.6, 0.8]) { const i = Math.round(g * (pts.length - 1)); blob(p, pts[i][0], pts[i][1], ws[i] * 0.34, c.patch, rng); }
+      return;
+    }
+    const [cx, cy, rx, ry] = b.hull[0], r = Math.min(rx, ry);
+    const n = 2 + Math.floor(rng() * 2);
+    for (let i = 0; i < n; i++) {
+      const u = (i / n - 0.4 + (rng() - 0.5) * 0.2) * 1.2, v = (rng() - 0.5) * 0.8, x = cx + rx * u, y = cy + ry * v;
+      // Shrink a patch until it sits inside the body, so none spills past the outline.
+      let q = r * (0.3 + rng() * 0.12);
+      const fits = () => Array.from({ length: 8 }, (_, j) => (j / 8) * TAU).every(t => inBody(b, x + Math.cos(t) * q * 1.15, y + Math.sin(t) * q * 1.0, 0.95));
+      while (q > z * 1.5 && !fits()) q *= 0.85;
+      if (fits()) blob(p, x, y, q, c.patch, rng);
+    }
+  }
+}
 /** n points along an ellipse's rim between angles t0 and t1 (radians, 0 is the front, -π/2 the top). */
 function ellSpine(cx: number, cy: number, rx: number, ry: number, t0: number, t1: number, n: number): Spine {
   const out: Spine = [];
@@ -880,7 +1132,7 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
   const kind = ph.ears ?? 'none';
   if (kind === 'none' || ph.head === 'eared') return;
   const c = p.pal, { hx, hy, hr: r } = a;
-  const inner = mix(c.accent, '#ff9fbf', 0.35), back = shade(c.base, -0.07);
+  const inner = mix(c.accent, '#ff9fbf', 0.35), skin = c.limb, back = shade(skin, -0.07);
   /** A point at angle t on the skull's rim (0 is the front, -90 the crown), pushed out by `out` radii. */
   const rim = (t: number, out = 0): [number, number] => { const q = (t * Math.PI) / 180; return [hx + Math.cos(q) * r * (0.92 + out), hy + Math.sin(q) * r * (0.88 + out)]; };
   /** A pointed ear rising from the rim at angle t, leaning by `tilt` degrees, `h` radii long and `w` wide. */
@@ -895,18 +1147,18 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
   };
   switch (kind) {
     case 'pointed':
-      if (!front) { pointed(-128, -8, 0.7, 0.26, back, false); pointed(-82, -14, 0.72, 0.27, c.base, false); }
+      if (!front) { pointed(-128, -8, 0.7, 0.26, back, false); pointed(-82, -14, 0.72, 0.27, skin, false); }
       break;
     case 'tufted':
-      if (!front) { pointed(-128, -6, 0.86, 0.24, back, true); pointed(-84, -12, 0.9, 0.25, c.base, true); }
+      if (!front) { pointed(-128, -6, 0.86, 0.24, back, true); pointed(-84, -12, 0.9, 0.25, skin, true); }
       break;
     case 'long':
       // Tall rabbit ears, leaning back.
-      if (!front) { pointed(-120, -14, 1.35, 0.2, back, false); pointed(-92, -20, 1.42, 0.21, c.base, false); }
+      if (!front) { pointed(-120, -14, 1.35, 0.2, back, false); pointed(-92, -20, 1.42, 0.21, skin, false); }
       break;
     case 'round':
       if (!front) {
-        for (const [t, col] of [[-132, back], [-80, c.base]] as [number, string][]) {
+        for (const [t, col] of [[-132, back], [-80, skin]] as [number, string][]) {
           const [ex, ey] = rim(t, 0.12);
           p.ell(ex, ey, r * 0.32, r * 0.3, col);
           p.ell(ex + r * 0.03, ey + r * 0.02, r * 0.18, r * 0.17, inner, { line: false });
@@ -920,7 +1172,7 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
         p.path(`M${f(x0 - w * 0.4)} ${f(y0)}Q${f(mx - w * 1.25)} ${f(my - w * 0.2)} ${f(x1 - w * 0.25)} ${f(y1)}Q${f(x1 + w * 0.35)} ${f(y1 + w * 0.6)} ${f(x1 + w * 0.5)} ${f(y1 - w * 0.2)}Q${f(mx + w * 0.55)} ${f(my)} ${f(x0 + w * 0.5)} ${f(y0)}Z`, col);
       };
       if (!front) ear(hx - r * 0.42, hy - r * 0.78, hx - r * 1.12, hy + r * 0.28, r * 0.42, back);
-      else ear(hx - r * 0.12, hy - r * 0.86, hx - r * 0.66, hy + r * 0.36, r * 0.4, c.base);
+      else ear(hx - r * 0.12, hy - r * 0.86, hx - r * 0.66, hy + r * 0.36, r * 0.4, skin);
       break;
     }
     case 'fins': {
@@ -937,7 +1189,7 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
         const mx = (bx0 + bx1) / 2, my = (by0 + by1) / 2;
         p.line(tips.map(([tx, ty]) => `M${f(mx)} ${f(my)}L${f(mx + (tx - mx) * 0.85)} ${f(my + (ty - my) * 0.85)}`).join(''), c.accentDark, Math.max(0.6, r * 0.05), 0.7);
       };
-      fin(hx - r * 0.2, hy - r * 0.82, hx - r * 0.05, hy - r * 0.7, [[hx - r * 0.5, hy - r * 1.42], [hx - r * 0.18, hy - r * 1.3]], mix(c.accent, c.base, 0.3));
+      fin(hx - r * 0.2, hy - r * 0.82, hx - r * 0.05, hy - r * 0.7, [[hx - r * 0.5, hy - r * 1.42], [hx - r * 0.18, hy - r * 1.3]], mix(c.accent, skin, 0.3));
       fin(hx - r * 0.72, hy - r * 0.42, hx - r * 0.7, hy + r * 0.28, [[hx - r * 1.45, hy - r * 0.78], [hx - r * 1.58, hy - r * 0.2], [hx - r * 1.32, hy + r * 0.4]], c.accent);
       break;
     }
@@ -949,6 +1201,10 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   const { hx, hy, hr: r } = a;
   drawHorns(p, a, ph, feat);
   drawEars(p, a, ph, false);
+  if (ph.coat === 'fluffy' || ph.coat === 'shaggy' || ph.coat === 'feathered') {
+    // Cheek tufts behind the jaw, merging into the head's outline.
+    p.poly([[hx - r * 0.5, hy + r * 0.05], [hx - r * 1.14, hy + r * 0.4], [hx - r * 0.8, hy + r * 0.5], [hx - r * 0.98, hy + r * 0.86], [hx - r * 0.45, hy + r * 0.72]], c.base);
+  }
   if (ph.head === 'eared') {
     p.poly([[hx - r * 0.85, hy - r * 0.3], [hx - r * 0.75, hy - r * 1.45], [hx - r * 0.1, hy - r * 0.8]], c.base);
     p.poly([[hx + r * 0.1, hy - r * 0.8], [hx + r * 0.6, hy - r * 1.5], [hx + r * 0.85, hy - r * 0.45]], c.base);
@@ -1017,6 +1273,14 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
     default:
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
       shadeSkullJaw();
+  }
+  if (ph.twotone === 'dorsal') {
+    // The darker back carries on over the crown.
+    const e = headEllipse(ph, hx, hy, r);
+    twoTone(p, ph, { hull: [[e.cx, e.cy, e.rx, e.ry]] }, [hx, hy - r * 0.42], [-0.35, -0.94], r * 0.08);
+  } else if (ph.twotone === 'piebald' && looksRng(ph)() < 0.6) {
+    // A pale patch over one eye.
+    blob(p, hx + r * 0.12, hy - r * 0.12, r * 0.4, c.patch, looksRng(ph));
   }
   if (ph.pattern === 'mask') p.ell(hx + r * 0.32, hy - r * 0.1, r * 0.62, r * 0.36, c.dark, { line: false, op: 0.75 });
   if (ph.ears === 'floppy' && ph.head !== 'eared') {
@@ -1896,17 +2160,30 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   // (Lying knocked out, every creature rests on the ground whatever its leg length.)
   const rise = legged && !o.ko ? ht * (ph.skel === 'biped' ? 6 : 8) : 0;
   const lw = 1 + 0.28 * gw;
+  /** Size of coat details: fur scallops, scales, lumps. */
+  const cz = 0.95 * b;
   /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks or the foot lifts. */
-  const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col: string, kx?: number, ky?: number, knee = 1, lift = 0) => {
-    const [x1, y1] = p.at(hx0, hy0);
+  // Two-tone on the limbs: a pointed coat darkens them; socks turn the lower legs, feet and hands pale.
+  const limbFar = pal.limb === pal.base ? far : shade(pal.limb, -0.1);
+  const limbOf = (col: string) => (col === pal.base ? pal.limb : col === far ? limbFar : col);
+  const socks = ph.twotone === 'socks', sockOf = (col: string) => (col === far || col === limbFar ? shade(pal.sock, -0.08) : pal.sock);
+  const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col0: string, kx?: number, ky?: number, knee = 1, lift = 0) => {
+    const [x1, y1] = p.at(hx0, hy0), col = limbOf(col0);
     p.free(() => {
       // Height changes the leg length, not the knee: a short-legged creature stands on short straight legs.
       const bend = (Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop + rise) * 0.6) * 0.9 + lift * 0.9) * knee;
       const mx = kx ?? (x1 + fx) / 2, my = ky ?? (y1 + fy) / 2;
-      p.taper(x1, y1, fx, fy - lift, w0 * lw, w1 * lw, col, mx + bend, my - lift * 0.5 + (ky == null ? 0 : (y1 - hy0) * 0.5));
+      const cx = mx + bend, cy = my - lift * 0.5 + (ky == null ? 0 : (y1 - hy0) * 0.5), ex = fx, ey = fy - lift;
+      p.taper(x1, y1, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
+      if (socks) {
+        // The lower part of the leg again, pale: the same curve from t0 down, so the outline doesn't change.
+        const t0 = 0.58, u = 1 - t0;
+        const sx = u * u * x1 + 2 * u * t0 * cx + t0 * t0 * ex, sy = u * u * y1 + 2 * u * t0 * cy + t0 * t0 * ey;
+        p.taper(sx, sy, ex, ey, (w0 + (w1 - w0) * t0) * lw, w1 * lw, sockOf(col), cx + (ex - cx) * t0, cy + (ey - cy) * t0);
+      }
     });
   };
-  const freePaw = (x: number, y: number, w: number, col: string, lift = 0) => p.free(() => paw(x, y - lift, w * (1 + 0.1 * gw), col, lift));
+  const freePaw = (x: number, y: number, w: number, col: string, lift = 0) => p.free(() => paw(x, y - lift, w * (1 + 0.1 * gw), socks ? sockOf(limbOf(col)) : limbOf(col), lift));
   const ft = sp.ft ?? 0;
   const lean = (cx: number, cy: number) => {
     const L = sp.lean + tiltL, D = sp.drop + tiltD + bob - rise;
@@ -1918,7 +2195,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
    * the arm has no outline: the outlined part starts a little way down, and a plain shoulder piece over it joins
    * the torso, so the arm grows out of the body instead of being outlined against it at the shoulder.
    */
-  const arm = (sx: number, sy: number, ex: number, ey: number, cx: number, cy: number, w0: number, w1: number, col: string, seamless: boolean) => {
+  const arm = (sx: number, sy: number, ex: number, ey: number, cx: number, cy: number, w0: number, w1: number, col0: string, seamless: boolean) => {
+    const col = limbOf(col0);
     if (!seamless) p.taper(sx, sy, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
     else {
       // Split the arm's curve at t0 (outlined below) and t1 (the plain shoulder piece reaches down to here).
@@ -1930,7 +2208,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     }
     const dx = ex - cx, dy = ey - cy, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
     const hr = w1 * lw * 0.72, hx = ex + ux * hr * 0.5, hy = ey + uy * hr * 0.5;
-    p.ell(hx, hy, hr * 1.1, hr * 0.88, col, { rot: (Math.atan2(uy, ux) * 180) / Math.PI });
+    p.ell(hx, hy, hr * 1.1, hr * 0.88, socks ? sockOf(col) : col, { rot: (Math.atan2(uy, ux) * 180) / Math.PI });
     const crease = (o: number) => {
       const bx = hx + ux * hr * 0.35 + nx * hr * o, by2 = hy + uy * hr * 0.35 + ny * hr * o;
       return `M${f(bx)} ${f(by2)}L${f(bx + ux * hr * 0.55)} ${f(by2 + uy * hr * 0.55)}`;
@@ -2039,11 +2317,15 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       leg(45, hip, 44 + sw * 6 - ft, 87.6, 10 * ls, 6 * ls, pal.base, undefined, undefined, 1, liftA);
       freePaw(44 + sw * 6 - ft, 89.2, 6.2 * ls, pal.base, liftA);
       // A pear-shaped torso: the belly is wider than the chest.
+      const torso: Body = { hull: [[48, by, brx, bry], [48, by + bry * 0.28, brx * 1.07, bry * 0.72], ...(ph.stance === 2 && !o.ko ? [[48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62]] : [])] };
+      coatRim(p, ph, torso, cz);
       p.ell(48, by, brx, bry, pal.base);
       p.ell(48, by + bry * 0.28, brx * 1.07, bry * 0.72, pal.base);
       // A proud stance puffs the chest out.
       if (ph.stance === 2 && !o.ko) p.ell(48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62, pal.base);
+      twoTone(p, ph, torso, [48 - brx * 0.12, by], [-0.9, -0.44], cz);
       drawPattern(p, a, ph, st.cue);
+      coatSkin(p, ph, torso, cz);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
       // The near arm rests by stance (ready: fist up; proud: down the side; hunched: hanging forward), swings
@@ -2086,12 +2368,16 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       // The hind leg is thick at the haunch and bends back at the hock.
       leg(rx - 1, hip - 1, rx - 1 - sw * 6 - ft, 87.8, 11.5 * ls, 5.6 * ls, pal.base, rx - 1 - 4 * ls - sw * 3, 80, -1, liftB);
       freePaw(rx - 1 - sw * 6 - ft, 89.3, 5.8 * ls, pal.base, liftB);
+      const trunk: Body = { hull: [[46, by, brx, bry], [46 + brx * 0.52, by + bry * 0.08, brx * 0.52, bry * 1.0], [46 - brx * 0.58, by - bry * 0.04, brx * 0.46, bry * 0.98]] };
+      coatRim(p, ph, trunk, cz);
       p.taper(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 13 * b, 9 * b, pal.base);
       p.ell(46, by, brx, bry, pal.base);
       // A deeper chest and a rounded rump break up the plain oval.
       p.ell(46 + brx * 0.52, by + bry * 0.08, brx * 0.52, bry * 1.0, pal.base);
       p.ell(46 - brx * 0.58, by - bry * 0.04, brx * 0.46, bry * 0.98, pal.base);
+      twoTone(p, ph, trunk, [46, by - bry * 0.12], [0, -1], cz);
       drawPattern(p, a, ph, st.cue);
+      coatSkin(p, ph, trunk, cz);
       shadeForm(p, 46, by, brx, bry);
       break;
     }
@@ -2111,10 +2397,17 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       }
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
+      const abdo: Body = { hull: [[abx, by - 2, arx, ary]] }, thor: Body = { hull: [[thx, by - 1, thr, thr * 0.9]] };
+      coatRim(p, ph, abdo, cz * 0.9);
       p.ell(abx, by - 2, arx, ary, pal.base);
+      twoTone(p, ph, abdo, [abx, by - 2 - ary * 0.1], [0, -1], cz * 0.9);
       drawPattern(p, a, ph, st.cue);
+      coatSkin(p, ph, abdo, cz * 0.9);
       shadeForm(p, abx, by - 2, arx, ary);
+      coatRim(p, ph, thor, cz * 0.8);
       p.ell(thx, by - 1, thr, thr * 0.9, shade(pal.base, -0.04));
+      if (ph.twotone === 'dorsal') twoTone(p, ph, thor, [thx, by - 2 - ary * 0.1], [0, -1], cz * 0.8);
+      coatSkin(p, ph, thor, cz * 0.8);
       shadeForm(p, thx, by - 1, thr, thr * 0.9);
       for (let i = 0; i < 3; i++) {
         // The legs hang from the thorax, the front pair angling forward under the head, with their hips back
@@ -2157,7 +2450,10 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
         drawCrest(p, ph, spn, k * b * 0.85);
         p.g = 'body';
       }
+      const coil: Body = { rib: { pts, ws } };
+      coatRim(p, ph, coil, cz * 0.85);
       p.ribbon(pts, ws, pal.base);
+      twoTone(p, ph, coil, [0, 0], [0, -1], cz * 0.85);
       if (ph.pattern === 'belly') {
         // The pale belly follows the underside of the ribbon (its left edge as drawn, which is the underside of
         // the coil and the front of the throat), running right out to the outline so it reads as part of the
@@ -2180,6 +2476,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
           if (ph.pattern === 'stars') star(p, x, y, w * 0.25, col); else p.dot(x, y, w * (ph.pattern === 'spots' ? 0.2 : 0.26), col, 0.75);
         }
       }
+      coatSkin(p, ph, coil, cz * 0.85);
       break;
     }
     case 'aquatic': {
@@ -2198,11 +2495,15 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       if (ph.el2 && (ph.tail === 'stub' || ph.tail === 'fan')) tailTip(p, a.tx - 9 * b, by - 9 * b + fl, ph.el2, 0.8 * k);
       if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTailShape(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
       p.part = 'main';
+      const fish: Body = { hull: [[48, by, brx, bry]] };
+      coatRim(p, ph, fish, cz);
       p.ell(48, by, brx, bry, pal.base);
+      twoTone(p, ph, fish, [48, by - bry * 0.08], [0, -1], cz);
       drawPattern(p, a, ph, st.cue);
+      coatSkin(p, ph, fish, cz);
       shadeForm(p, 48, by, brx, bry);
       p.g = 'front';
-      p.ell(48 + brx * 0.05, by + bry * 0.55, 8 * ls, 4 * ls, shade(pal.base, -0.08), { rot: 28 + sw * 14 - raise * 20 + reach * 10 });
+      p.ell(48 + brx * 0.05, by + bry * 0.55, 8 * ls, 4 * ls, shade(ph.twotone === 'socks' ? pal.sock : pal.limb, -0.08), { rot: 28 + sw * 14 - raise * 20 + reach * 10 });
       p.g = 'body';
       break;
     }
@@ -2217,14 +2518,18 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       drawCrest(p, ph, ellSpine(50, cy, rx, ry, Math.PI + 0.1, 1.5 * Math.PI - 0.25, 5), k * b * 0.85);
       const wv = o.rig && !o.walking ? 0 : Math.sin(phase * TAU) * 1.6;
       p.g = 'back';
-      p.ell(50 - rx * 0.75, cy + ry * 0.6 - wv, 3.4 * ls * lw, 3 * ls * lw, far);
+      p.ell(50 - rx * 0.75, cy + ry * 0.6 - wv, 3.4 * ls * lw, 3 * ls * lw, socks ? sockOf(far) : limbFar);
       p.g = 'body';
+      const dome: Body = { hull: [[50, cy + ry * 0.05, rx * 0.99, ry * 1.04]] };
+      coatRim(p, ph, dome, cz * 0.9, [Math.PI * 0.95, Math.PI * 2.05]);
       p.path(`M${f(50 - rx)} ${f(cy)}Q${f(50 - rx)} ${f(cy - ry * 1.1)} 50 ${f(cy - ry * 1.1)}Q${f(50 + rx)} ${f(cy - ry * 1.1)} ${f(50 + rx)} ${f(cy)}Q${f(50 + rx)} ${f(cy + ry * 1.1)} ${f(50 + rx * 0.55)} ${f(cy + ry * 1.45 + wv)}Q${f(50 + rx * 0.35)} ${f(cy + ry * 1.05)} ${f(50 + rx * 0.1)} ${f(cy + ry * 1.6 - wv)}Q${f(50 - rx * 0.15)} ${f(cy + ry * 1.1)} ${f(50 - rx * 0.45)} ${f(cy + ry * 1.7 + wv)}Q${f(50 - rx * 0.95)} ${f(cy + ry * 1.1)} ${f(50 - rx)} ${f(cy)}Z`, pal.base);
+      twoTone(p, ph, dome, [50, cy - ry * 0.05], [-0.45, -0.9], cz * 0.9);
       drawPattern(p, a, ph, st.cue);
+      coatSkin(p, ph, dome, cz * 0.9);
       shadeForm(p, 50, cy + ry * 0.1, rx * 0.86, ry * 0.8);
       if (ph.tail !== 'stub') drawTail(p, { ...a, tx: 50 - rx * 0.5, ty: cy + ry * 1.2, tdir: -0.6 }, ph, k * 0.7, wv);
       // The near nub of an arm: forward to strike, up to cast.
-      p.ell(50 + rx * 0.95 + reach * 4, cy + ry * 0.45 + wv - raise * ry * 0.7 - reach * 2, 3.6 * ls * lw, 3.2 * ls * lw, pal.base);
+      p.ell(50 + rx * 0.95 + reach * 4, cy + ry * 0.45 + wv - raise * ry * 0.7 - reach * 2, 3.6 * ls * lw, 3.2 * ls * lw, socks ? pal.sock : pal.limb);
     }
   }
   // A roar throws the head back; a guard tucks it in.

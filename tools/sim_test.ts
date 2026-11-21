@@ -294,7 +294,7 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
     console.log(`     shiny ${shiny}/${N} wild (${(shiny / N * 100).toFixed(2)}%), hidden shiny carriers ${carriers}`);
     ok(shiny > N * 0.002 && shiny < N * 0.009, 'about 1 in 200 wild creatures is shiny');
     ok(carriers > N * 0.08, 'many more carry the shiny gene hidden');
-    ok(LATE_PARTS.every(k => seen[k].size === PARTS[k].length), `every eye colour and expression turns up in the wild (${LATE_PARTS.map(k => k + ' ' + seen[k].size).join(', ')})`);
+    ok(LATE_PARTS.every(k => seen[k].size === PARTS[k].length), `every variant of the later looks genes turns up in the wild (${LATE_PARTS.map(k => k + ' ' + seen[k].size).join(', ')})`);
     // Two hidden carriers have a shiny child about a quarter of the time.
     const c1 = wildGenome(rng, { els: ['spark'], quality: 0.5 }), c2 = wildGenome(rng, { els: ['spark'], quality: 0.5 });
     c1.shiny = [1, 0]; c2.shiny = [0, 1];
@@ -307,7 +307,7 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
     const before = JSON.stringify(old), copy = JSON.parse(before);
     fillGenome(old, 'c_9'); fillGenome(copy, 'c_9');
     const kept = Object.keys(JSON.parse(before)).every(k => JSON.stringify(old[k]) === JSON.stringify(JSON.parse(before)[k]));
-    ok(LATE_PARTS.every(k => old[k]) && old.shiny && kept && JSON.stringify(old) === JSON.stringify(copy), 'old saves get eye colour, expression and the shiny gene without other genes changing');
+    ok(LATE_PARTS.every(k => old[k]) && old.shiny && kept && JSON.stringify(old) === JSON.stringify(copy), 'old saves get the later looks genes and the shiny gene without other genes changing');
     // Brown eyes are dominant over blue.
     const b1 = { ...c1, iris: ['brown', 'blue'] as [string, string] }, b2 = { ...c2, iris: ['blue', 'blue'] as [string, string] };
     ok(express(b1).iris === 'brown' && express(b2).iris === 'blue', 'brown eyes are dominant, blue recessive');
