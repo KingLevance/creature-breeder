@@ -375,7 +375,7 @@ export function BreedScreen() {
   const tutorial = save.tutorial < TUT.DONE;
   const Slot = ({ c, label, sex }: { c?: Creature; label: string; sex: 'F' | 'M' }) => (
     <Pressable onPress={() => { haptic('select'); setPicking(sex); }} style={[{ flex: 1, borderRadius: 18, overflow: 'hidden', borderWidth: 1.5, borderColor: c ? 'rgba(255,255,255,0.1)' : (sex === 'F' ? C.female : C.male) + 'aa' }, shadow(sex === 'F' ? C.female : C.male, 10, c ? 0.2 : 0.45, 0)]}>
-      <Grad colors={[mixHex('#352a60', sex === 'F' ? C.female : C.male, 0.25), '#241b44']} />
+      <Grad colors={[mixHex('#4f4189', sex === 'F' ? C.female : C.male, 0.25), '#382c66']} />
       <View style={{ alignItems: 'center', padding: 8 }}>
       <View style={{ backgroundColor: 'rgba(10,6,22,0.45)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 1 }}><Text style={{ color: sex === 'F' ? C.female : C.male, fontSize: 12, fontFamily: F.semi }}>{label}</Text></View>
       {c ? (

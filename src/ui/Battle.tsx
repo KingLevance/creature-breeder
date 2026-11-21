@@ -74,7 +74,7 @@ const newUA = (): UA => ({
 const tm = (v: Animated.Value, toValue: number, duration: number, easing?: (t: number) => number) =>
   Animated.timing(v, { toValue, duration: Math.max(1, Math.round(duration)), easing, useNativeDriver: ND });
 /** What a creature is doing right now, for its drawing: a pose, running legs, or facing back toward its team. */
-interface Act { pose?: Pose; moving?: boolean; turned?: boolean }
+interface Act { pose?: Pose; moving?: boolean; turned?: boolean; /** Still on its feet while it staggers, before it collapses. */ falling?: boolean }
 
 const FloatText = memo(function FloatText({ f, x, y, onDone }: { f: Float; x: number; y: number; onDone: (id: number) => void }) {
   const a = useRef(new Animated.Value(0)).current;
@@ -182,10 +182,12 @@ const addLoot = (a: Loot, b: Loot | null): Loot => (b ? {
 /** The countdown to the next fight, as a bar that drains. */
 function Countdown({ ms }: { ms: number }) {
   const t = useRef(new Animated.Value(1)).current;
-  useEffect(() => { Animated.timing(t, { toValue: 0, duration: ms, easing: Easing.linear, useNativeDriver: false }).start(); }, [t, ms]);
+  const [w, setW] = useState(0);
+  // Slides out on the native thread, so it doesn't compete with setting up the next chamber.
+  useEffect(() => { Animated.timing(t, { toValue: 0, duration: ms, easing: Easing.linear, useNativeDriver: ND }).start(); }, [t, ms]);
   return (
-    <View style={{ height: 6, borderRadius: 3, backgroundColor: '#120d20', overflow: 'hidden', marginTop: 10 }}>
-      <Animated.View style={{ height: 6, borderRadius: 3, backgroundColor: C.gold, width: t.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }} />
+    <View onLayout={e => setW(e.nativeEvent.layout.width)} style={{ height: 6, borderRadius: 3, backgroundColor: '#120d20', overflow: 'hidden', marginTop: 10 }}>
+      {w > 0 ? <Animated.View style={{ height: 6, width: w, borderRadius: 3, backgroundColor: C.gold, transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [-w, 0] }) }] }} /> : null}
     </View>
   );
 }
@@ -303,28 +305,49 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     const dir = u.side === 0 ? -1 : 1; // pushed away from the other team
     const push = fromX == null ? dir : Math.sign(place(u).x - fromX) || dir;
     sfx('faint');
+    // `lean` is toward the enemy, so being knocked back away from the hit is a lean the other way.
+    const back = push === (u.side === 0 ? -1 : 1) ? -1 : 1;
+    // 1. Knocked back by the blow, flashing.
+    setAct(u.uid, { pose: 'hurt', falling: true });
     await run(Animated.parallel([
-      Animated.timing(a.ox, { toValue: push * 16, duration: 140 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+      Animated.timing(a.ox, { toValue: push * 16, duration: 150 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+      tm(a.lean, back * 16, 150 * T(), Easing.out(Easing.quad)),
       Animated.sequence([
         Animated.timing(a.blink, { toValue: 0.25, duration: 60, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND }),
         Animated.timing(a.blink, { toValue: 0.25, duration: 60, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND }),
       ]),
-      Animated.timing(a.squash, { toValue: 1, duration: 140 * T(), useNativeDriver: ND }),
     ]));
-    // Topple over onto the ground and settle with a small bounce.
+    // 2. Stagger: dazed, it sways and stumbles a step, sagging as its strength goes.
+    setAct(u.uid, { pose: 'dizzy', falling: true });
     await run(Animated.parallel([
-      Animated.timing(a.squash, { toValue: 0, duration: 120 * T(), useNativeDriver: ND }),
-      Animated.timing(a.down, { toValue: 1, duration: 380 * T(), easing: Easing.bounce, useNativeDriver: ND }),
+      Animated.sequence([
+        tm(a.lean, -back * 9, 170 * T(), Easing.inOut(Easing.sin)),
+        tm(a.lean, back * 7, 150 * T(), Easing.inOut(Easing.sin)),
+        tm(a.lean, -back * 3, 120 * T(), Easing.inOut(Easing.sin)),
+      ]),
+      tm(a.ox, push * 24, 440 * T(), Easing.out(Easing.quad)),
+      tm(a.stretch, 1.05, 440 * T(), Easing.in(Easing.quad)), // sagging: a little wider and shorter
     ]));
+    // 3. The legs give way: it drops into its lying-down pose, flops against the ground with a little bounce,
+    // and a puff of dust comes up.
+    setAct(u.uid, { pose: undefined, falling: false });
     const p = place(u);
+    await run(Animated.parallel([
+      // Flattened by the impact (wide and short, pivoting at the feet), then springing back into shape.
+      Animated.sequence([tm(a.stretch, 1.3, 90 * T(), Easing.in(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 4.5, tension: 140, useNativeDriver: ND })]),
+      Animated.sequence([Animated.delay(80 * T()), tm(a.air, p.sz * 0.06, 110, Easing.out(Easing.quad)), tm(a.air, 0, 120, Easing.in(Easing.quad))]),
+      tm(a.lean, 0, 200 * T(), Easing.out(Easing.quad)),
+      tm(a.down, 1, 320 * T(), Easing.out(Easing.quad)),
+    ]));
     addFx({ kind: 'puff', x: p.x, y: p.feet - 6 });
-    // Everyone who faints dissolves in a puff. Fallen teammates leave a ghost marker for revive moves.
-    await sleep(180 * T());
+    shakeField(3);
+    // It lies there a moment, then dissolves in a puff. Fallen teammates leave a ghost marker for revive moves.
+    await sleep(520 * T());
     sfx('poof');
     addFx({ kind: 'puff', x: p.x, y: p.feet - p.sz * 0.3, color: ELEMENTS[u.ph.el1].light });
     Animated.timing(a.fade, { toValue: 0, duration: 420, useNativeDriver: ND }).start();
     if (u.side === 0) setLeftBehind(l => (l.includes(u.uid) ? l : [...l, u.uid]));
-  }, [addFx, place]);
+  }, [addFx, place, setAct, shakeField]);
 
   const reviveAnim = useCallback(async (u: Unit) => {
     const a = A(u.uid);
@@ -982,8 +1005,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const isActor = actor === u.uid;
           const walking = mode === 'walk' && v.alive && u.side === 0;
           const fallDir = u.side === 0 ? -1 : 1;
+          // Your team's views stay mounted from chamber to chamber; only the new enemies mount, keeping the walk smooth.
           return (
-            <Animated.View key={`${fightNo}_${u.uid}`} style={{
+            <Animated.View key={u.side === 0 ? `p_${u.uid}_${u.cid}` : `${fightNo}_${u.uid}`} style={{
               position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz,
               transform: [
                 { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind)) },
@@ -999,8 +1023,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   backgroundColor: 'rgba(0,0,0,0.2)',
                   opacity: Animated.multiply(a.fade, a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.4], extrapolate: 'clamp' })),
                   transform: [
-                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.14] }) },
-                    { scaleX: Animated.multiply(a.down.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }), a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.55], extrapolate: 'clamp' })) },
+                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.03] }) },
+                    { scaleX: Animated.multiply(a.down.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }), a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.55], extrapolate: 'clamp' })) },
                     { scaleY: a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.55], extrapolate: 'clamp' }) },
                   ],
                 }} />
@@ -1022,14 +1046,15 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   width: pos.sz, height: pos.sz, opacity: Animated.multiply(a.fade, a.blink),
                   transform: [
                     { rotate: a.spin.interpolate({ inputRange: [0, 360], outputRange: u.side === 0 ? ['0deg', '360deg'] : ['0deg', '-360deg'] }) },
-                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.12] }) },
-                    { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, pos.sz * 0.24] }) },
-                    { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 90}deg`] }) },
+                    // Lying down is in the drawing itself; this only settles it a touch lower, tipped a few degrees.
+                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.03] }) },
+                    { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, pos.sz * 0.03] }) },
+                    { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 7}deg`] }) },
                     { scaleX: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) },
                     { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
                   ],
                 }}>
-                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
+                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive && !acts[u.uid]?.falling} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
                   {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} part="body" /> : null}
                 </Animated.View>
                 </Animated.View>
@@ -1044,7 +1069,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const pos = place(u);
           const a = A(u.uid);
           return (
-            <Animated.View key={`hud${fightNo}_${u.uid}`} pointerEvents="none" style={{
+            <Animated.View key={u.side === 0 ? `hudp_${u.uid}_${u.cid}` : `hud${fightNo}_${u.uid}`} pointerEvents="none" style={{
               position: 'absolute', left: pos.left, top: pos.top, width: pos.sz,
               transform: [
                 { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind)) },

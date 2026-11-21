@@ -906,6 +906,9 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         for (const u of [0.25, 0.45]) { const [x, y] = top(u); p.poly([[x - 1.1 * s, y + 1], [x, y + 4.5 * s], [x + 1.1 * s, y + 1]], '#cfefff'); }
         return done();
       }
+      // A fluffy collar needs a neck. On a floater or a swimmer the head is part of the body, and the puffs
+      // landed as loose white blobs on the chest, so those get the standard frost marks instead.
+      if (ph.skel === 'floater' || ph.skel === 'aquatic') return false;
       ruff('#f4fbff', '#dff3ff');
       return done();
     case 'brawn':
@@ -1126,6 +1129,7 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         for (const [dx, h, cur] of [[-2, 4.5, -2], [0, 6, 1], [2, 4.8, 3]]) p.taper(x + dx * s, y + 1.2, x + (dx + cur) * s, y - h * s, 2.6 * s + 0.4, 0.6, c.base, x + (dx - 1.5) * s, y - h * 0.8 * s);
         return done();
       }
+      if (ph.skel === 'floater' || ph.skel === 'aquatic') return false;
       ruff(c.light, mix(c.light, '#ffffff', 0.4));
       return done();
     case 'radiant':
@@ -1347,6 +1351,19 @@ const STANCES: Record<Skeleton, StancePose[]> = {
   floater: [S0, { lean: 16, drop: 2, hdx: 0, hdy: 0 }, { lean: -13, drop: -1, hdx: 0, hdy: 0, sx: 2 }, { lean: 22, drop: 6, hdx: 0, hdy: 3 }],
 };
 
+/**
+ * Knocked out: lying down. The body sinks to the ground with the legs folding under it and the head resting low,
+ * instead of standing stiffly with its eyes crossed.
+ */
+const KO_POSE: Record<Skeleton, StancePose> = {
+  biped: { lean: 6, drop: 9, hdx: 2, hdy: 6, ft: 7, sx: 3 },
+  quad: { lean: 3, drop: 11, hdx: 3, hdy: 13, ft: 9, sx: 2 },
+  multi: { lean: 0, drop: 10, hdx: 0, hdy: 7, ft: 7, sx: 2 },
+  serpent: { lean: 0, drop: 0, hdx: 16, hdy: 33 },
+  aquatic: { lean: 10, drop: 12, hdx: 0, hdy: 3, sx: 3 },
+  floater: { lean: 18, drop: 13, hdx: 0, hdy: 4, sx: 4 },
+};
+
 /** Draw a creature. Returns shapes back-to-front. */
 export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   return buildCreature(ph, o).shapes();
@@ -1396,7 +1413,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   const pw = poseWeights(o.pose);
   const reach = o.ko ? 0 : o.reach ?? pw.reach, raise = o.ko ? 0 : o.raise ?? pw.raise, guard = o.ko ? 0 : o.guard ?? pw.guard;
   // A fainted creature slumps upright-ish; otherwise it holds its stance.
-  const sp = o.ko ? S0 : STANCES[ph.skel][ph.stance ?? 0] ?? S0;
+  const sp = o.ko ? KO_POSE[ph.skel] : STANCES[ph.skel][ph.stance ?? 0] ?? S0;
   const [tiltL, tiltD] = poseTilt(ph.skel, reach, raise, guard);
   /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks or the foot lifts. */
   const leg = (hx0: number, hy0: number, fx: number, fy: number, w0: number, w1: number, col: string, kx?: number, ky?: number, knee = 1, lift = 0) => {

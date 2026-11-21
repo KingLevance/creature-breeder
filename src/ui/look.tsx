@@ -89,7 +89,7 @@ export const Glow = memo(function Glow({ color, opacity = 0.6, cx = '50%', cy = 
 });
 
 /** Panel colours. */
-export const PANEL = ['#352a60', '#271e48'];
+export const PANEL = ['#4f4189', '#3a2e6d'];
 export const shadow = (color = '#000', r = 10, o = 0.35, y = 4): ViewStyle => ({
   shadowColor: color, shadowOpacity: o, shadowRadius: r, shadowOffset: { width: 0, height: y }, elevation: Math.round(r / 2),
 });
@@ -235,10 +235,11 @@ export const Backdrop = memo(function Backdrop({ tint, H }: { tint: string; H: n
   }, [tint, fade]);
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      <Grad colors={['#2b2054', '#1a1335', '#0f0a1e']} />
+      {/* A mid-tone dusk purple: light enough to feel open, dark enough for white text and the glows to read. */}
+      <Grad colors={['#5a4a9e', '#45387f', '#352b66']} />
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: fade }]}>
-        <Glow color={tint} opacity={0.32} cx="85%" cy="8%" r="70%" />
-        <Glow color={tint} opacity={0.16} cx="5%" cy="75%" r="60%" />
+        <Glow color={tint} opacity={0.4} cx="85%" cy="8%" r="70%" />
+        <Glow color={tint} opacity={0.22} cx="5%" cy="75%" r="60%" />
       </Animated.View>
       {MOTES.map((m, i) => <Mote key={i} {...m} H={H} color={i % 3 ? '#e9e1ff' : tint} />)}
     </View>

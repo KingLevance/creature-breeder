@@ -339,36 +339,117 @@ const Bolt = memo(function Bolt({ s, done, H }: { s: Extract<FxSpec, { kind: 'bo
   );
 });
 
-/** One spike of an eruption, drawn standing on (0, 0), about 1 unit tall. */
-function spikePath(el: ElementId, w: number, h: number, lean: number): string {
-  switch (el) {
-    case 'verdant': return `M${-w * 0.5} 0 Q${-w * 0.6 + lean} ${-h * 0.5} ${lean * 1.6} ${-h} Q${w * 0.2 + lean} ${-h * 0.5} ${w * 0.5} 0Z`;
-    case 'ember': case 'shade': case 'void': case 'spirit':
-      return `M${-w * 0.5} 0 Q${-w * 0.7} ${-h * 0.45} ${lean} ${-h} Q${w * 0.1} ${-h * 0.6} ${w * 0.3} ${-h * 0.75} Q${w * 0.75} ${-h * 0.35} ${w * 0.5} 0Z`;
-    default: return `M${-w * 0.5} 0 L${lean - w * 0.08} ${-h} L${lean + w * 0.12} ${-h * 0.92} L${w * 0.5} 0Z`;
-  }
-}
 const ERUPT_COL: Partial<Record<ElementId, [string, string]>> = {
   frost: ['#bfeaff', '#ffffff'], stone: ['#9c9384', '#c9c1b1'], terra: ['#8a6440', '#b48a5c'], verdant: ['#3f9a4a', '#8fd16a'],
   ember: ['#ff6a2a', '#ffd34d'], shade: ['#2d2240', '#9b6cff'], void: ['#1b1030', '#b48cff'], spirit: ['#7e7bc9', '#e9e8ff'],
 };
+type SpikeKind = 'rock' | 'crystal' | 'thorn' | 'flame';
+const SPIKE_KIND: Partial<Record<ElementId, SpikeKind>> = {
+  frost: 'crystal', glimmer: 'crystal', mind: 'crystal', radiant: 'crystal',
+  verdant: 'thorn', venom: 'thorn', swarm: 'thorn',
+  ember: 'flame', shade: 'flame', void: 'flame', spirit: 'flame',
+};
+/** One spike in a w×h box, base along the bottom, tip leaning by `ln` (a fraction of w). Two-tone faces give it form. */
+function Spike({ kind, w, h, ln, c1, c2, dark }: { kind: SpikeKind; w: number; h: number; ln: number; c1: string; c2: string; dark: string }) {
+  const tx = w / 2 + ln * w, mid = w * 0.5 + ln * w * 0.35;
+  switch (kind) {
+    case 'flame':
+      return (
+        <Svg width={w} height={h}>
+          <Path d={`M0 ${h} Q${w * 0.02} ${h * 0.45} ${tx} 0 Q${w * 0.62 + ln * w} ${h * 0.35} ${w * 0.72} ${h * 0.22} Q${w * 1.02} ${h * 0.6} ${w} ${h}Z`} fill={c1} stroke={dark} strokeWidth={1.3} strokeLinejoin="round" />
+          <Path d={`M${w * 0.22} ${h} Q${w * 0.2} ${h * 0.6} ${tx} ${h * 0.3} Q${w * 0.8} ${h * 0.65} ${w * 0.78} ${h}Z`} fill={c2} />
+        </Svg>
+      );
+    case 'thorn':
+      return (
+        <Svg width={w} height={h}>
+          <Path d={`M0 ${h} Q${w * 0.05} ${h * 0.45} ${tx} 0 Q${w * 0.62} ${h * 0.5} ${w} ${h}Z`} fill={c1} stroke={dark} strokeWidth={1.3} strokeLinejoin="round" />
+          <Path d={`M${w * 0.45} ${h} Q${w * 0.5} ${h * 0.5} ${tx} ${h * 0.04} Q${w * 0.62} ${h * 0.5} ${w} ${h}Z`} fill={dark} opacity={0.28} />
+          <Path d={`M${w * 0.3} ${h * 0.85} Q${w * 0.3} ${h * 0.45} ${tx - w * 0.04} ${h * 0.1}`} stroke={c2} strokeWidth={Math.max(1, w * 0.08)} strokeLinecap="round" fill="none" opacity={0.8} />
+        </Svg>
+      );
+    case 'crystal':
+      return (
+        <Svg width={w} height={h}>
+          <Path d={`M0 ${h} L${w * 0.08} ${h * 0.3} L${tx} 0 L${w * 0.92} ${h * 0.3} L${w} ${h}Z`} fill={c1} stroke={dark} strokeWidth={1.2} strokeLinejoin="round" opacity={0.92} />
+          <Path d={`M${w * 0.08} ${h * 0.3} L${tx} 0 L${mid} ${h * 0.34} L${mid} ${h}L0 ${h}Z`} fill={c2} opacity={0.75} />
+          <Path d={`M${w * 0.24} ${h * 0.85} L${w * 0.24} ${h * 0.4} L${tx - w * 0.08} ${h * 0.1}`} stroke="#ffffff" strokeWidth={Math.max(1, w * 0.07)} strokeLinecap="round" fill="none" opacity={0.85} />
+        </Svg>
+      );
+    default:
+      return (
+        <Svg width={w} height={h}>
+          <Path d={`M0 ${h} L${w * 0.14} ${h * 0.55} L${tx} 0 L${w * 0.84} ${h * 0.42} L${w} ${h}Z`} fill={c1} stroke={dark} strokeWidth={1.3} strokeLinejoin="round" />
+          <Path d={`M${w * 0.14} ${h * 0.55} L${tx} 0 L${mid} ${h}L0 ${h}Z`} fill={c2} />
+          <Path d={`M${mid} ${h} L${tx} ${h * 0.02}`} stroke={dark} strokeWidth={0.8} opacity={0.5} />
+          <Path d={`M${w * 0.3} ${h * 0.7} L${w * 0.36} ${h * 0.52}`} stroke={dark} strokeWidth={0.9} strokeLinecap="round" opacity={0.45} />
+        </Svg>
+      );
+  }
+}
+/**
+ * Spikes bursting up out of the ground under a target: the ground cracks, then the spikes punch up one after
+ * another (the tallest first) with a little overshoot, kicking up dust and chips; they hold a moment and sink back.
+ */
 const Erupt = memo(function Erupt({ s, done }: { s: Extract<FxSpec, { kind: 'erupt' }>; done: () => void }) {
-  const t = useRun(700, done, Easing.out(Easing.quad));
+  const t = useRun(900, done);
   const e = ELEMENTS[s.el];
   const [c1, c2] = ERUPT_COL[s.el] ?? [e.base, e.light];
-  const W = s.s * 1.6, Hh = s.s * 1.1;
-  const spikes = [[-0.32, 0.55, -6], [0.3, 0.6, 7], [-0.05, 1, 2], [-0.18, 0.75, -3], [0.15, 0.8, 4]];
-  const grow = t.interpolate({ inputRange: [0, 0.18, 0.28, 0.8, 1], outputRange: [0.05, 1.12, 1, 1, 0.1] });
+  const kind = SPIKE_KIND[s.el] ?? 'rock';
+  const W = s.s * 1.7, Hh = s.s * 1.15;
+  // [x (fraction of W from centre), height, width, lean, order they come up in]
+  const spikes = [[-0.34, 0.5, 0.17, -0.3, 3], [0.33, 0.56, 0.17, 0.3, 4], [-0.17, 0.78, 0.21, -0.15, 1], [0.16, 0.72, 0.2, 0.14, 2], [0, 1, 0.25, 0.02, 0]];
+  const rise = (k: number) => {
+    const a = 0.08 + k * 0.045;
+    return t.interpolate({ inputRange: [0, a, a + 0.09, a + 0.15, 0.74 + k * 0.02, 0.92 + k * 0.015, 1], outputRange: [1, 1, -0.08, 0, 0, 1, 1], extrapolate: 'clamp' });
+  };
+  const chips = [[-0.5, -0.9, -200], [0.45, -0.8, 160], [-0.25, -1.15, 90], [0.3, -1.05, -120]];
+  const gy = s.y; // the ground line
   return (
     <>
-      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - W / 2, top: s.y - Hh, width: W, height: Hh,
-        opacity: t.interpolate({ inputRange: [0, 0.05, 0.85, 1], outputRange: [0, 1, 1, 0] }),
-        transform: [{ translateY: grow.interpolate({ inputRange: [0, 1.2], outputRange: [Hh / 2, -Hh * 0.1] }) }, { scaleY: grow }] }}>
-        <Svg width={W} height={Hh} viewBox={`${-W / 2} ${-Hh} ${W} ${Hh}`}>
-          {spikes.map(([x, h, ln], i) => <Path key={i} d={spikePath(s.el, W * 0.2, Hh * h, ln)} fill={i === 2 ? c2 : c1} stroke={e.dark} strokeWidth={1.2} transform={`translate(${x * W} 0)`} />)}
+      {/* The crack in the ground. */}
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - W * 0.55, top: gy - 7, width: W * 1.1, height: 14,
+        opacity: t.interpolate({ inputRange: [0, 0.06, 0.8, 1], outputRange: [0, 1, 0.8, 0] }), transform: [{ scaleX: t.interpolate({ inputRange: [0, 0.1, 1], outputRange: [0.2, 1, 1], extrapolate: 'clamp' }) }] }}>
+        <Svg width={W * 1.1} height={14}>
+          <Path d={`M${W * 0.04} 7 L${W * 0.2} 5 L${W * 0.32} 9 L${W * 0.46} 4 L${W * 0.58} 8.5 L${W * 0.72} 5 L${W * 0.86} 8 L${W * 1.04} 6.5`} stroke="#2a1f1a" strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round" fill="none" opacity={0.55} />
+          <Ellipse cx={W * 0.55} cy={7} rx={W * 0.5} ry={5} fill={c1} opacity={0.22} />
         </Svg>
       </Animated.View>
-      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - W * 0.6, top: s.y - 6, width: W * 1.2, height: 12, borderRadius: 12, backgroundColor: c1, opacity: t.interpolate({ inputRange: [0, 0.1, 1], outputRange: [0, 0.5, 0] }) }} />
+      {/* The spikes, clipped at the ground so they come up out of it rather than growing in mid-air. */}
+      <View pointerEvents="none" style={{ position: 'absolute', left: s.x - W / 2, top: gy - Hh, width: W, height: Hh + 1, overflow: 'hidden' }}>
+        {spikes.map(([x, h, w, ln, k], i) => {
+          const sw = W * w, sh = Hh * h;
+          return (
+            <Animated.View key={i} style={{ position: 'absolute', left: W / 2 + x * W - sw / 2, top: Hh + 1 - sh, width: sw, height: sh,
+              transform: [{ translateY: Animated.multiply(rise(k), sh) }] }}>
+              <Spike kind={kind} w={sw} h={sh} ln={ln} c1={c1} c2={c2} dark={e.dark} />
+            </Animated.View>
+          );
+        })}
+      </View>
+      {/* Dust rolling out from the base. */}
+      {[-1, 1].map(d => (
+        <Animated.View key={d} pointerEvents="none" style={{ position: 'absolute', left: s.x - W * 0.25 + d * W * 0.18, top: gy - 10, width: W * 0.5, height: 16, borderRadius: 16,
+          backgroundColor: kind === 'flame' ? c2 : '#e8dcc6',
+          opacity: t.interpolate({ inputRange: [0, 0.1, 0.16, 0.6], outputRange: [0, 0, 0.55, 0], extrapolate: 'clamp' }),
+          transform: [{ translateX: t.interpolate({ inputRange: [0, 0.6], outputRange: [0, d * W * 0.22], extrapolate: 'clamp' }) }, { scale: t.interpolate({ inputRange: [0.1, 0.6], outputRange: [0.4, 1.3], extrapolate: 'clamp' }) }] }} />
+      ))}
+      {/* Chips thrown up into the air. */}
+      {kind === 'flame' ? null : chips.map(([dx, dy, rot], i) => {
+        const a = 0.1 + i * 0.04, cs = Math.max(4, s.s * 0.07);
+        const tt = t.interpolate({ inputRange: [a, a + 0.42], outputRange: [0, 1], extrapolate: 'clamp' });
+        return (
+          <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - cs / 2, top: gy - cs, width: cs, height: cs,
+            opacity: t.interpolate({ inputRange: [a, a + 0.02, a + 0.36, a + 0.42], outputRange: [0, 1, 1, 0], extrapolate: 'clamp' }),
+            transform: [
+              { translateX: tt.interpolate({ inputRange: [0, 1], outputRange: [0, dx * W * 0.6] }) },
+              { translateY: tt.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, dy * Hh * 0.7, dy * Hh * 0.25] }) },
+              { rotate: tt.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${rot}deg`] }) },
+            ] }}>
+            <Svg width={cs} height={cs} viewBox="0 0 10 10"><Path d="M1 4 L4 1 L9 3 L8 8 L3 9Z" fill={kind === 'crystal' ? c2 : c1} stroke={e.dark} strokeWidth={1.2} strokeLinejoin="round" /></Svg>
+          </Animated.View>
+        );
+      })}
     </>
   );
 });

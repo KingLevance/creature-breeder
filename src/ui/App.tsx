@@ -76,7 +76,7 @@ function TabBar({ tab, onTab, dots }: { tab: Tab; onTab: (t: Tab) => void; dots:
   return (
     <View style={[{ marginHorizontal: 10, marginBottom: 6, borderRadius: 24, height: 64 }, shadow('#000', 14, 0.5, 6)]}>
       <View style={{ flex: 1, borderRadius: 24, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}>
-        <Grad colors={['#3a2e6b', '#241b46']} />
+        <Grad colors={['#4e4089', '#382c66']} />
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 1, backgroundColor: 'rgba(255,255,255,0.18)' }} />
         <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 6, width: tw - 12, height: 52, left: 6, borderRadius: 18, overflow: 'hidden', transform: [{ translateX: slide.interpolate({ inputRange: [0, TABS.length - 1], outputRange: [0, tw * (TABS.length - 1)] }) }] }}>
           <Grad colors={[cur.tint + 'aa', cur.tint + '33']} />

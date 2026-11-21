@@ -11,7 +11,7 @@ import { Pose, Rig, Shape, creatureOpacity, drawCreature, drawCreatureRig, drawE
 import { F, Glow, Grad, Icon, IconName, ND as LOOK_ND, PANEL, haptic, pulse, shadow, useLoop, usePress } from './look';
 
 export const C = {
-  bg: '#171226', panel: '#231b3a', panel2: '#2e2450', line: '#43366b', text: '#f4efff', dim: '#a99fc9',
+  bg: '#2f265e', panel: '#35295d', panel2: '#43376f', line: '#5a4b92', text: '#f4efff', dim: '#a99fc9',
   gold: '#f5c542', good: '#5ad17a', bad: '#f0616d', accent: '#8f7cff', accent2: '#ff9f5a', male: '#6fb7ff', female: '#ff8fc7',
 };
 
@@ -31,11 +31,31 @@ function ShapeNodes({ shapes }: { shapes: Shape[] }) {
   );
 }
 
+/**
+ * A stable key for a creature's looks. Battles build fresh Pheno objects every fight, so caching by object would
+ * redraw a whole team's walk cycle in every chamber; keyed by content, each frame is drawn once per session.
+ */
+const phKeys = new WeakMap<Pheno, string>();
+function phKey(ph: Pheno): string {
+  let k = phKeys.get(ph);
+  if (k == null) { k = JSON.stringify(ph); phKeys.set(ph, k); }
+  return k;
+}
+/** Per-creature caches, keeping the most recently used few dozen creatures. */
+function lruFor<K, V>(store: Map<string, Map<K, V>>, ph: Pheno, cap = 40): Map<K, V> {
+  const k = phKey(ph);
+  let m = store.get(k);
+  if (m) { store.delete(k); store.set(k, m); return m; }
+  m = new Map();
+  store.set(k, m);
+  if (store.size > cap) store.delete(store.keys().next().value as string);
+  return m;
+}
+
 /** Drawn frames per creature. Idle and walk cycles repeat the same dozen frames, so each is drawn once. */
-const frameCache = new WeakMap<Pheno, Map<string, Shape[]>>();
+const frameCache = new Map<string, Map<string, Shape[]>>();
 function drawCached(ph: Pheno, stage: number, phase: number, walking?: boolean, shadow?: boolean, ko?: boolean, pose?: Pose): Shape[] {
-  let m = frameCache.get(ph);
-  if (!m) { m = new Map(); frameCache.set(ph, m); }
+  const m = lruFor(frameCache, ph, 80);
   const key = `${stage}|${phase.toFixed(3)}|${walking ? 1 : 0}|${shadow === false ? 0 : 1}|${ko ? 1 : 0}|${pose ?? 'idle'}`;
   let sh = m.get(key);
   if (!sh) {
@@ -74,24 +94,33 @@ const about = (pv: [number, number], size: number, angle: Animated.AnimatedInter
 };
 
 /** Drawn rigs per creature, keyed by everything that changes the drawing. */
-const rigCache = new WeakMap<Pheno, Map<string, Rig>>();
+const rigCache = new Map<string, Map<string, Rig>>();
 function rigCached(ph: Pheno, o: { stage: number; phase: number; walking?: boolean; shadow?: boolean; ko?: boolean; pose?: Pose; reach: number; raise: number; guard: number; look: number }): Rig {
-  let m = rigCache.get(ph);
-  if (!m) { m = new Map(); rigCache.set(ph, m); }
+  const m = lruFor(rigCache, ph);
+  const parts = lruFor(partCache, ph);
   const key = `${o.stage}|${o.phase.toFixed(3)}|${o.walking ? 1 : 0}|${o.shadow === false ? 0 : 1}|${o.ko ? 1 : 0}|${o.pose ?? 'idle'}|${o.reach.toFixed(2)}|${o.raise.toFixed(2)}|${o.guard.toFixed(2)}|${o.look}`;
   let r = m.get(key);
   if (!r) {
     r = drawCreatureRig(ph, o);
+    // Share identical layers between frames (the tail and wings rarely change while the legs walk), so the
+    // memoised layer views skip re-rendering them.
+    const intern = (sh: Shape[]) => { const k = JSON.stringify(sh); const had = parts.get(k); if (had) return had; if (parts.size > 120) parts.clear(); parts.set(k, sh); return sh; };
+    r = { ...r, tail: intern(r.tail), wingFar: intern(r.wingFar), wingNear: intern(r.wingNear), ground: intern(r.ground) };
     if (m.size > 160) m.clear();
     m.set(key, r);
   }
   return r;
 }
+const partCache = new Map<string, Map<string, Shape[]>>();
+
+/** One drawn layer of a creature. Memoised on its shape list, so an unchanged layer doesn't re-render. */
+const Layer = memo(function Layer({ shapes, size }: { shapes: Shape[]; size: number }) {
+  return <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}><ShapeNodes shapes={shapes} /></Svg>;
+});
 /** Whether anything in a creature's resting drawing moves with the idle cycle (orbiting orbs, flickers, motes). */
-const detailCache = new WeakMap<Pheno, Map<number, boolean>>();
+const detailCache = new Map<string, Map<number, boolean>>();
 function hasIdleDetail(ph: Pheno, stage: number): boolean {
-  let m = detailCache.get(ph);
-  if (!m) { m = new Map(); detailCache.set(ph, m); }
+  const m = lruFor(detailCache, ph, 200);
   let v = m.get(stage);
   if (v == null) {
     const at = (phase: number) => { const r = drawCreatureRig(ph, { stage, phase }); return JSON.stringify([r.main, r.ground]); };
@@ -225,9 +254,7 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
   }, [ph, ko, breath, beat, flick, hop, wiggle, off, wingSwing, size]);
 
   const s = size / 100, fy = 40 * s;
-  const svg = (shapes: Shape[]) => (
-    <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}><ShapeNodes shapes={shapes} /></Svg>
-  );
+  const svg = (shapes: Shape[]) => <Layer shapes={shapes} size={size} />;
   const gy = 42 * s;
   return (
     <View style={{ width: size, height: size, opacity: creatureOpacity(ph), transform: [{ scaleX: flip ? -1 : 1 }] }}>
@@ -277,7 +304,8 @@ export const CreatureGround = memo(function CreatureGround({ ph, stage, size, fl
     </Animated.View>
   );
 });
-const IDLE_FRAMES = 12, IDLE_MS = 150, WALK_FRAMES = 16, WALK_MS = 42;
+// 12 walk frames a stride is smooth enough for legs, and a quarter fewer re-renders than 16 while a team walks.
+const IDLE_FRAMES = 12, IDLE_MS = 150, WALK_FRAMES = 12, WALK_MS = 55;
 
 export const EggView = memo(function EggView({ ph, size, wobble = 0 }: { ph: Pheno; size: number; wobble?: number }) {
   const shapes = useMemo(() => drawEgg(ph, wobble), [ph, wobble]);
@@ -417,16 +445,21 @@ export function hpColor(frac: number): string {
 }
 
 export function Bar({ frac, color, height = 6, back = '#120d20' }: { frac: number; color: string; height?: number; back?: string }) {
-  const grow = useRef(new Animated.Value(0)).current;
   const f = Math.max(0, Math.min(1, frac));
-  // Width, not a scale: a scaled fill could stop a hair short of the end on iOS and look less than full.
-  useEffect(() => { Animated.timing(grow, { toValue: f, duration: 550, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start(); }, [f, grow]);
+  const [w, setW] = useState(0);
+  const grow = useRef(new Animated.Value(0)).current;
+  // The fill is always full width and slides in from the left on the native thread (so a screen full of bars
+  // changing at once costs the JS thread nothing). Sliding, rather than scaling, keeps the end rounded and
+  // lets it reach right to the end on iOS.
+  useEffect(() => { Animated.timing(grow, { toValue: f, duration: 550, easing: Easing.out(Easing.cubic), useNativeDriver: ND }).start(); }, [f, grow]);
   return (
-    <View style={{ height, backgroundColor: back, borderRadius: height / 2, overflow: 'hidden', borderWidth: height >= 6 ? 1 : 0, borderColor: 'rgba(0,0,0,0.35)' }}>
-      <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: grow.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }), borderRadius: height / 2, overflow: 'hidden', backgroundColor: color }}>
-        <Grad colors={[mixHex(color, '#ffffff', 0.35), color]} />
-        {height >= 5 ? <View style={{ position: 'absolute', left: 2, right: 2, top: 1, height: Math.max(1, height * 0.28), borderRadius: height, backgroundColor: 'rgba(255,255,255,0.3)' }} /> : null}
-      </Animated.View>
+    <View onLayout={e => setW(e.nativeEvent.layout.width)} style={{ height, backgroundColor: back, borderRadius: height / 2, overflow: 'hidden', borderWidth: height >= 6 ? 1 : 0, borderColor: 'rgba(0,0,0,0.35)' }}>
+      {w > 0 ? (
+        <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: w, borderRadius: height / 2, overflow: 'hidden', backgroundColor: color, transform: [{ translateX: grow.interpolate({ inputRange: [0, 1], outputRange: [-w, 0] }) }] }}>
+          <Grad colors={[mixHex(color, '#ffffff', 0.35), color]} />
+          {height >= 5 ? <View style={{ position: 'absolute', left: 2, right: 2, top: 1, height: Math.max(1, height * 0.28), borderRadius: height, backgroundColor: 'rgba(255,255,255,0.3)' }} /> : null}
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -490,7 +523,7 @@ export function MoveRow({ mv, cd, compact }: { mv: MoveDef; cd?: number; compact
   const e = ELEMENTS[mv.el];
   return (
     <View style={[st.move, { borderLeftColor: e.base, overflow: 'hidden' }]}>
-      <Grad colors={[mixHex('#2e2450', e.base, 0.16), '#2a2148']} horizontal />
+      <Grad colors={[mixHex('#43376f', e.base, 0.16), '#3a2e66']} horizontal />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 15, flex: 1 }} numberOfLines={1}>{mv.name}</Text>
         <View style={{ borderRadius: 8, paddingHorizontal: 6, paddingVertical: 1, borderWidth: 1, borderColor: RARITY_COLORS[mv.rarity] }}>

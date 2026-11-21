@@ -270,7 +270,7 @@ export function RosterScreen() {
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: picking ? 170 : 14 }}>
         <View style={[st.row, { justifyContent: 'space-between', marginBottom: 6 }]}>
           <H>Creatures {save.creatures.length}/{save.rosterCap}</H>
-          {canRelease ? <Btn small kind={picking ? 'main' : 'ghost'} label={picking ? 'Done' : 'Release several'} onPress={() => (picking ? stop() : setPicking(true))} /> : null}
+          {canRelease ? <Btn small kind={picking ? 'main' : 'ghost'} label={picking ? 'Done' : 'Multi-Release'} onPress={() => (picking ? stop() : setPicking(true))} /> : null}
         </View>
         <View style={[st.row, { marginBottom: 8, gap: 4 }]}>
           {picking ? (
