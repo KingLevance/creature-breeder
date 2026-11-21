@@ -4,7 +4,7 @@ import { Animated, Easing, Modal, Pressable, ScrollView, Text, View, useWindowDi
 import Svg, { Circle, Path } from 'react-native-svg';
 import { SfxName, sfx } from './audio';
 import { Creature, Egg, STAGE_NAMES, stageLevels, stageOf, typeLabel } from '../game/creature';
-import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, doBreed, forecast, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
+import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, discardEgg, doBreed, eggValue, forecast, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
 import { SKELETON_NAMES, express, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Breathing, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, P, SexMark, Stars, Title, TypeChips, mixHex, st } from './kit';
@@ -199,6 +199,8 @@ export function NurseryScreen() {
   const full = save.creatures.length >= save.rosterCap;
   const nextSlot = INC_SLOT_COST[save.incubators.length];
   const egg = save.eggs.find(e => e.id === selEgg) ?? save.eggs[0];
+  const [tossing, setTossing] = useState<string | null>(null);
+  const [tossed, setTossed] = useState<{ n: number; essence: number } | null>(null);
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 14 }}>
@@ -252,6 +254,28 @@ export function NurseryScreen() {
               {save.eggs.map(e => <EggCard key={e.id} egg={e} selected={egg?.id === e.id} onPress={() => setSelEgg(e.id)} />)}
             </View>
             {egg ? <P dim style={{ marginTop: 8 }}>Selected egg takes {fmtTime(incubationMs(egg, 1))} in a tier 1 incubator{save.tutorial < TUT.DONE ? ' (instant during the tutorial)' : ''}.</P> : null}
+            {egg && save.tutorial >= TUT.DONE ? (
+              tossing === egg.id ? (
+                <FadeIn dy={8}>
+                  <Card tint={C.bad} style={{ marginTop: 8, marginBottom: 0 }}>
+                    <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }}>Discard this egg?</Text>
+                    <P dim style={{ marginBottom: 10 }}>You get {eggValue(egg)} essence. This can't be undone.</P>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Btn style={{ flex: 1 }} kind="ghost" label="Keep" onPress={() => setTossing(null)} />
+                      <Btn style={{ flex: 1 }} kind="danger" label="Discard" onPress={() => {
+                        const v = mutate(s => discardEgg(s, egg.id));
+                        setTossing(null);
+                        setSelEgg(null);
+                        if (v) { sfx('crack'); haptic('medium'); setTossed(t => ({ n: (t?.n ?? 0) + 1, essence: v })); }
+                      }} />
+                    </View>
+                  </Card>
+                </FadeIn>
+              ) : (
+                <Btn small kind="ghost" style={{ marginTop: 8, alignSelf: 'flex-start' }} label={`Discard selected egg (+${eggValue(egg)} essence)`} onPress={() => { setTossing(egg.id); haptic('select'); }} />
+              )
+            ) : null}
+            {tossed ? <FadeIn key={tossed.n}><P style={{ color: C.gold, marginTop: 6 }}>Egg discarded. +{tossed.essence} essence.</P></FadeIn> : null}
           </>
         )}
       </ScrollView>

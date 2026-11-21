@@ -58,7 +58,7 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
         </Card>
 
         <Title icon="gem" color="#8f6cff">Essence shop</Title>
-        <P dim style={{ marginBottom: 6 }}>Releasing a creature gives essence. You have {save.essence}.</P>
+        <P dim style={{ marginBottom: 6 }}>Releasing creatures and discarding eggs gives essence. Spend it here, or train a creature from its page. You have {save.essence}.</P>
         {SHOP.map(item => (
           <Card key={item.id}>
             <View style={st.row}>

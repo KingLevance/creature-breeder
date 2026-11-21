@@ -4,7 +4,7 @@ import { ELEMENT_IDS, matchup } from '../src/game/data/elements';
 import { MOVE_LIST, MOVES, movePool } from '../src/game/data/moves';
 import { act, aiChoose, autoResolve, createBattle, makeUnit, nextActor, turnOrder, usable, validTargets } from '../src/game/battle';
 import { Creature, makeCreature, slotRarities, stageLevels, stageOf, statsFor } from '../src/game/creature';
-import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan } from '../src/game/economy';
+import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan, releaseMany, discardEgg, train, trainCost } from '../src/game/economy';
 import { breed, express, fillGenome, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
 import { finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
 import { TUT, newSave } from '../src/game/save';
@@ -197,6 +197,29 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
   const n = s.creatures.length;
   ok(release(s, weak[0].id) && s.creatures.length === n - 1 && s.essence > 0, 'releasing gives essence');
   ok(STARTERS.length === 3, 'three starters');
+
+  // Releasing several at once, throwing away eggs, and spending essence on training.
+  {
+    const keep = s.creatures.find(c => !c.fav)!;
+    keep.fav = true;
+    const others = s.creatures.filter(c => c !== keep).map(c => c.id);
+    const e0 = s.essence;
+    const r = releaseMany(s, [keep.id, ...others]);
+    ok(s.creatures.length >= 1 && s.creatures.includes(keep) && r.count === others.length && s.essence === e0 + r.essence,
+      `multi-release skips favorites and pays out (${r.count} released, +${r.essence} essence)`);
+    s.eggs.push({ id: 'egg_t', g: wildGenome(rng, { els: ['ember'], quality: 0.5 }), origin: 'wild', mutations: 0 });
+    const e1 = s.essence;
+    ok(discardEgg(s, 'egg_t') > 0 && !s.eggs.some(e => e.id === 'egg_t') && s.essence > e1, 'discarding an egg gives a little essence');
+    const lv = keep.level, c3 = trainCost(keep, 3);
+    s.essence = c3 - 1;
+    ok(train(rng, s, keep.id, 3) === null && keep.level === lv, 'training needs enough essence');
+    s.essence = c3 + 5;
+    const tr = train(rng, s, keep.id, 3);
+    ok(!!tr && keep.level === lv + 3 && keep.xp === 0 && s.essence === 5, `training buys exact levels (${lv} -> ${keep.level} for ${c3} essence)`);
+    let total = 0;
+    for (let l = 1; l < 100; l++) total += trainCost({ ...keep, level: l, xp: 0 }, 1);
+    console.log(`     essence to train 1 -> 100: ${total}; level 10: ${trainCost({ ...keep, level: 10, xp: 0 })}, level 50: ${trainCost({ ...keep, level: 50, xp: 0 })}`);
+  }
 
   // Markings, hue and stance: varied in the wild, inherited, and filled in for old saves.
   {

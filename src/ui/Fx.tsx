@@ -506,9 +506,12 @@ const Stat = memo(function Stat({ s, done }: { s: Extract<FxSpec, { kind: 'stat'
 });
 
 /** Lasting signs of a creature's conditions, drawn over it while they last: flames, bubbles, dizzy stars, ice, a shield. */
-export const StatusFx = memo(function StatusFx({ statuses, shield, size }: { statuses: string[]; shield: boolean; size: number }) {
+export const StatusFx = memo(function StatusFx({ statuses, shield, size, part }: { statuses: string[]; shield: boolean; size: number; part?: 'ground' | 'body' }) {
   const t = useRef(new Animated.Value(0)).current;
-  const any = shield || statuses.length > 0;
+  const buff = statuses.includes('atkUp') ? '#ff7a59' : statuses.includes('defUp') ? '#6fb7ff' : statuses.includes('haste') ? '#ffd34d' : statuses.includes('boost') ? '#b48cff' : statuses.includes('regen') ? '#5ad17a' : null;
+  // Split for creatures that leap: the buff glow and its sparks belong on the ground, the rest on the body.
+  const ground = part !== 'body', body = part !== 'ground';
+  const any = (ground && !!buff) || (body && (shield || statuses.some(k => k === 'freeze' || k === 'burn' || k === 'poison' || k === 'stun')));
   useEffect(() => {
     if (!any) return;
     t.setValue(0);
@@ -517,12 +520,11 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size }: { sta
     return () => l.stop();
   }, [any, t]);
   if (!any) return null;
-  const S = size, has = (k: string) => statuses.includes(k);
+  const S = size, has = (k: string) => body && statuses.includes(k);
   const cyc = (off: number, n = 1) => t.interpolate({ inputRange: [0, 1], outputRange: [off, off + n] });
-  const buff = has('atkUp') ? '#ff7a59' : has('defUp') ? '#6fb7ff' : has('haste') ? '#ffd34d' : has('boost') ? '#b48cff' : has('regen') ? '#5ad17a' : null;
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: S, height: S }}>
-      {buff ? (
+      {buff && ground ? (
         <>
           <Animated.View style={{ position: 'absolute', left: S * 0.14, top: S * 0.8, width: S * 0.72, height: S * 0.2, opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.45, 0.9, 0.45] }) }}>
             <Svg width={S * 0.72} height={S * 0.2}><Defs><RadialGradient id={`bf${S}`} cx="50%" cy="50%" r="50%"><Stop offset="0" stopColor={buff} stopOpacity={0.75} /><Stop offset="1" stopColor={buff} stopOpacity={0} /></RadialGradient></Defs><Ellipse cx={S * 0.36} cy={S * 0.1} rx={S * 0.36} ry={S * 0.1} fill={`url(#bf${S})`} /></Svg>
@@ -536,7 +538,7 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size }: { sta
           })}
         </>
       ) : null}
-      {shield ? (
+      {shield && body ? (
         <Animated.View style={{ position: 'absolute', left: S * 0.12, top: S * 0.2, width: S * 0.76, height: S * 0.76, borderRadius: S, borderWidth: 2, borderColor: '#bff3ff', backgroundColor: 'rgba(159,232,255,0.12)',
           opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 0.85, 0.55] }) }} />
       ) : null}

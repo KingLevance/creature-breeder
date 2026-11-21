@@ -1,6 +1,6 @@
 // Breeding, incubators, the shop and the roster. Every function changes the save it is given.
 import { ELEMENTS, ElementId } from './data/elements';
-import { Creature, Egg, addXp, hatch, newId, pedNode, stageLevels, stageOf, typeLabel, xpToNext } from './creature';
+import { Creature, Egg, MAX_LEVEL, XpResult, addXp, hatch, newId, pedNode, stageLevels, stageOf, typeLabel, xpToNext } from './creature';
 import { Genome, Rng, Skeleton, boostPotential, breed, express, starRating, starterGenome } from './genome';
 import { Incubator, Save, TUT, byId, dayKey } from './save';
 
@@ -244,6 +244,70 @@ export function release(s: Save, id: string): boolean {
   s.team = s.team.filter(x => x !== id);
   s.counts.released++;
   return true;
+}
+
+/** Why a creature can't be released right now, or null if it can. */
+export function releaseProblem(s: Save, c: Creature): string | null {
+  if (c.fav) return 'Favorite';
+  if (s.tutorial < TUT.DONE) return 'Finish the tutorial first';
+  return null;
+}
+
+/** Release several creatures at once. Skips favorites, and always keeps at least one creature. */
+export function releaseMany(s: Save, ids: string[]): { count: number; essence: number; dust: number } {
+  const out = { count: 0, essence: 0, dust: 0 };
+  for (const id of ids) {
+    const c = byId(s, id);
+    if (!c || releaseProblem(s, c)) continue;
+    const v = releaseValue(c);
+    if (!release(s, id)) continue;
+    out.count++; out.essence += v.essence; out.dust += v.dust;
+  }
+  return out;
+}
+
+/** Essence for throwing away an unhatched egg: a little, more for one with better genes. */
+export function eggValue(e: Egg): number {
+  const st = starRating(e.g);
+  return 2 + st * st;
+}
+export function discardEgg(s: Save, id: string): number {
+  const i = s.eggs.findIndex(e => e.id === id);
+  if (i < 0 || s.tutorial < TUT.DONE) return 0;
+  const v = eggValue(s.eggs[i]);
+  s.eggs.splice(i, 1);
+  s.essence += v;
+  return v;
+}
+
+// ---------- Training: essence spent as XP
+/** XP that one essence buys at a level. A level costs a few essence early on and more as levels get longer. */
+export function essenceXpRate(level: number): number {
+  return 20 + 2 * level;
+}
+/** XP a creature needs to gain `levels` levels from where it is now (fewer near the cap). */
+function xpForLevels(c: Creature, levels: number): { xp: number; cost: number; levels: number } {
+  let xp = 0, cost = 0, n = 0, have = c.xp;
+  for (let l = c.level; n < levels && l < MAX_LEVEL; l++, n++) {
+    const need = Math.max(0, xpToNext(l) - have);
+    have = 0;
+    xp += need;
+    cost += Math.ceil(need / essenceXpRate(l));
+  }
+  return { xp, cost, levels: n };
+}
+/** The essence it costs to train a creature up `levels` levels. */
+export function trainCost(c: Creature, levels = 1): number {
+  return xpForLevels(c, levels).cost;
+}
+/** Spend essence to level a creature up. It grows, evolves and learns moves just as it would from fighting. */
+export function train(rng: Rng, s: Save, id: string, levels = 1): XpResult | null {
+  const c = byId(s, id);
+  if (!c || c.level >= MAX_LEVEL || levels < 1) return null;
+  const t = xpForLevels(c, levels);
+  if (t.cost <= 0 || s.essence < t.cost) return null;
+  s.essence -= t.cost;
+  return addXp(rng, c, t.xp);
 }
 
 export function rosterExpandCost(s: Save): number | null {

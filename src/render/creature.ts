@@ -78,7 +78,7 @@ type Layer = (typeof LAYERS)[number];
 const OW = 2;
 
 /** Pieces that animate on their own, rotating about a joint: everything else is the main body. */
-export type Part = 'main' | 'tail' | 'wingFar' | 'wingNear';
+export type Part = 'main' | 'tail' | 'wingFar' | 'wingNear' | 'ground';
 interface Item { g: Layer; part: Part; out?: Shape; fill: Shape }
 
 /** A rotation about (cx, cy) by deg degrees, then a shift. Used to lean and lower a body into its stance. */
@@ -1310,11 +1310,13 @@ export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
 /** A creature split for the live rig: the body, plus a tail and wings that the app swings about their joints. */
 export interface Rig {
   main: Shape[]; tail: Shape[]; wingFar: Shape[]; wingNear: Shape[];
+  /** The shadow, ground glow and rising motes: drawn under everything, and left on the ground when the body leaps. */
+  ground: Shape[];
   pivots: Partial<Record<Part, [number, number]>>;
 }
 export function drawCreatureRig(ph: Pheno, o: DrawOpts): Rig {
   const p = buildCreature(ph, { ...o, rig: true });
-  return { main: p.shapes('main'), tail: p.shapes('tail'), wingFar: p.shapes('wingFar'), wingNear: p.shapes('wingNear'), pivots: p.pivots };
+  return { main: p.shapes('main'), tail: p.shapes('tail'), wingFar: p.shapes('wingFar'), wingNear: p.shapes('wingNear'), ground: p.shapes('ground'), pivots: p.pivots };
 }
 
 /** How a pose tips the whole body: a quadruped rears up to cast, a swimmer noses down to strike. */
@@ -1377,6 +1379,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   };
 
   p.g = 'aura';
+  // The shadow and ground glow belong to the ground, so the app keeps them down there when the creature leaps.
+  p.part = 'ground';
   if (o.stage >= 3) {
     // Ancient and legendary creatures glow from the ground up, in their element's colour.
     const e = ELEMENTS[ph.el1];
@@ -1384,6 +1388,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     p.ell(50, 91, 22 * b, 3.6, e.light, { line: false, op: 0.4 });
   }
   if (o.shadow !== false) p.ell(50, 92, 24 * b, 4, '#000000', { line: false, op: 0.18 });
+  p.part = 'main';
 
   switch (ph.skel) {
     case 'biped': {
@@ -1572,12 +1577,14 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   p.tf = null;
   p.g = 'fx';
   if (o.stage >= 3) {
-    // Motes drifting up through the idle cycle.
+    // Motes drifting up from the ground glow through the idle cycle.
     const e = ELEMENTS[ph.el1];
+    p.part = 'ground';
     for (let i = 0; i < (o.stage === 4 ? 5 : 3); i++) {
       const t = (phase + i / 3) % 1;
       p.dot(26 + ((i * 37) % 50), 88 - t * 60, 1.4 + (i % 2) * 0.6, i % 2 ? e.light : e.base, 0.85 * (1 - t));
     }
+    p.part = 'main';
   }
   if (o.stage === 4) {
     for (let i = 0; i < 5; i++) {

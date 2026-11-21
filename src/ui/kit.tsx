@@ -94,7 +94,7 @@ function hasIdleDetail(ph: Pheno, stage: number): boolean {
   if (!m) { m = new Map(); detailCache.set(ph, m); }
   let v = m.get(stage);
   if (v == null) {
-    const at = (phase: number) => JSON.stringify(drawCreatureRig(ph, { stage, phase }).main);
+    const at = (phase: number) => { const r = drawCreatureRig(ph, { stage, phase }); return JSON.stringify([r.main, r.ground]); };
     v = at(0) !== at(0.37);
     m.set(stage, v);
   }
@@ -123,7 +123,7 @@ type Fidget = 'hop' | 'look' | 'flick' | 'stretch' | 'wiggle';
  * flap, all as smooth native animation; drawn frames only change for walking legs, poses and blinks. Poses blend
  * in and out over a few frames, and now and then an idle creature fidgets.
  */
-export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewProps, 'phase'> & { pose?: Pose; fidget?: boolean }) {
+export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewProps, 'phase'> & { pose?: Pose; fidget?: boolean; ground?: boolean }) {
   const { ph, stage, size, flip, shadow, ko } = props;
   const walking = !!props.walking && !ko;
   const detail = useMemo(() => hasIdleDetail(ph, stage), [ph, stage]);
@@ -219,26 +219,61 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
     const hover = fly ? wave(breath, 1.6 * amp * (size / 100), 0, 1, off + 0.25) : null;
     const lift = Animated.multiply(hop, -size * 0.08);
     const rot = deg(Animated.multiply(wiggle, 5));
-    return { sy, sx, tail, wing, wingFar, hover, lift, rot };
+    // The shadow stays on the ground through a hop, shrinking a little while the body is up.
+    const under = hop.interpolate({ inputRange: [0, 1], outputRange: [1, 0.8] });
+    return { sy, sx, tail, wing, wingFar, hover, lift, rot, under };
   }, [ph, ko, breath, beat, flick, hop, wiggle, off, wingSwing, size]);
 
   const s = size / 100, fy = 40 * s;
   const svg = (shapes: Shape[]) => (
     <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}><ShapeNodes shapes={shapes} /></Svg>
   );
+  const gy = 42 * s;
   return (
-    <Animated.View style={{
-      width: size, height: size, opacity: creatureOpacity(ph),
+    <View style={{ width: size, height: size, opacity: creatureOpacity(ph), transform: [{ scaleX: flip ? -1 : 1 }] }}>
+      {/* The ground layer (shadow, ground glow, rising motes) stays down while the body hops, hovers and breathes. */}
+      {props.ground !== false && rig.ground.length ? (
+        <Animated.View style={[StyleSheet.absoluteFill, { transform: [{ translateY: gy }, { scale: anim.under }, { translateY: -gy }] }]}>{svg(rig.ground)}</Animated.View>
+      ) : null}
+    <Animated.View style={[StyleSheet.absoluteFill, {
       transform: [
-        { scaleX: flip ? -1 : 1 },
         { translateY: anim.hover ? Animated.add(anim.lift, anim.hover) : anim.lift },
         { translateY: fy }, { rotate: anim.rot }, { scaleY: anim.sy }, { scaleX: anim.sx }, { translateY: -fy },
       ],
-    }}>
+    }]}>
       {rig.wingFar.length && rig.pivots.wingFar ? <Animated.View style={[StyleSheet.absoluteFill, { transform: about(rig.pivots.wingFar, size, anim.wingFar) }]}>{svg(rig.wingFar)}</Animated.View> : null}
       {rig.tail.length && rig.pivots.tail ? <Animated.View style={[StyleSheet.absoluteFill, { transform: about(rig.pivots.tail, size, anim.tail) }]}>{svg(rig.tail)}</Animated.View> : null}
       {svg(rig.main)}
       {rig.wingNear.length && rig.pivots.wingNear ? <Animated.View style={[StyleSheet.absoluteFill, { transform: about(rig.pivots.wingNear, size, anim.wing) }]}>{svg(rig.wingNear)}</Animated.View> : null}
+    </Animated.View>
+    </View>
+  );
+});
+
+/**
+ * Just the ground under a creature (its ground glow and rising motes; the battle draws its own shadow), for when
+ * the body is drawn somewhere that leaps and leans. Shrinks and fades as the creature rises by `air` px.
+ */
+export const CreatureGround = memo(function CreatureGround({ ph, stage, size, flip, air, opacity }: { ph: Pheno; stage: number; size: number; flip?: boolean; air?: Animated.Value; opacity?: Animated.Value }) {
+  const detail = useMemo(() => hasIdleDetail(ph, stage), [ph, stage]);
+  const [frame, setFrame] = useState(() => Math.floor(Math.random() * IDLE_FRAMES));
+  useEffect(() => {
+    if (!detail || stage < 3) return;
+    const id = setInterval(() => setFrame(f => (f + 1) % IDLE_FRAMES), IDLE_MS);
+    return () => clearInterval(id);
+  }, [detail, stage]);
+  const shapes = useMemo(() => stage >= 3 ? rigCached(ph, { stage, phase: detail ? frame / IDLE_FRAMES : 0, shadow: false, reach: 0, raise: 0, guard: 0, look: 0 }).ground : [], [ph, stage, frame, detail]);
+  if (!shapes.length) return null;
+  const gy = size * 0.42;
+  const k = air ? air.interpolate({ inputRange: [0, size], outputRange: [1, 0.55], extrapolate: 'clamp' }) : 1;
+  const op = air ? air.interpolate({ inputRange: [0, size], outputRange: [1, 0.35], extrapolate: 'clamp' }) : 1;
+  return (
+    <Animated.View pointerEvents="none" style={{
+      position: 'absolute', left: 0, top: 0, width: size, height: size,
+      opacity: Animated.multiply(Animated.multiply(op, opacity ?? 1), creatureOpacity(ph)),
+      transform: [{ scaleX: flip ? -1 : 1 }, { translateY: gy }, { scale: k }, { translateY: -gy }],
+    }}>
+      <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}><ShapeNodes shapes={shapes} /></Svg>
     </Animated.View>
   );
 });

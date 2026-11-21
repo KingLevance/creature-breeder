@@ -3,13 +3,14 @@ import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
-import { Creature, PedNode, STAGE_NAMES, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
-import { NAME_MAX, expandRoster, release, releaseValue, renameCreature, rosterExpandCost, useScan } from '../game/economy';
+import { Creature, MAX_LEVEL, PedNode, STAGE_NAMES, XpResult, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
+import { NAME_MAX, expandRoster, release, releaseMany, releaseProblem, releaseValue, renameCreature, rosterExpandCost, train, trainCost, useScan } from '../game/economy';
 import { PART_KEYS, PART_LABELS, SKELETON_NAMES, STANCE_NAMES, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
-import { Backdrop, F, FadeIn, Glow } from './look';
-import { useGame } from './store';
+import { sfx } from './audio';
+import { Backdrop, F, FadeIn, Glow, Icon, haptic } from './look';
+import { rng, useGame } from './store';
 
 function PedCard({ n, label, size }: { n?: PedNode; label: string; size: number }) {
   return (
@@ -34,6 +35,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
   const { width: W } = useWindowDimensions();
   const [confirm, setConfirm] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  const [trained, setTrained] = useState<{ n: number; r: XpResult; level: number } | null>(null);
   const c = save.creatures.find(x => x.id === id);
   const ph = useMemo(() => (c ? express(c.g) : null), [c?.g]);
   if (!c || !ph) return null;
@@ -92,7 +94,34 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             </View>
             <Bar frac={c.level >= 100 ? 1 : c.xp / xpToNext(c.level)} color={C.accent} />
             <P dim style={{ marginTop: 6 }}>Teen at {lv[1]} · Adult at {lv[2]} · Ancient at {lv[3]} · Legendary at 100</P>
-            <P dim>Levels only by fighting. Tougher fights and doing more in them give more XP.</P>
+            <P dim>Fights give XP: tougher fights and doing more in them give more. You can also train with essence.</P>
+            {c.level < MAX_LEVEL ? (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                {[1, 5].map(n => {
+                  const k = Math.min(n, MAX_LEVEL - c.level), cost = trainCost(c, k);
+                  return (
+                    <Btn key={n} small style={{ flex: 1 }} kind={n === 1 ? 'main' : 'ghost'} disabled={save.essence < cost}
+                      icon={<Icon name="gem" size={15} color={n === 1 ? '#ffffff' : '#c9b8ff'} accent="#2b2054" />}
+                      label={`+${k} level${k > 1 ? 's' : ''} · ${cost}`}
+                      onPress={() => {
+                        const r = mutate(s => train(rng, s, c.id, k));
+                        if (!r) return;
+                        haptic('medium');
+                        sfx(r.newStage != null ? 'grow' : 'levelup');
+                        setTrained(t => ({ n: (t?.n ?? 0) + 1, r, level: c.level + r.levels }));
+                      }} />
+                  );
+                })}
+              </View>
+            ) : null}
+            {c.level < MAX_LEVEL ? <P dim style={{ marginTop: 4, fontSize: 12 }}>You have {save.essence} essence. Release creatures or discard eggs for more.</P> : null}
+            {trained ? (
+              <FadeIn key={trained.n} dy={6}>
+                <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 15, marginTop: 6 }}>
+                  {trained.r.newStage != null ? `Grew into ${STAGE_NAMES[trained.r.newStage]}! ` : ''}Level {trained.level}!{trained.r.learned.length ? ` Learned ${trained.r.learned.map(m => m.name).join(', ')}.` : ''}
+                </Text>
+              </FadeIn>
+            ) : null}
           </Card>
 
           <Card>
@@ -166,12 +195,21 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             ) : <P dim>{c.origin === 'starter' ? 'Your first creature. Its line starts with you.' : 'Hatched from a wild egg. Its parents are unknown.'}</P>}
           </Card>
 
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Btn style={{ flex: 1 }} kind="ghost" label={c.fav ? '★ Favorite' : '☆ Favorite'} onPress={() => mutate(s => { const x = s.creatures.find(y => y.id === c.id); if (x) x.fav = !x.fav; })} />
-            {confirm
-              ? <Btn style={{ flex: 1 }} kind="danger" label={`Confirm (+${rv.essence} essence)`} onPress={() => { mutate(s => { release(s, c.id); }); onClose(); }} />
-              : <Btn style={{ flex: 1 }} kind="ghost" label="Release" disabled={save.creatures.length <= 1 || !!c.fav || save.tutorial < TUT.DONE} onPress={() => setConfirm(true)} />}
-          </View>
+          {confirm ? (
+            <Card tint={C.bad}>
+              <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }}>Release {c.name}?</Text>
+              <P dim style={{ marginBottom: 10 }}>You get {rv.essence} essence{rv.dust ? ` and ${rv.dust} dust` : ''}. This can't be undone.</P>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Btn style={{ flex: 1 }} kind="ghost" label="Keep" onPress={() => setConfirm(false)} />
+                <Btn style={{ flex: 1 }} kind="danger" label="Release" onPress={() => { mutate(s => { release(s, c.id); }); sfx('poof'); onClose(); }} />
+              </View>
+            </Card>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Btn style={{ flex: 1 }} kind="ghost" label={c.fav ? '★ Favorite' : '☆ Favorite'} onPress={() => mutate(s => { const x = s.creatures.find(y => y.id === c.id); if (x) x.fav = !x.fav; })} />
+              <Btn style={{ flex: 1 }} kind="ghost" label="Release" disabled={save.creatures.length <= 1 || !!c.fav || save.tutorial < TUT.DONE} onPress={() => setConfirm(true)} />
+            </View>
+          )}
           <Btn style={{ marginTop: 10 }} label="Close" onPress={onClose} />
         </ScrollView>
       </View>
@@ -194,6 +232,11 @@ export function RosterScreen() {
   const { width: W } = useWindowDimensions();
   const [open, setOpen] = useState<string | null>(null);
   const [sort, setSort] = useState<'level' | 'stars' | 'new'>('level');
+  // Picking several creatures to release at once.
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [sure, setSure] = useState(false);
+  const [gone, setGone] = useState<{ count: number; essence: number; dust: number } | null>(null);
   const tw = (W - 28 - 16) / 3;
   const list = useMemo(() => {
     const l = [...save.creatures];
@@ -203,21 +246,78 @@ export function RosterScreen() {
     return l;
   }, [save.creatures, sort]);
   const cost = rosterExpandCost(save);
+  const blocked = (c: Creature) => releaseProblem(save, c);
+  const pickedCs = save.creatures.filter(c => picked.includes(c.id));
+  // Always leave at least one creature.
+  const tooMany = pickedCs.length >= save.creatures.length;
+  const value = pickedCs.reduce((a, c) => { const v = releaseValue(c); return { essence: a.essence + v.essence, dust: a.dust + v.dust }; }, { essence: 0, dust: 0 });
+  const toggle = (c: Creature) => { setSure(false); setPicked(p => (p.includes(c.id) ? p.filter(x => x !== c.id) : [...p, c.id])); };
+  const pickStars = (n: number) => {
+    setSure(false);
+    const add = save.creatures.filter(c => starRating(c.g) === n && !blocked(c) && !save.team.includes(c.id)).map(c => c.id);
+    setPicked(p => [...new Set([...p, ...add])]);
+  };
+  const stop = () => { setPicking(false); setPicked([]); setSure(false); };
+  const canRelease = save.tutorial >= TUT.DONE && save.creatures.length > 1;
   return (
     <View style={{ flex: 1 }}>
-      <ScrollView contentContainerStyle={{ padding: 14 }}>
-        <View style={[st.row, { justifyContent: 'space-between', marginBottom: 8 }]}>
+      <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: picking ? 170 : 14 }}>
+        <View style={[st.row, { justifyContent: 'space-between', marginBottom: 6 }]}>
           <H>Creatures {save.creatures.length}/{save.rosterCap}</H>
-          <View style={{ flexDirection: 'row', gap: 4 }}>
-            {(['level', 'stars', 'new'] as const).map(k => <Btn key={k} small kind={sort === k ? 'main' : 'ghost'} label={capital(k)} onPress={() => setSort(k)} />)}
-          </View>
+          {canRelease ? <Btn small kind={picking ? 'main' : 'ghost'} label={picking ? 'Done' : 'Release several'} onPress={() => (picking ? stop() : setPicking(true))} /> : null}
         </View>
+        <View style={[st.row, { marginBottom: 8, gap: 4 }]}>
+          {picking ? (
+            <>
+              <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13, marginRight: 2 }}>Pick all</Text>
+              {[1, 2, 3].map(n => <Btn key={n} small kind="ghost" label={`${n}★`} onPress={() => pickStars(n)} />)}
+              {picked.length ? <Btn small kind="ghost" label="Clear" onPress={() => { setPicked([]); setSure(false); }} /> : null}
+            </>
+          ) : (
+            <>
+              <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13, marginRight: 2 }}>Sort</Text>
+              {(['level', 'stars', 'new'] as const).map(k => <Btn key={k} small kind={sort === k ? 'main' : 'ghost'} label={capital(k)} onPress={() => setSort(k)} />)}
+            </>
+          )}
+        </View>
+        {picking ? <P dim style={{ marginBottom: 8 }}>Tap creatures to pick them. Favorites can't be picked, and "Pick all" leaves your team alone.</P> : null}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {list.map(c => <CreatureTile key={c.id} c={c} width={tw} onPress={() => setOpen(c.id)} badge={c.fav ? '★' : undefined} />)}
+          {list.map(c => picking
+            ? <CreatureTile key={c.id} c={c} width={tw} selected={picked.includes(c.id)} dimmed={!!blocked(c)} badge={picked.includes(c.id) ? '✓' : c.fav ? '★' : undefined} onPress={blocked(c) ? undefined : () => toggle(c)} />
+            : <CreatureTile key={c.id} c={c} width={tw} onPress={() => setOpen(c.id)} badge={c.fav ? '★' : undefined} />)}
         </View>
-        <P dim style={{ marginTop: 10 }}>◆ means it carries a rare hidden gene. Tap a creature for its stats, moves, genes and pedigree.</P>
-        {cost != null ? <Btn style={{ marginTop: 10 }} kind="ghost" label={`Add 10 roster slots (${cost} gold)`} disabled={save.gold < cost} onPress={() => mutate(s => { expandRoster(s); })} /> : null}
+        {!picking ? <P dim style={{ marginTop: 10 }}>◆ means it carries a rare hidden gene. Tap a creature for its stats, moves, genes and pedigree.</P> : null}
+        {!picking && cost != null ? <Btn style={{ marginTop: 10 }} kind="ghost" label={`Add 10 roster slots (${cost} gold)`} disabled={save.gold < cost} onPress={() => mutate(s => { expandRoster(s); })} /> : null}
+        {gone && !picking ? (
+          <FadeIn key={gone.count + '_' + gone.essence}>
+            <P style={{ color: C.gold, marginTop: 10, textAlign: 'center' }}>Released {gone.count}. +{gone.essence} essence{gone.dust ? `, +${gone.dust} dust` : ''}.</P>
+          </FadeIn>
+        ) : null}
       </ScrollView>
+      {picking ? (
+        <FadeIn dy={20} style={{ position: 'absolute', left: 10, right: 10, bottom: 8 }}>
+          <Card tint={picked.length ? C.bad : undefined} style={{ marginBottom: 0 }}>
+            <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }}>
+              {picked.length ? `${picked.length} picked` : 'Pick creatures to release'}
+            </Text>
+            <P dim style={{ marginBottom: 10 }}>
+              {tooMany ? 'Keep at least one creature.' : picked.length ? `You get ${value.essence} essence${value.dust ? ` and ${value.dust} dust` : ''}.${sure ? " This can't be undone." : ''}` : 'Releasing gives essence for training and the shop.'}
+            </P>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Btn style={{ flex: 1 }} kind="ghost" label={sure ? 'Wait' : 'Cancel'} onPress={() => (sure ? setSure(false) : stop())} />
+              <Btn style={{ flex: 1 }} kind="danger" label={sure ? `Release ${picked.length}` : 'Release'} disabled={!picked.length || tooMany}
+                onPress={() => {
+                  if (!sure) { setSure(true); haptic('select'); return; }
+                  const r = mutate(s => releaseMany(s, picked));
+                  sfx('poof');
+                  haptic('medium');
+                  setGone(r);
+                  stop();
+                }} />
+            </View>
+          </Card>
+        </FadeIn>
+      ) : null}
       {open ? <CreatureDetail id={open} onClose={() => setOpen(null)} /> : null}
     </View>
   );
