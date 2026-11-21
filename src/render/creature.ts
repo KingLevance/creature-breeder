@@ -621,16 +621,20 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
       p.dot(hx + r * 1.15, hy + r * 0.18, r * 0.11, c.out);
       break;
     case 'beak': {
-      // The head is shaded first, so its shadow doesn't fall across the beak. The beak is two parts: a curved
-      // upper bill with a nostril and a glint along its ridge, over a smaller, darker lower bill.
+      // A curved upper bill with a nostril and a glint along its ridge, over a smaller, darker lower bill. The
+      // lower bill and the inside of the mouth go down before the head, so their bases tuck under the face
+      // and only the part that sticks out shows; opening, the lower bill swings down on a hinge at the corner
+      // of the mouth instead of sliding over the cheek. The head is shaded before the upper bill goes on, so
+      // its shadow doesn't fall across the beak.
+      const bx0 = hx + r * 0.62, tipx = hx + r * 1.62, tipy = hy + r * 0.34;
+      const gape = ko ? 0 : pose === 'roar' ? 1 : pose === 'attack' ? 0.8 : pose === 'cast' ? 0.55 : pose === 'hurt' ? 0.4 : 0;
+      const hgx = hx + r * 0.9, hgy = hy + r * 0.42, th = (gape * 32 * Math.PI) / 180, ct = Math.cos(th), st = Math.sin(th);
+      const R = (x: number, y: number) => { const dx = x - hgx, dy = y - hgy; return f(hgx + dx * ct - dy * st) + ' ' + f(hgy + dx * st + dy * ct); };
+      if (gape) p.path(`M${f(hx + r * 0.7)} ${f(hy + r * 0.4)}L${f(hx + r * 1.46)} ${f(hy + r * 0.4)}L${R(hx + r * 1.4, hy + r * 0.44)}L${R(hx + r * 0.7, hy + r * 0.44)}Z`, '#3a1626', { line: false });
+      p.path(`M${R(hx + r * 0.6, hy + r * 0.38)}L${R(hx + r * 1.42, hy + r * 0.42)}Q${R(hx + r * 1.12, hy + r * 0.74)} ${R(hx + r * 0.6, hy + r * 0.7)}Z`, '#d9933a');
+      if (gape) p.path(`M${R(hx + r * 1.0, hy + r * 0.47)}L${R(hx + r * 1.32, hy + r * 0.46)}`, 'none', { stroke: '#e0677a', sw: Math.max(0.8, r * 0.12) });
       p.ell(hx, hy, r, r * 0.95, c.base); jaw();
       shadeForm(p, hx, hy, r, r * 0.95);
-      const bx0 = hx + r * 0.62, tipx = hx + r * 1.62, tipy = hy + r * 0.34;
-      // Attacking, roaring or crying out, the lower bill drops open on its hinge.
-      const gape = ko ? 0 : pose === 'roar' ? 1 : pose === 'attack' ? 0.8 : pose === 'cast' ? 0.55 : pose === 'hurt' ? 0.4 : 0;
-      const dr = gape * r * 0.45;
-      if (gape) p.path(`M${f(bx0 + r * 0.06)} ${f(hy + r * 0.38)}L${f(hx + r * 1.42)} ${f(hy + r * 0.4)}L${f(hx + r * 1.3)} ${f(hy + r * 0.42 + dr)}Z`, '#3a1626', { line: false });
-      p.path(`M${f(bx0 + r * 0.06)} ${f(hy + r * 0.36)}Q${f(hx + r * 1.0)} ${f(hy + r * 0.66 + dr * 0.6)} ${f(hx + r * 1.36)} ${f(hy + r * 0.4 + dr)}L${f(bx0 + r * 0.04)} ${f(hy + r * 0.62)}Z`, '#d9933a');
       p.path(`M${f(bx0)} ${f(hy - r * 0.04)}Q${f(hx + r * 1.22)} ${f(hy - r * 0.06)} ${f(tipx)} ${f(tipy)}Q${f(hx + r * 1.16)} ${f(hy + r * 0.44)} ${f(bx0 + r * 0.06)} ${f(hy + r * 0.38)}Z`, '#f2b84c');
       p.line(`M${f(bx0 + r * 0.14)} ${f(hy + r * 0.04)}Q${f(hx + r * 1.15)} ${f(hy + r * 0.04)} ${f(tipx - r * 0.12)} ${f(tipy - r * 0.04)}`, '#ffe2a0', Math.max(0.7, r * 0.07), 0.75);
       p.dot(hx + r * 0.9, hy + r * 0.14, Math.max(0.5, r * 0.045), '#a8702a');

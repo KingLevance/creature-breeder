@@ -227,6 +227,38 @@ const Mote = memo(function Mote({ x, s, d, o, H, color }: { x: number; s: number
   );
 });
 
+let pedN = 0;
+/**
+ * The spot a featured creature stands on: a soft glow on the ground in its colour, with a darker disc in the
+ * middle. Drawn as true ellipses (a View with a big border radius is a pill, not an ellipse, and read as a
+ * strange floor tile).
+ */
+export const Pedestal = memo(function Pedestal({ w, color, style }: { w: number; color: string; style?: ViewStyle }) {
+  const id = useMemo(() => `ped${++pedN}`, []);
+  const h = w * 0.3;
+  const [c, a] = splitAlpha(color);
+  return (
+    <View pointerEvents="none" style={[{ position: 'absolute', width: w, height: h }, style]}>
+      <Svg width={w} height={h}>
+        <Defs>
+          <RadialGradient id={id + 'g'} cx="50%" cy="50%" rx="50%" ry="50%">
+            <Stop offset="0" stopColor={c} stopOpacity={0.5 * a} />
+            <Stop offset="0.55" stopColor={c} stopOpacity={0.22 * a} />
+            <Stop offset="1" stopColor={c} stopOpacity={0} />
+          </RadialGradient>
+          <RadialGradient id={id + 'd'} cx="50%" cy="50%" rx="50%" ry="50%">
+            <Stop offset="0" stopColor="#0e091e" stopOpacity={0.42} />
+            <Stop offset="0.8" stopColor="#0e091e" stopOpacity={0.3} />
+            <Stop offset="1" stopColor="#0e091e" stopOpacity={0.12} />
+          </RadialGradient>
+        </Defs>
+        <Ellipse cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2} fill={`url(#${id}g)`} />
+        <Ellipse cx={w / 2} cy={h / 2} rx={w * 0.34} ry={h * 0.3} fill={`url(#${id}d)`} stroke={c} strokeOpacity={0.45 * a} strokeWidth={1.5} />
+      </Svg>
+    </View>
+  );
+});
+
 export const Backdrop = memo(function Backdrop({ tint, H }: { tint: string; H: number }) {
   const fade = useRef(new Animated.Value(0)).current;
   useEffect(() => {

@@ -493,7 +493,7 @@ export const CreatureTile = memo(function CreatureTile({ c, onPress, selected, b
           {stars >= 4 ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderRadius: 15, borderWidth: 1.5, borderColor: stars >= 5 ? '#ffd34d' : '#c2b0ff', opacity: pulse(shine, 0.25, 0.9) }]} /> : null}
           <View style={{ width: art, height: art * 0.92, alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-end' }}>
             <Glow color={e.light} opacity={0.5} cy="58%" r="48%" />
-            <View style={{ position: 'absolute', bottom: art * 0.05, width: art * 0.62, height: art * 0.12, borderRadius: art, backgroundColor: 'rgba(0,0,0,0.28)' }} />
+            <Svg width={art * 0.62} height={art * 0.12} style={{ position: 'absolute', bottom: art * 0.05 }}><Ellipse cx={art * 0.31} cy={art * 0.06} rx={art * 0.31} ry={art * 0.06} fill="#000000" opacity={0.28} /></Svg>
             <View style={{ position: 'absolute', bottom: -art * 0.04 }}>
               <Breathing size={art}>
                 <CreatureView ph={ph} stage={stage} size={art} shadow={false} />

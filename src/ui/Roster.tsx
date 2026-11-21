@@ -10,7 +10,7 @@ import { FRAME_NAMES, HEIGHT_NAMES, PART_KEYS, PART_LABELS, SKELETON_NAMES, STAN
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
 import { sfx } from './audio';
-import { Backdrop, F, FadeIn, Glow, Icon, haptic } from './look';
+import { Backdrop, F, FadeIn, Glow, Icon, Pedestal, haptic } from './look';
 import { rng, useGame } from './store';
 
 function PedCard({ n, label, size }: { n?: PedNode; label: string; size: number }) {
@@ -57,8 +57,8 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
               <View style={{ width: W - 28, height: W * 0.58, alignItems: 'center', justifyContent: 'flex-end' }}>
                 <Glow color={ELEMENTS[ph.el1].light} opacity={0.6} cy="62%" r="52%" />
                 {ph.el2 ? <Glow color={ELEMENTS[ph.el2].light} opacity={0.35} cx="72%" cy="38%" r="36%" /> : null}
-                <View style={{ position: 'absolute', bottom: W * 0.035, width: W * 0.5, height: W * 0.09, borderRadius: W, backgroundColor: 'rgba(10,6,22,0.55)', borderWidth: 2, borderColor: ELEMENTS[ph.el1].light + '66' }} />
-                <View style={{ position: 'absolute', bottom: W * 0.055, width: W * 0.36, height: W * 0.05, borderRadius: W, backgroundColor: ELEMENTS[ph.el1].light + '33' }} />
+                {/* Centred on the creature's feet. */}
+                <Pedestal w={W * 0.7} color={ELEMENTS[ph.el1].light} style={{ bottom: W * 0.055 - W * 0.105 }} />
                 <LiveCreature ph={ph} stage={stage} size={W * 0.55} />
               </View>
             </FadeIn>
