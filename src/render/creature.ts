@@ -695,12 +695,12 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno, cue = 1) {
       }
       break;
     case 'bands':
-      // Each band is a slice of the body ellipse, so its ends follow the body's curve instead of poking out.
-      // It's laid down in see-through layers, each narrower and shorter than the last, so its edges fade softly
-      // into the hide on all four sides.
+      // Each band is a slice of the body ellipse that wraps it from top to bottom, its ends following the body's
+      // curve right out to the outline. It's laid down in see-through layers of decreasing width, so its sides
+      // fade softly into the hide.
       for (const t of [-0.35, 0.3]) {
         const dt0 = Math.max(2.5, brx * 0.2) / 2 / brx;
-        const layers = [[1.45, 0.97], [1.2, 0.9], [0.95, 0.82], [0.7, 0.72]], per = 1 - Math.pow(1 - 0.85, 1 / layers.length);
+        const layers = [[1.45, 0.98], [1.2, 0.98], [0.95, 0.98], [0.7, 0.98]], per = 1 - Math.pow(1 - 0.85, 1 / layers.length);
         for (const [kw, kh] of layers) {
           const dt = dt0 * kw, top: string[] = [], bot: string[] = [];
           for (let k = 0; k <= 6; k++) {
