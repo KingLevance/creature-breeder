@@ -377,7 +377,17 @@ function drawTailShape(p: Pen, a: Anchors, ph: Pheno, k: number, sway: number) {
   if (ph.el2) { tailTip(p, ex, ey, ph.el2, Math.max(0.75, k)); return; }
   if (ph.tail === 'tuft') p.ell(ex, ey, 5 * k, 4.4 * k, c.accent);
   if (ph.tail === 'club') p.ell(ex, ey, 6 * k, 5.4 * k, c.dark);
-  if (ph.tail === 'fan') p.poly([[ex + 2, ey], [ex - 8 * k, ey - 8 * k], [ex - 10 * k, ey], [ex - 8 * k, ey + 7 * k]], c.accent);
+  if (ph.tail === 'fan') {
+    // A fluke that grows out of the tail's end: its base starts on the tail at the tail's own width and flares
+    // out into two curved lobes, so it reads as part of the tail rather than a kite stuck on the end.
+    const dl = Math.hypot(ex - kx, ey - ky) || 1, dx = (ex - kx) / dl, dy = (ey - ky) / dl, nx = -dy, ny = dx;
+    const bx = ex - dx * 3 * k, by = ey - dy * 3 * k, hw = w * 0.45;
+    const P = (u: number, v: number) => f(bx + dx * u + nx * v) + ' ' + f(by + dy * u + ny * v);
+    p.path(`M${P(0, hw)}Q${P(4 * k, 6.5 * k)} ${P(11 * k, 8.5 * k)}Q${P(8.5 * k, 3 * k)} ${P(7.5 * k, 0)}Q${P(8.5 * k, -2.5 * k)} ${P(10.5 * k, -7.5 * k)}Q${P(4 * k, -5.5 * k)} ${P(0, -hw)}Z`, c.accent);
+    // The tail's colour runs a little way into the fin, and two soft ribs fan out along it.
+    p.path(`M${P(-0.5 * k, hw)}Q${P(2.5 * k, hw * 1.6)} ${P(4 * k, 0)}Q${P(2.5 * k, -hw * 1.6)} ${P(-0.5 * k, -hw)}Z`, c.base, { line: false });
+    p.line(`M${P(2 * k, 0.5 * k)}Q${P(5 * k, 3.5 * k)} ${P(9.5 * k, 6.8 * k)}M${P(2 * k, -0.5 * k)}Q${P(5 * k, -3 * k)} ${P(9 * k, -6 * k)}`, c.accentDark, Math.max(0.6, 0.7 * k), 0.45);
+  }
   if (ph.tail === 'plume') flame(p, ex - 1, ey - 1, 5.5 * k, c.accent, c.glow);
 }
 
@@ -1520,6 +1530,23 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     const L = sp.lean + tiltL, D = sp.drop + tiltD + bob - rise;
     p.tf = L || D || sp.sx ? mkTf(cx, cy, L, sp.sx ?? 0, D) : null;
   };
+  /**
+   * An arm from the shoulder (sx, sy) to the wrist (ex, ey), bending toward (cx, cy): a full upper arm tapering to
+   * the wrist, then a rounded hand turned along the forearm with two finger creases. With `cap`, a patch of the
+   * torso's colour covers the arm's outline where it joins the body, so the shoulder has no seam.
+   */
+  const arm = (sx: number, sy: number, ex: number, ey: number, cx: number, cy: number, w0: number, w1: number, col: string, cap: boolean) => {
+    p.taper(sx, sy, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
+    const dx = ex - cx, dy = ey - cy, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
+    const hr = w1 * lw * 0.72, hx = ex + ux * hr * 0.5, hy = ey + uy * hr * 0.5;
+    p.ell(hx, hy, hr * 1.1, hr * 0.88, col, { rot: (Math.atan2(uy, ux) * 180) / Math.PI });
+    const crease = (o: number) => {
+      const bx = hx + ux * hr * 0.35 + nx * hr * o, by2 = hy + uy * hr * 0.35 + ny * hr * o;
+      return `M${f(bx)} ${f(by2)}L${f(bx + ux * hr * 0.55)} ${f(by2 + uy * hr * 0.55)}`;
+    };
+    p.line(crease(0.3) + crease(-0.3), pal.out, Math.max(0.5, hr * 0.14), 0.6);
+    if (cap) p.ell(sx + ux * 0.4, sy + uy * 0.4, w0 * lw * 0.62, w0 * lw * 0.6, col, { line: false });
+  };
   /** An arm, blended from its resting place toward a strike, a raised cast, or a guard. Each target: [x, y, bendx, bendy]. */
   const blendArm = (rest: number[], strike: number[], up: number[], block: number[]) =>
     rest.map((v, i) => v + (strike[i] - v) * reach + (up[i] - v) * raise + (block[i] - v) * guard);
@@ -1559,7 +1586,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
           : ph.stance === 3 && !o.ko ? [60, by + bry * 0.22, 63, by - bry * 0.05]
           : [restX, by + 3, (55 + restX) / 2 + 1, (by - bry * 0.35 + by + 3) / 2];
         const [ex, ey, cx, cy] = blendArm(rest, [65, by - bry * 0.2, 62, by + bry * 0.12], [58, by - bry * 1.0, 61, by - bry * 0.45], [65, by - bry * 0.5, 63, by]);
-        p.taper(55, by - bry * 0.35, ex, ey, 5 * ls, 3.8 * ls, far, cx, cy);
+        arm(55, by - bry * 0.35, ex, ey, cx, cy, 5.8 * ls, 3.9 * ls, far, false);
       }
       p.g = 'body';
       drawTail(p, a, ph, k, breathe);
@@ -1583,7 +1610,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
           : ph.stance === 3 ? [55 - sw * 2, by + bry * 0.24, 59, by + bry * 0.02]
           : [restX, by + 5, (50 + restX) / 2 + 1, (by - bry * 0.3 + by + 5) / 2];
         const [ex, ey, cx, cy] = blendArm(rest, [66, by - bry * 0.45, 60, by - bry * 0.05], [60, by - bry * 1.05, 59, by - bry * 0.4], [61, by - bry * 0.42, 59, by + bry * 0.1]);
-        p.taper(50, by - bry * 0.3, ex, ey, 5.6 * ls, 4.4 * ls, pal.base, cx, cy);
+        arm(50, by - bry * 0.3, ex, ey, cx, cy, 6.6 * ls, 4.3 * ls, pal.base, true);
       }
       p.g = 'body';
       break;
