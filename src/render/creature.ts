@@ -865,10 +865,12 @@ function coatRim(p: Pen, ph: Pheno, b: Body, z: number, arc?: [number, number]) 
         break;
       }
       case 'feathered': {
-        // Rounded feather ends, laid back toward the tail and overlapping like a bird's, on the upper body.
+        // Feather tips lying flat along the outline, overlapping like a bird's, so the edge is a row of small
+        // points rather than bumps. They point along the outline whichever way is more down and back.
         if (ny > 0.3) break;
-        const L = z * 4.2, w = z * 2.2;
-        d += oval(x + nx * z * 0.6 - z * 1.6, y + ny * z * 0.6 + z * 0.4, L * 0.62, w * 0.78, (Math.atan2(ny + 0.6, nx - 0.9) * 180) / Math.PI);
+        const flip = ny - nx * 0.6 < 0 ? -1 : 1, rx2 = ny * flip, ry2 = -nx * flip, L = z * 4.6, w = z * 1.5;
+        const bx = x - nx * z * 1.4, by = y - ny * z * 1.4, tx = x + rx2 * L + nx * z * 0.7, ty = y + ry2 * L + ny * z * 0.7;
+        d += `M${f(bx - rx2 * z)} ${f(by - ry2 * z)}Q${f(x + nx * w + rx2 * L * 0.35)} ${f(y + ny * w + ry2 * L * 0.35)} ${f(tx)} ${f(ty)}Q${f(x + rx2 * L * 0.55 - nx * z * 0.6)} ${f(y + ry2 * L * 0.55 - ny * z * 0.6)} ${f(bx + rx2 * L * 0.4)} ${f(by + ry2 * L * 0.4)}Z`;
         break;
       }
       case 'rocky': {
@@ -1124,59 +1126,93 @@ function drawCrest(p: Pen, ph: Pheno, sp: Spine, z: number) {
 }
 
 /**
- * Ears from the ears gene, on top of the head toward the back. `front` draws only what overlaps the face (the
- * near floppy ear, which hangs over the side of the head); everything else goes down before the skull, so the
- * bases tuck under it. A head that is already eared keeps its own big ears.
+ * Ears from the ears gene, on the crown either side of the middle of the face, as a 3/4 view shows them: the
+ * near ear toward the back of the head, the far one above the far eye, a little smaller and in shade. They sit on
+ * the actual top of the head (long and blunt heads included) and lean out from it. Everything goes down before
+ * the skull so the bases tuck under it, except a near floppy ear, which hangs over the back of the head and is
+ * drawn with `front`. A head that is already eared keeps its own big ears.
  */
 function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
   const kind = ph.ears ?? 'none';
   if (kind === 'none' || ph.head === 'eared') return;
-  const c = p.pal, { hx, hy, hr: r } = a;
-  const inner = mix(c.accent, '#ff9fbf', 0.35), skin = c.limb, back = shade(skin, -0.07);
-  /** A point at angle t on the skull's rim (0 is the front, -90 the crown), pushed out by `out` radii. */
-  const rim = (t: number, out = 0): [number, number] => { const q = (t * Math.PI) / 180; return [hx + Math.cos(q) * r * (0.92 + out), hy + Math.sin(q) * r * (0.88 + out)]; };
-  /** A pointed ear rising from the rim at angle t, leaning by `tilt` degrees, `h` radii long and `w` wide. */
-  const pointed = (t: number, tilt: number, h: number, w: number, col: string, tuft: boolean) => {
-    const [bx, by] = rim(t, -0.12), q = ((t + tilt) * Math.PI) / 180, ux = Math.cos(q), uy = Math.sin(q), nx = -uy, ny = ux;
-    const tip: [number, number] = [bx + ux * h * r, by + uy * h * r];
-    const L: [number, number] = [bx - nx * w * r, by - ny * w * r], R: [number, number] = [bx + nx * w * r, by + ny * w * r];
-    p.path(`M${f(L[0])} ${f(L[1])}Q${f(L[0] + ux * h * r * 0.6)} ${f(L[1] + uy * h * r * 0.6)} ${f(tip[0])} ${f(tip[1])}Q${f(R[0] + ux * h * r * 0.5)} ${f(R[1] + uy * h * r * 0.5)} ${f(R[0])} ${f(R[1])}Z`, col);
-    const ix = bx + ux * h * r * 0.18, iy = by + uy * h * r * 0.18;
-    p.path(`M${f(ix - nx * w * r * 0.5)} ${f(iy - ny * w * r * 0.5)}Q${f(ix - nx * w * r * 0.3 + ux * h * r * 0.45)} ${f(iy - ny * w * r * 0.3 + uy * h * r * 0.45)} ${f(tip[0] - ux * h * r * 0.16)} ${f(tip[1] - uy * h * r * 0.16)}Q${f(ix + nx * w * r * 0.25 + ux * h * r * 0.4)} ${f(iy + ny * w * r * 0.25 + uy * h * r * 0.4)} ${f(ix + nx * w * r * 0.5)} ${f(iy + ny * w * r * 0.5)}Z`, inner, { line: false });
-    if (tuft) p.path(`M${f(tip[0] - nx * r * 0.06)} ${f(tip[1] - ny * r * 0.06)}L${f(tip[0] + ux * r * 0.42 - nx * r * 0.1)} ${f(tip[1] + uy * r * 0.42 - ny * r * 0.1)}L${f(tip[0] + nx * r * 0.08)} ${f(tip[1] + ny * r * 0.08)}Z`, c.dark, { line: false });
+  const c = p.pal, { hx, hy, hr: r } = a, H = headEllipse(ph, hx, hy, r);
+  const inner = mix(c.accent, '#ff9fbf', 0.35), skin = c.limb, shadeSkin = shade(skin, -0.08);
+  /** A point on the top of the head at x, sunk `sink` radii inside, and the outward direction there. */
+  const crown = (x: number, sink: number) => {
+    const u = Math.max(-0.92, Math.min(0.92, (x - H.cx) / H.rx)), q = Math.sqrt(1 - u * u);
+    let nx = u / H.rx, ny = -q / H.ry;
+    const L = Math.hypot(nx, ny); nx /= L; ny /= L;
+    return { x: H.cx + H.rx * u - nx * sink * r, y: H.cy - H.ry * q - ny * sink * r, nx, ny };
+  };
+  // Near ear behind the near eye; far ear above the far eye.
+  const near = crown(hx - r * 0.28, 0.14), far = crown(hx + r * 0.42, 0.14);
+  /** Turn a direction by deg degrees (negative leans back toward the tail). */
+  const turn = (nx: number, ny: number, deg: number): [number, number] => { const q = (deg * Math.PI) / 180; return [nx * Math.cos(q) - ny * Math.sin(q), nx * Math.sin(q) + ny * Math.cos(q)]; };
+  /** A pointed ear from (bx, by) along (ux, uy), h radii long and w radii wide at the base, with a pink inside. */
+  const pointed = (bx: number, by: number, ux: number, uy: number, h: number, w: number, col: string, tuft: boolean, inside = true) => {
+    const nx = -uy, ny = ux, H2 = h * r, W2 = w * r;
+    const tip: [number, number] = [bx + ux * H2, by + uy * H2];
+    const L: [number, number] = [bx - nx * W2, by - ny * W2], R: [number, number] = [bx + nx * W2, by + ny * W2];
+    p.path(`M${f(L[0])} ${f(L[1])}Q${f(L[0] + ux * H2 * 0.62 + nx * W2 * 0.1)} ${f(L[1] + uy * H2 * 0.62 + ny * W2 * 0.1)} ${f(tip[0])} ${f(tip[1])}Q${f(R[0] + ux * H2 * 0.55 - nx * W2 * 0.1)} ${f(R[1] + uy * H2 * 0.55 - ny * W2 * 0.1)} ${f(R[0])} ${f(R[1])}Z`, col);
+    if (inside) {
+      const ix = bx + ux * H2 * 0.2, iy = by + uy * H2 * 0.2, iw = W2 * 0.52;
+      p.path(`M${f(ix - nx * iw)} ${f(iy - ny * iw)}Q${f(ix - nx * iw * 0.6 + ux * H2 * 0.45)} ${f(iy - ny * iw * 0.6 + uy * H2 * 0.45)} ${f(tip[0] - ux * H2 * 0.18)} ${f(tip[1] - uy * H2 * 0.18)}Q${f(ix + nx * iw * 0.5 + ux * H2 * 0.4)} ${f(iy + ny * iw * 0.5 + uy * H2 * 0.4)} ${f(ix + nx * iw)} ${f(iy + ny * iw)}Z`, inner, { line: false });
+    }
+    if (tuft) p.path(`M${f(tip[0] - nx * r * 0.06)} ${f(tip[1] - ny * r * 0.06)}L${f(tip[0] + ux * r * 0.4 - nx * r * 0.08)} ${f(tip[1] + uy * r * 0.4 - ny * r * 0.08)}L${f(tip[0] + nx * r * 0.07)} ${f(tip[1] + ny * r * 0.07)}Z`, c.dark, { line: false });
+  };
+  /** The pair of pointed-type ears: lean, length and width for each. */
+  const pair = (h: number, w: number, leanN: number, leanF: number, tuft: boolean) => {
+    const [fx, fy] = turn(far.nx, far.ny, leanF), [nx, ny] = turn(near.nx, near.ny, leanN);
+    pointed(far.x, far.y, fx, fy, h * 0.9, w * 0.9, shadeSkin, tuft);
+    pointed(near.x, near.y, nx, ny, h, w, skin, tuft);
   };
   switch (kind) {
     case 'pointed':
-      if (!front) { pointed(-128, -8, 0.7, 0.26, back, false); pointed(-82, -14, 0.72, 0.27, skin, false); }
+      if (!front) pair(0.7, 0.27, -14, 10, false);
       break;
     case 'tufted':
-      if (!front) { pointed(-128, -6, 0.86, 0.24, back, true); pointed(-84, -12, 0.9, 0.25, skin, true); }
+      if (!front) pair(0.86, 0.25, -12, 8, true);
       break;
     case 'long':
-      // Tall rabbit ears, leaning back.
-      if (!front) { pointed(-120, -14, 1.35, 0.2, back, false); pointed(-92, -20, 1.42, 0.21, skin, false); }
+      // Tall rabbit ears, swept back.
+      if (!front) pair(1.38, 0.2, -26, -8, false);
       break;
     case 'round':
       if (!front) {
-        for (const [t, col] of [[-132, back], [-80, skin]] as [number, string][]) {
-          const [ex, ey] = rim(t, 0.12);
-          p.ell(ex, ey, r * 0.32, r * 0.3, col);
-          p.ell(ex + r * 0.03, ey + r * 0.02, r * 0.18, r * 0.17, inner, { line: false });
+        for (const [e, col, k] of [[far, shadeSkin, 0.9], [near, skin, 1]] as [typeof near, string, number][]) {
+          const ex = e.x + e.nx * r * 0.26, ey = e.y + e.ny * r * 0.26;
+          p.ell(ex, ey, r * 0.3 * k, r * 0.28 * k, col);
+          p.ell(ex + e.nx * r * 0.02, ey + e.ny * r * 0.02, r * 0.17 * k, r * 0.16 * k, inner, { line: false });
         }
       }
       break;
     case 'floppy': {
-      // Long ears that hang down the sides of the head: the far one behind the head, the near one over it.
-      const ear = (x0: number, y0: number, x1: number, y1: number, w: number, col: string) => {
-        const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-        p.path(`M${f(x0 - w * 0.4)} ${f(y0)}Q${f(mx - w * 1.25)} ${f(my - w * 0.2)} ${f(x1 - w * 0.25)} ${f(y1)}Q${f(x1 + w * 0.35)} ${f(y1 + w * 0.6)} ${f(x1 + w * 0.5)} ${f(y1 - w * 0.2)}Q${f(mx + w * 0.55)} ${f(my)} ${f(x0 + w * 0.5)} ${f(y0)}Z`, col);
+      // Soft, rounded ears that fold over at the crown and hang down: the near one over the back of the head
+      // (clear of the eye), the far one peeking out behind the crown.
+      const ear = (ax: number, ay: number, bx: number, by: number, w: number, col: string, crease: boolean) => {
+        const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy), ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
+        const P = (along: number, across: number) => `${f(ax + ux * L * along + nx * w * across)} ${f(ay + uy * L * along + ny * w * across)}`;
+        // Narrow where it joins the head, widest two-thirds down, with a round end.
+        p.path(`M${P(0, -0.45)}C${P(0.3, -1.05)} ${P(0.82, -1.1)} ${P(0.97, -0.45)}C${P(1.08, 0.1)} ${P(1.02, 0.7)} ${P(0.8, 0.85)}C${P(0.55, 1.0)} ${P(0.22, 0.75)} ${P(0, 0.4)}Z`, col);
+        if (crease) {
+          // The fold at the top, and a soft shadow down the side nearest the face.
+          p.line(`M${P(0.06, -0.3)}Q${P(0.16, 0.05)} ${P(0.08, 0.38)}`, c.out, Math.max(0.6, r * 0.05), 0.55);
+          p.soft([[ax + ux * L * 0.3 + nx * w * 0.5, ay + uy * L * 0.3 + ny * w * 0.5], [ax + ux * L * 0.6 + nx * w * 0.55, ay + uy * L * 0.6 + ny * w * 0.55], [ax + ux * L * 0.85 + nx * w * 0.4, ay + uy * L * 0.85 + ny * w * 0.4]], w * 0.45, shade(col, -0.16), 0.5);
+        }
       };
-      if (!front) ear(hx - r * 0.42, hy - r * 0.78, hx - r * 1.12, hy + r * 0.28, r * 0.42, back);
-      else ear(hx - r * 0.12, hy - r * 0.86, hx - r * 0.66, hy + r * 0.36, r * 0.4, skin);
+      if (!front) {
+        // The far ear hangs down behind the head on the far side; only its outer edge shows past the crown.
+        const e = crown(hx + r * 0.48, 0.1);
+        ear(e.x, e.y, e.x + r * 0.5, e.y + r * 0.85, r * 0.3, shadeSkin, false);
+      } else {
+        // The near ear hangs off the back of the head, half over its edge, well clear of the eyes.
+        const e = crown(hx - r * 0.55, 0.06);
+        ear(e.x, e.y, e.x - r * 0.5, e.y + r * 1.08, r * 0.36, skin, true);
+      }
       break;
     }
     case 'fins': {
-      // Fanned fins swept back from the cheek, with ribs, and a smaller one peeking over the crown.
+      // Fanned fins swept back from the side of the head, with ribs, and a smaller one over the crown.
       if (front) break;
       const fin = (bx0: number, by0: number, bx1: number, by1: number, tips: [number, number][], col: string) => {
         let d = `M${f(bx0)} ${f(by0)}`;
@@ -1189,8 +1225,9 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
         const mx = (bx0 + bx1) / 2, my = (by0 + by1) / 2;
         p.line(tips.map(([tx, ty]) => `M${f(mx)} ${f(my)}L${f(mx + (tx - mx) * 0.85)} ${f(my + (ty - my) * 0.85)}`).join(''), c.accentDark, Math.max(0.6, r * 0.05), 0.7);
       };
-      fin(hx - r * 0.2, hy - r * 0.82, hx - r * 0.05, hy - r * 0.7, [[hx - r * 0.5, hy - r * 1.42], [hx - r * 0.18, hy - r * 1.3]], mix(c.accent, skin, 0.3));
-      fin(hx - r * 0.72, hy - r * 0.42, hx - r * 0.7, hy + r * 0.28, [[hx - r * 1.45, hy - r * 0.78], [hx - r * 1.58, hy - r * 0.2], [hx - r * 1.32, hy + r * 0.4]], c.accent);
+      const t = crown(hx + r * 0.05, 0.1), bk = H.cx - H.rx * 0.78;
+      fin(t.x - r * 0.15, t.y, t.x + r * 0.12, t.y + r * 0.08, [[t.x - r * 0.42, t.y - r * 0.6], [t.x - r * 0.1, t.y - r * 0.52]], mix(c.accent, c.base, 0.3));
+      fin(bk, hy - r * 0.42, bk + r * 0.02, hy + r * 0.28, [[bk - r * 0.72, hy - r * 0.78], [bk - r * 0.86, hy - r * 0.2], [bk - r * 0.6, hy + r * 0.4]], c.accent);
       break;
     }
   }
@@ -1200,7 +1237,6 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   const c = p.pal;
   const { hx, hy, hr: r } = a;
   drawHorns(p, a, ph, feat);
-  drawEars(p, a, ph, false);
   if (ph.coat === 'fluffy' || ph.coat === 'shaggy' || ph.coat === 'feathered') {
     // Cheek tufts behind the jaw, merging into the head's outline.
     p.poly([[hx - r * 0.5, hy + r * 0.05], [hx - r * 1.14, hy + r * 0.4], [hx - r * 0.8, hy + r * 0.5], [hx - r * 0.98, hy + r * 0.86], [hx - r * 0.45, hy + r * 0.72]], c.base);
@@ -1213,6 +1249,8 @@ function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose:
   if (ph.head === 'frill') {
     p.path(`M${f(hx - r * 0.2)} ${f(hy - r * 0.9)}L${f(hx - r * 1.2)} ${f(hy - r * 1.3)}L${f(hx - r * 0.9)} ${f(hy - r * 0.5)}L${f(hx - r * 1.6)} ${f(hy - r * 0.3)}L${f(hx - r * 0.95)} ${f(hy + r * 0.2)}L${f(hx - r * 1.4)} ${f(hy + r * 0.75)}L${f(hx - r * 0.3)} ${f(hy + r * 0.7)}Z`, c.accent);
   }
+  // Ears after the frill, so a frill doesn't hide them.
+  drawEars(p, a, ph, false);
   // A wider jaw under the skull gives the head cheeks instead of a plain circle.
   const jaw = () => p.ell(hx + r * 0.1, hy + r * 0.3, r * 0.96, r * 0.62, c.base);
   const shadeSkullJaw = () => shadeHead(p, [[hx, hy, r, r * 0.95], [hx + r * 0.1, hy + r * 0.3, r * 0.96, r * 0.62]], hx - r * 0.28, hy - r * 0.52, r * 0.36, r * 0.14);
@@ -1672,7 +1710,9 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
       return done();
     case 'gale':
       if (v === 1) {
-        // A wind-swept mane: long tufts blown back off the head.
+        // A wind-swept mane: long tufts blown back off the head. Wings sweep up across the same spot and would
+        // leave just a white lump showing, so a winged creature gets the painted wind swirls instead.
+        if (ph.wings !== 'none') return false;
         const sway = Math.sin(phase * TAU) * 1.5;
         [[-0.1, 15, e.light], [-0.45, 12, '#ffffff'], [0.25, 11, e.light]].forEach(([u, len, col], i) => {
           const [x, y] = top(u as number), L = (len as number) * s;
@@ -1680,7 +1720,9 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         });
         return done();
       }
-      // A little cloud riding on the back.
+      // A little cloud riding on the back. Wings or a back crest would cover most of it and leave a stray white
+      // lump, so those creatures get the painted wind swirls instead.
+      if (ph.wings !== 'none' || (ph.crest ?? 'none') !== 'none') return false;
       for (const [lx, lo, r] of [[-5, 2.5, 3.6], [0, 4.5, 4.6], [5, 2.8, 3.4], [-1, 1, 3.6], [3, 1.2, 3.2]]) p.ell(...(B(lx * s, lo * s) as [number, number]), r * s + 0.3, r * s * 0.85 + 0.3, '#ffffff');
       p.ell(...(B(0, 0.8 * s) as [number, number]), 6 * s, 1.6 * s, '#d8ecf6', { line: false });
       return done();
