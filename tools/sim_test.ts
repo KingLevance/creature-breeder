@@ -4,7 +4,7 @@ import { ELEMENT_IDS, matchup } from '../src/game/data/elements';
 import { MOVE_LIST, MOVES, movePool } from '../src/game/data/moves';
 import { act, aiChoose, autoResolve, createBattle, makeUnit, nextActor, turnOrder, usable, validTargets } from '../src/game/battle';
 import { Creature, makeCreature, slotRarities, stageLevels, stageOf, statsFor } from '../src/game/creature';
-import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan, releaseMany, discardEgg, train, trainCost } from '../src/game/economy';
+import { STARTERS, renameCreature, breedCost, breedProblem, doBreed, forecast, hatchEgg, pickStarter, placeEgg, release, useScan, releaseMany, discardEgg, train, trainCost, hatchAll, fillIncubators } from '../src/game/economy';
 import { breed, express, fillGenome, mulberry32, rareCarrierCount, starRating, wildGenome } from '../src/game/genome';
 import { finishFight, raidState, startAreaRun, startArenaRun, startBattle, startRaidRun, startTowerRun, startTutorialFight } from '../src/game/run';
 import { TUT, newSave } from '../src/game/save';
@@ -216,6 +216,16 @@ function team(n: number, level: number, q: number, els = ELEMENT_IDS): Creature[
     s.essence = c3 + 5;
     const tr = train(rng, s, keep.id, 3);
     ok(!!tr && keep.level === lv + 3 && keep.xp === 0 && s.essence === 5, `training buys exact levels (${lv} -> ${keep.level} for ${c3} essence)`);
+    // Filling every incubator, then hatching them all at once.
+    s.incubators = [{ tier: 1, egg: null, startedAt: 0, readyAt: 0 }, { tier: 2, egg: null, startedAt: 0, readyAt: 0 }, { tier: 1, egg: null, startedAt: 0, readyAt: 0 }];
+    s.eggs = [1, 2].map(k => ({ id: 'egg_f' + k, g: wildGenome(rng, { els: ['tide'], quality: 0.2 * k }), origin: 'wild' as const, mutations: 0 }));
+    const best = Math.max(...s.eggs.map(e => starRating(e.g)));
+    ok(fillIncubators(s, 1000) === 2 && s.eggs.length === 0 && starRating(s.incubators[1].egg!.g) === best && !s.incubators[2].egg,
+      'fill puts the best egg in the best incubator and stops when out of eggs');
+    const had = s.creatures.length;
+    ok(hatchAll(rng, s, 1000).length === 0, 'nothing hatches before it is ready');
+    const born = hatchAll(rng, s, 1000 + 1e9);
+    ok(born.length === 2 && s.creatures.length === had + 2 && s.incubators.every(x => !x.egg), 'hatch all hatches every ready egg');
     let total = 0;
     for (let l = 1; l < 100; l++) total += trainCost({ ...keep, level: l, xp: 0 }, 1);
     console.log(`     essence to train 1 -> 100: ${total}; level 10: ${trainCost({ ...keep, level: 10, xp: 0 })}, level 50: ${trainCost({ ...keep, level: 50, xp: 0 })}`);

@@ -1,6 +1,7 @@
 // The roster, the creature detail sheet (stats, moves, genes, pedigree) and the team picker.
 import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
 import { Creature, MAX_LEVEL, PedNode, STAGE_NAMES, XpResult, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
@@ -212,6 +213,11 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
           )}
           <Btn style={{ marginTop: 10 }} label="Close" onPress={onClose} />
         </ScrollView>
+        {/* Always in reach, wherever the page is scrolled to. */}
+        <Pressable onPress={() => { haptic('select'); onClose(); }} hitSlop={10} accessibilityLabel="Close"
+          style={({ pressed }) => ({ position: 'absolute', top: 54, right: 14, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,9,30,0.72)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.22)', transform: [{ scale: pressed ? 0.9 : 1 }] })}>
+          <Svg width={16} height={16} viewBox="0 0 16 16"><Path d="M3 3L13 13M13 3L3 13" stroke="#ffffff" strokeWidth={2.6} strokeLinecap="round" /></Svg>
+        </Pressable>
       </View>
     </Modal>
   );

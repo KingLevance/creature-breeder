@@ -3,8 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { SfxName, sfx } from './audio';
+import { ELEMENTS } from '../game/data/elements';
 import { Creature, Egg, STAGE_NAMES, stageLevels, stageOf, typeLabel } from '../game/creature';
-import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, discardEgg, doBreed, eggValue, forecast, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
+import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, discardEgg, doBreed, eggValue, fillIncubators, forecast, hatchAll, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
 import { SKELETON_NAMES, express, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Breathing, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, P, SexMark, Stars, Title, TypeChips, mixHex, st } from './kit';
@@ -21,6 +22,52 @@ const CRACKS = [
 const TAPS = 3;
 
 /** Hatching: tap the egg until it breaks open, then the stars appear one by one, then the creature. */
+/** Several eggs hatching at once: each hatchling pops in on its own card, one after another. */
+function HatchAllReveal({ cs, onClose }: { cs: Creature[]; onClose: () => void }) {
+  const { width: W } = useWindowDimensions();
+  const pops = useRef(cs.map(() => new Animated.Value(0))).current;
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    const ts = cs.map((c, i) => setTimeout(() => {
+      sfx(i === 0 ? 'crackBig' : 'hatch');
+      haptic('medium');
+      Animated.spring(pops[i], { toValue: 1, friction: 5, tension: 90, useNativeDriver: ND }).start();
+      if (i === cs.length - 1) setTimeout(() => { sfx('reveal'); setDone(true); }, 400);
+    }, 300 + i * 450));
+    return () => ts.forEach(clearTimeout);
+  }, [cs, pops]);
+  const cw = (Math.min(W, 520) - 52) / 2;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: '#000e', justifyContent: 'center', padding: 18 }}>
+        <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 28, textAlign: 'center', marginBottom: 12 }}>{cs.length} hatched!</Text>
+        <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }} style={{ flexGrow: 0 }}>
+          {cs.map((c, i) => {
+            const ph = express(c.g);
+            return (
+              <Animated.View key={c.id} style={{ width: cw, opacity: pops[i], transform: [{ scale: pops[i].interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }] }}>
+                <Card tint={ELEMENTS[ph.el1].base} style={{ alignItems: 'center', marginBottom: 0, padding: 8 }}>
+                  <View style={{ width: cw - 24, height: cw - 24, alignItems: 'center', justifyContent: 'flex-end' }}>
+                    <Glow color={ELEMENTS[ph.el1].light} opacity={0.55} cy="60%" r="50%" />
+                    <LiveCreature ph={ph} stage={stageOf(c)} size={cw - 24} />
+                  </View>
+                  <View style={st.row}>
+                    <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }} numberOfLines={1}>{c.name}</Text>
+                    <SexMark sex={c.sex} />
+                  </View>
+                  <Stars n={starRating(c.g)} size={13} />
+                  <View style={{ marginTop: 4 }}><TypeChips ph={ph} /></View>
+                </Card>
+              </Animated.View>
+            );
+          })}
+        </ScrollView>
+        <Btn style={{ marginTop: 18, alignSelf: 'center', minWidth: 200 }} kind="gold" label={done ? 'Welcome!' : 'Hatching...'} disabled={!done} onPress={onClose} />
+      </View>
+    </Modal>
+  );
+}
+
 function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
   const { width: W } = useWindowDimensions();
   const ph = useMemo(() => express(c.g), [c.g]);
@@ -196,6 +243,7 @@ export function NurseryScreen() {
   const now = useNow(1000);
   const [selEgg, setSelEgg] = useState<string | null>(null);
   const [born, setBorn] = useState<Creature | null>(null);
+  const [bornMany, setBornMany] = useState<Creature[] | null>(null);
   const full = save.creatures.length >= save.rosterCap;
   const nextSlot = INC_SLOT_COST[save.incubators.length];
   const egg = save.eggs.find(e => e.id === selEgg) ?? save.eggs[0];
@@ -205,6 +253,26 @@ export function NurseryScreen() {
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 14 }}>
         <Title icon="egg" color="#ffb35c">Incubators</Title>
+        {(() => {
+          // Shortcuts once there are a few incubators: hatch everything that's ready, and refill the empty ones.
+          const readyN = save.incubators.filter(inc => inc.egg && inc.readyAt <= now).length;
+          const emptyN = save.incubators.filter(inc => !inc.egg).length;
+          const room = save.rosterCap - save.creatures.length;
+          if (save.tutorial < TUT.DONE || (readyN < 2 && !(emptyN >= 2 && save.eggs.length >= 2))) return null;
+          return (
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+              {readyN >= 2 ? (
+                <Btn style={{ flex: 1 }} kind="gold" disabled={room <= 0} label={room <= 0 ? 'Roster is full' : `Hatch all (${Math.min(readyN, room)})`}
+                  icon={<Icon name="egg" size={17} color="#3d2400" accent="#ffe58a" />}
+                  onPress={() => { const cs = mutate(s => hatchAll(rng, s, Date.now())); if (cs.length === 1) setBorn(cs[0]); else if (cs.length) setBornMany(cs); }} />
+              ) : null}
+              {emptyN >= 1 && save.eggs.length >= 1 && (emptyN >= 2 || readyN >= 2) ? (
+                <Btn style={{ flex: 1 }} kind="main" label={`Fill ${Math.min(emptyN, save.eggs.length)} empty`}
+                  onPress={() => { if (mutate(s => fillIncubators(s, Date.now()))) { sfx('egg'); haptic('select'); } }} />
+              ) : null}
+            </View>
+          );
+        })()}
         {save.incubators.length === 0 ? <Empty icon="egg" color="#ffb35c" title="No incubator yet" text="You'll get your first incubator after your first fight." /> : null}
         {save.incubators.map((inc, i) => {
           const up = INC_UPGRADE[inc.tier + 1];
@@ -280,6 +348,7 @@ export function NurseryScreen() {
         )}
       </ScrollView>
       {born ? <HatchReveal c={born} onClose={() => setBorn(null)} /> : null}
+      {bornMany ? <HatchAllReveal cs={bornMany} onClose={() => setBornMany(null)} /> : null}
     </View>
   );
 }

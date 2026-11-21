@@ -768,17 +768,28 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         // A sea-turtle carapace: a dome that rises above the back, a row of hexagonal plates down the spine,
         // seams out to a scalloped pale rim, and a gloss on top.
         if (ph.skel === 'serpent') return false;
-        const shell = '#5e8c6a', scute = '#7aa784', seam = '#3b5c45', rim = '#dfe9c6';
-        const dome = Math.min(brx, bry) * 0.34;
+        const shell = '#5e8c6a', scute = '#7aa784', seam = '#3b5c45', rim = '#b9d2a4';
+        // On a long, flat back (four legs, many legs, a swimmer) the shell covers nearly the whole back, from the
+        // hips to the shoulders, and comes down the flank to about the middle, with rounded ends that overhang the
+        // body a little, so it fits the creature like a real carapace instead of perching on top.
+        const flat = !!a.flatBack, swim = ph.skel === 'aquatic';
+        const u0 = flat ? (swim ? -0.9 : -1.02) : -0.82, u1 = flat ? (swim ? 0.5 : 0.74) : 0.6;
+        const dome = Math.min(brx, bry) * (flat ? 0.4 : 0.34);
+        const lip = flat ? Math.min(brx, bry) * 0.1 : 0;
         const crest = (t: number): number[] => {
-          if (a.flatBack) { const u = -0.82 + 1.28 * t, h = bry * Math.sqrt(Math.max(0, 1 - u * u)); return [bx + brx * u, by - h - dome * Math.sin(t * Math.PI)]; }
+          if (flat) {
+            const u = u0 + (u1 - u0) * t, h = bry * Math.sqrt(Math.max(0, 1 - Math.min(1, u * u)));
+            // Ends push outward a touch past the body (the overhanging lip); the middle domes up.
+            const out = lip * (1 - Math.sin(t * Math.PI));
+            return [bx + brx * u + (t < 0.5 ? -out : out), by - h - dome * Math.pow(Math.sin(t * Math.PI), 0.7)];
+          }
           const w = -0.82 + 1.42 * t, h = brx * Math.sqrt(Math.max(0, 1 - w * w));
           return [bx - h - dome * Math.sin(t * Math.PI), by + bry * w];
         };
-        // The rim runs low across the flank in the middle and rises to meet the dome at both ends.
+        // The rim runs low and nearly level across the flank, and curls up to meet the dome at both ends.
         const rimAt = (t: number): number[] => {
-          const c = crest(t), k = Math.pow(Math.sin(Math.PI * t), 0.55);
-          const base = a.flatBack ? [c[0], by - bry * (0.02 + 0.12 * Math.sin(t * Math.PI))] : [bx - brx * (0.18 + 0.12 * Math.sin(t * Math.PI)), c[1]];
+          const c = crest(t), k = Math.pow(Math.sin(Math.PI * t), flat ? 0.32 : 0.55);
+          const base = flat ? [c[0], by + bry * (0.08 - 0.06 * Math.sin(t * Math.PI))] : [bx - brx * (0.18 + 0.12 * Math.sin(t * Math.PI)), c[1]];
           return [c[0] + (base[0] - c[0]) * k, c[1] + (base[1] - c[1]) * k];
         };
         const P = (t: number, r: number) => { const c = crest(t), q = rimAt(t); return [q[0] + (c[0] - q[0]) * r, q[1] + (c[1] - q[1]) * r]; };
@@ -1514,8 +1525,23 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
         }
       }
       p.ribbon(pts, ws, pal.base);
-      if (ph.pattern === 'belly') p.line(`M30 ${f(86 - wv * 0.4)}Q48 ${f(95 + wv * 0.4)} 57 80`, pal.light, w * 0.35);
-      else if (ph.pattern !== 'plain' && ph.pattern !== 'mask') {
+      if (ph.pattern === 'belly') {
+        // The pale belly follows the underside of the ribbon (its left edge as drawn, which is the underside of
+        // the coil and the front of the throat), running right out to the outline so it reads as part of the
+        // body rather than a stripe painted on it. It tapers away toward the tail.
+        const n = pts.length, outer: number[][] = [], inner: number[][] = [];
+        for (let i = 0; i < n; i++) {
+          const g = i / (n - 1);
+          if (g < 0.1) continue;
+          const a0 = pts[Math.max(0, i - 1)], a1 = pts[Math.min(n - 1, i + 1)];
+          const dx = a1[0] - a0[0], dy = a1[1] - a0[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+          const h = ws[i] / 2, fade = Math.min(1, (g - 0.1) / 0.22);
+          const o = h * 0.98, inn = h * (0.98 - 0.62 * fade);
+          outer.push([pts[i][0] + nx * o, pts[i][1] + ny * o]);
+          inner.unshift([pts[i][0] + nx * inn, pts[i][1] + ny * inn]);
+        }
+        p.path('M' + [...outer, ...inner].map(([x, y]) => f(x) + ' ' + f(y)).join('L') + 'Z', pal.light, { line: false });
+      } else if (ph.pattern !== 'plain' && ph.pattern !== 'mask') {
         const col = ph.pattern === 'stars' ? pal.markGlow : ph.pattern === 'bands' ? pal.accentDark : pal.mark;
         for (const [x, y] of [[30, 81], [40, 86], [50, 87], [58, 76], [60, 62]]) {
           if (ph.pattern === 'stars') star(p, x, y, w * 0.25, col); else p.dot(x, y, w * (ph.pattern === 'spots' ? 0.2 : 0.26), col, 0.75);

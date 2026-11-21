@@ -211,6 +211,29 @@ export function hatchEgg(rng: Rng, s: Save, incIdx: number, now: number): Creatu
   return c;
 }
 
+/** Hatch every ready egg at once, until the roster is full. */
+export function hatchAll(rng: Rng, s: Save, now: number): Creature[] {
+  const out: Creature[] = [];
+  s.incubators.forEach((_, i) => {
+    const c = hatchEgg(rng, s, i, now);
+    if (c) out.push(c);
+  });
+  return out;
+}
+
+/** Put eggs into every empty incubator, the best eggs into the best incubators. Returns how many were placed. */
+export function fillIncubators(s: Save, now: number): number {
+  const empty = s.incubators.map((inc, i) => ({ inc, i })).filter(x => !x.inc.egg).sort((a, b) => b.inc.tier - a.inc.tier);
+  const eggs = [...s.eggs].sort((a, b) => starRating(b.g) - starRating(a.g));
+  let n = 0;
+  for (const { i } of empty) {
+    const e = eggs.shift();
+    if (!e) break;
+    if (placeEgg(s, i, e.id, now)) n++;
+  }
+  return n;
+}
+
 export function buyIncubator(s: Save): boolean {
   const cost = INC_SLOT_COST[s.incubators.length];
   if (cost == null || s.gold < cost) return false;
