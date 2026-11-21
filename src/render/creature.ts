@@ -199,7 +199,7 @@ class Pen {
     this.stroke(d, w, color);
   }
   /** A limb whose width changes along a centre line (widths[i] at pts[i]), rounded at both ends. */
-  ribbon(pts: number[][], widths: number[], color: string) {
+  ribbon(pts: number[][], widths: number[], color: string, line = true) {
     const L: string[] = [], R: string[] = [];
     for (let i = 0; i < pts.length; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
@@ -209,13 +209,14 @@ class Pen {
       L.push(`${f(pts[i][0] - dy * h)} ${f(pts[i][1] + dx * h)}`);
       R.unshift(`${f(pts[i][0] + dy * h)} ${f(pts[i][1] - dx * h)}`);
     }
-    this.path('M' + L.join('L') + 'L' + R.join('L') + 'Z', color);
+    const o = line ? undefined : { line: false };
+    this.path('M' + L.join('L') + 'L' + R.join('L') + 'Z', color, o);
     const n = pts.length - 1;
-    this.ell(pts[0][0], pts[0][1], widths[0] / 2, widths[0] / 2, color);
-    this.ell(pts[n][0], pts[n][1], widths[n] / 2, widths[n] / 2, color);
+    this.ell(pts[0][0], pts[0][1], widths[0] / 2, widths[0] / 2, color, o);
+    this.ell(pts[n][0], pts[n][1], widths[n] / 2, widths[n] / 2, color, o);
   }
   /** A tapered limb from (x1,y1), width w0, to (x2,y2), width w1, optionally bending toward (kx,ky). */
-  taper(x1: number, y1: number, x2: number, y2: number, w0: number, w1: number, color: string, kx?: number, ky?: number) {
+  taper(x1: number, y1: number, x2: number, y2: number, w0: number, w1: number, color: string, kx?: number, ky?: number, line = true) {
     const cx = kx ?? (x1 + x2) / 2, cy = ky ?? (y1 + y2) / 2;
     const pts: number[][] = [], ws: number[] = [];
     for (let i = 0; i <= 8; i++) {
@@ -223,7 +224,7 @@ class Pen {
       pts.push([u * u * x1 + 2 * u * t * cx + t * t * x2, u * u * y1 + 2 * u * t * cy + t * t * y2]);
       ws.push(w0 + (w1 - w0) * t);
     }
-    this.ribbon(pts, ws, color);
+    this.ribbon(pts, ws, color, line);
   }
   poly(pts: number[][], fill: string, o: { op?: number; line?: boolean } = {}) {
     this.path('M' + pts.map(p => f(p[0]) + ' ' + f(p[1])).join('L') + 'Z', fill, o);
@@ -472,7 +473,15 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
       break;
     }
     case 'fin':
-      if (!far) p.path(`M${f(x + 6 * k)} ${f(y + 1)}Q${f(x - 2 * k)} ${f(y - 18 * k - up * 0.4)} ${f(x - 12 * k)} ${f(y - 14 * k)}Q${f(x - 8 * k)} ${f(y - 4 * k)} ${f(x - 12 * k)} ${f(y + 2)}Z`, col);
+      // A dorsal fin. It's drawn behind the body with its base sunk into the back, so it rises out of the body
+      // along the back's own curve instead of sitting on top with a straight cut along its base. A brighter
+      // leading edge and a few soft ribs give it form.
+      if (far) {
+        const fx = x - 4, fy = y + 1, top = fy - 19 * k - up * 0.4;
+        p.path(`M${f(fx + 7 * k)} ${f(fy + 7 * k)}Q${f(fx - 1 * k)} ${f(top)} ${f(fx - 12 * k)} ${f(fy - 15 * k)}Q${f(fx - 7 * k)} ${f(fy - 4 * k)} ${f(fx - 13 * k)} ${f(fy + 7 * k)}Z`, c.accent);
+        p.line(`M${f(fx + 4.5 * k)} ${f(fy + 2 * k)}Q${f(fx - 1.5 * k)} ${f(fy - 13 * k)} ${f(fx - 10.5 * k)} ${f(fy - 14 * k)}`, mix(c.accent, '#ffffff', 0.35), Math.max(0.8, 1.3 * k), 0.8);
+        for (const [bx, ex, ey] of [[-1, -7, -9], [-4, -9, -5], [-7, -10.5, -1]]) p.line(`M${f(fx + bx * k)} ${f(fy + 3 * k)}L${f(fx + ex * k)} ${f(fy + ey * k)}`, c.accentDark, Math.max(0.5, 0.8 * k), 0.4);
+      }
       break;
     case 'energy':
       for (let i = 0; i < 3; i++) {
@@ -1556,11 +1565,20 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   };
   /**
    * An arm from the shoulder (sx, sy) to the wrist (ex, ey), bending toward (cx, cy): a full upper arm tapering to
-   * the wrist, then a rounded hand turned along the forearm with two finger creases. With `cap`, a patch of the
-   * torso's colour covers the arm's outline where it joins the body, so the shoulder has no seam.
+   * the wrist, then a rounded hand turned along the forearm with two finger creases. With `seamless`, the top of
+   * the arm has no outline: the outlined part starts a little way down, and a plain shoulder piece over it joins
+   * the torso, so the arm grows out of the body instead of being outlined against it at the shoulder.
    */
-  const arm = (sx: number, sy: number, ex: number, ey: number, cx: number, cy: number, w0: number, w1: number, col: string, cap: boolean) => {
-    p.taper(sx, sy, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
+  const arm = (sx: number, sy: number, ex: number, ey: number, cx: number, cy: number, w0: number, w1: number, col: string, seamless: boolean) => {
+    if (!seamless) p.taper(sx, sy, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
+    else {
+      // Split the arm's curve at t0 (outlined below) and t1 (the plain shoulder piece reaches down to here).
+      const B = (t: number) => [(1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * ex, (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ey];
+      const W = (t: number) => (w0 + (w1 - w0) * t) * lw;
+      const t0 = 0.24, t1 = 0.42, [ax, ay] = B(t0), [bx2, by2] = B(t1);
+      p.taper(ax, ay, ex, ey, W(t0), w1 * lw, col, cx + (ex - cx) * t0, cy + (ey - cy) * t0);
+      p.taper(sx, sy, bx2, by2, w0 * lw, W(t1), col, sx + (cx - sx) * t1, sy + (cy - sy) * t1, false);
+    }
     const dx = ex - cx, dy = ey - cy, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
     const hr = w1 * lw * 0.72, hx = ex + ux * hr * 0.5, hy = ey + uy * hr * 0.5;
     p.ell(hx, hy, hr * 1.1, hr * 0.88, col, { rot: (Math.atan2(uy, ux) * 180) / Math.PI });
@@ -1569,7 +1587,6 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       return `M${f(bx)} ${f(by2)}L${f(bx + ux * hr * 0.55)} ${f(by2 + uy * hr * 0.55)}`;
     };
     p.line(crease(0.3) + crease(-0.3), pal.out, Math.max(0.5, hr * 0.14), 0.6);
-    if (cap) p.ell(sx + ux * 0.4, sy + uy * 0.4, w0 * lw * 0.62, w0 * lw * 0.6, col, { line: false });
   };
   /** An arm, blended from its resting place toward a strike, a raised cast, or a guard. Each target: [x, y, bendx, bendy]. */
   const blendArm = (rest: number[], strike: number[], up: number[], block: number[]) =>
