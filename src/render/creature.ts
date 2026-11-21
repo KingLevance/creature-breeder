@@ -143,6 +143,32 @@ function tfShape(sh: Shape, T: Tf): Shape {
   return { ...sh, cx, cy, rot: (sh.rot ?? 0) + T.deg };
 }
 
+/** Points along a path of absolute M, L, Q, C and Z commands, one list per sub-path; null for anything else. */
+function samplePath(d: string): number[][][] | null {
+  const tok = d.match(/[A-Za-z]|-?[\d.]+(?:e-?\d+)?/g);
+  if (!tok) return null;
+  const runs: number[][][] = [];
+  let cur: number[][] = [], i = 0, x = 0, y = 0, sx = 0, sy = 0;
+  const num = () => parseFloat(tok[i++]);
+  while (i < tok.length) {
+    const c = tok[i++];
+    if (c === 'M') { if (cur.length) runs.push(cur); x = sx = num(); y = sy = num(); cur = [[x, y]]; }
+    else if (c === 'L') { x = num(); y = num(); cur.push([x, y]); }
+    else if (c === 'Q') {
+      const qx = num(), qy = num(), ex = num(), ey = num();
+      for (let k = 1; k <= 10; k++) { const t = k / 10, u = 1 - t; cur.push([u * u * x + 2 * u * t * qx + t * t * ex, u * u * y + 2 * u * t * qy + t * t * ey]); }
+      x = ex; y = ey;
+    } else if (c === 'C') {
+      const ax = num(), ay = num(), bx = num(), by = num(), ex = num(), ey = num();
+      for (let k = 1; k <= 12; k++) { const t = k / 12, u = 1 - t; cur.push([u * u * u * x + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * ex, u * u * u * y + 3 * u * u * t * ay + 3 * u * t * t * by + t * t * t * ey]); }
+      x = ex; y = ey;
+    } else if (c === 'Z' || c === 'z') { cur.push([sx, sy]); x = sx; y = sy; }
+    else return null;
+  }
+  if (cur.length) runs.push(cur);
+  return runs;
+}
+
 class Pen {
   items: Item[] = [];
   g: Layer = 'body';
@@ -167,6 +193,12 @@ class Pen {
   ell(cx: number, cy: number, rx: number, ry: number, fill: string, o: { rot?: number; op?: number; line?: boolean } = {}) {
     const base = { t: 'ellipse' as const, cx, cy, rx: Math.max(0.1, rx), ry: Math.max(0.1, ry), rot: o.rot, op: o.op };
     if (o.line === false) return this.add({ ...base, fill });
+    if (this.mask) {
+      // As a path, so the outline can be kept to the part outside the mask.
+      const q = ((o.rot ?? 0) * Math.PI) / 180, ux = Math.cos(q), uy = Math.sin(q), pts: string[] = [];
+      for (let i = 0; i <= 24; i++) { const t = (i / 24) * TAU, ex = Math.cos(t) * base.rx, ey = Math.sin(t) * base.ry; pts.push(f(cx + ex * ux - ey * uy) + ' ' + f(cy + ex * uy + ey * ux)); }
+      return this.path('M' + pts.join('L') + 'Z', fill, { op: o.op });
+    }
     // See-through parts can't hide an outline under their fill, so they keep a plain stroke.
     if (o.op != null && o.op < 1) return this.add({ ...base, fill, stroke: this.pal.out, sw: 1.2 });
     this.add({ ...base, fill }, { ...base, op: undefined, fill: this.pal.out, stroke: this.pal.out, sw: OW });
@@ -174,10 +206,32 @@ class Pen {
   dot(cx: number, cy: number, r: number, fill: string, op?: number) {
     this.add({ t: 'circle', cx, cy, r: Math.max(0.1, r), fill, op });
   }
+  /**
+   * While set, outlined shapes get their outline only where it lies outside this region: a part that grows out of
+   * the body (a near wing) melts into it where it overlaps, and is outlined where it stands free.
+   */
+  mask: ((x: number, y: number) => boolean) | null = null;
+  private masked(d: string, fill: string, op?: number) {
+    const runs = samplePath(d);
+    if (!runs || !this.mask) return false;
+    const inside = this.mask;
+    this.add({ t: 'path', d, fill, op });
+    for (const pts of runs) {
+      let run: number[][] = [];
+      const flush = () => { if (run.length > 1) this.edge('M' + run.map(q => f(q[0]) + ' ' + f(q[1])).join('L')); run = []; };
+      pts.forEach((q, i) => {
+        if (!inside(q[0], q[1])) { if (!run.length && i) run.push(pts[i - 1]); run.push(q); }
+        else if (run.length) { run.push(q); flush(); }
+      });
+      flush();
+    }
+    return true;
+  }
   /** A filled shape gets a merged outline; an unfilled path is a line drawn on top (a stripe, a mouth). */
   path(d: string, fill: string | undefined, o: { stroke?: string; sw?: number; op?: number; line?: boolean } = {}) {
     const filled = fill !== undefined && fill !== 'none';
     if (!filled || o.line === false || o.stroke) return this.add({ t: 'path', d, fill: fill ?? 'none', stroke: o.stroke, sw: o.sw, op: o.op });
+    if (this.mask && this.masked(d, fill, o.op)) return;
     if (o.op != null && o.op < 1) return this.add({ t: 'path', d, fill, stroke: this.pal.out, sw: 1.2, op: o.op });
     this.add({ t: 'path', d, fill }, { t: 'path', d, fill: this.pal.out, stroke: this.pal.out, sw: OW });
   }
@@ -304,6 +358,8 @@ const STAGE = [
 interface Anchors {
   /** Bodies with a horizontal back (four- and many-legged, swimmers), where things can sit on top. */
   flatBack?: boolean;
+  /** The body's ellipses, for parts that melt into it (an upright body's near wing). */
+  hull?: number[][];
   hx: number; hy: number; hr: number;
   bx: number; by: number; brx: number; bry: number;
   tx: number; ty: number; tdir: number;
@@ -457,24 +513,31 @@ function tailTip(p: Pen, x: number, y: number, el: ElementId, k: number) {
 function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
   if (ph.wings === 'none') return;
   const was = p.g, wasPart = p.part;
-  // On an upright or floating body both wings grow from behind the back, so the body covers their roots and they
-  // rise out from behind the shoulders; the near one isn't laid over the front of the body. (Flippers are arms, so
-  // they stay in front.) On a long back the near wing lies along the top of the body, in front.
-  const behind = far || (!a.flatBack && ph.wings !== 'flipper');
-  p.g = behind ? 'back' : 'front';
-  p.part = behind ? 'wingFar' : 'wingNear';
-  const jx = ph.wings === 'flipper' && a.flatBack ? a.bx + a.brx * 0.42 + (far ? 4 : 0) : a.wx + (far ? 4 : 0) + (ph.wings === 'flipper' ? 4 : 0);
-  const jy = ph.wings === 'flipper' && a.flatBack ? a.by - a.bry * 0.3 + (far ? -1 : 0) : a.wy + (far ? -1 : 0) + (ph.wings === 'flipper' ? 2 : 0);
-  // Both wings behind share the far wing's hinge, so they beat together.
-  if (far || !behind) p.pivots[p.part] = p.at(jx, jy);
+  p.g = far ? 'back' : 'front';
+  p.part = far ? 'wingFar' : 'wingNear';
+  const [fox, foy] = wingOffset(a, far);
+  const jx = ph.wings === 'flipper' && a.flatBack ? a.bx + a.brx * 0.42 + fox : a.wx + fox + (ph.wings === 'flipper' ? 4 : 0);
+  const jy = ph.wings === 'flipper' && a.flatBack ? a.by - a.bry * 0.3 + foy : a.wy + foy + (ph.wings === 'flipper' ? 2 : 0);
+  p.pivots[p.part] = p.at(jx, jy);
+  // On an upright or floating body the near wing grows from the back edge in front of the body: where it overlaps
+  // the body it has no outline and melts into it; it's outlined only where it stands free. (Flippers are arms.)
+  const hull = a.hull;
+  if (!far && !a.flatBack && hull && ph.wings !== 'flipper') p.mask = (x, y) => hull.some(([cx, cy, rx, ry]) => ((x - cx) / (rx * 0.97)) ** 2 + ((y - cy) / (ry * 0.97)) ** 2 < 1);
   drawWingShape(p, a, ph, k, p.rig ? 0 : flap, far);
+  p.mask = null;
   p.g = was;
   p.part = wasPart;
 }
 
+/** Where the far wing sits relative to the near one: higher and further forward on an upright body, so both show. */
+function wingOffset(a: Anchors, far: boolean): [number, number] {
+  if (!far) return [0, 0];
+  return a.flatBack ? [4, -1] : [6, -5];
+}
+
 function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: boolean) {
   const c = p.pal;
-  const x = a.wx + (far ? 4 : 0), y = a.wy + (far ? -1 : 0);
+  const [fox, foy] = wingOffset(a, far), x = a.wx + fox, y = a.wy + foy;
   const up = flap * 7 * k;
   const col = far ? c.accentDark : c.accent;
   switch (ph.wings) {
@@ -2493,6 +2556,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       // A pear-shaped torso: the belly is wider than the chest.
       const torso: Body = { hull: [[48, by, brx, bry], [48, by + bry * 0.28, brx * 1.07, bry * 0.72], ...(ph.stance === 2 && !o.ko ? [[48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62]] : [])] };
       coatRim(p, ph, torso, cz);
+      a.hull = torso.hull;
       p.ell(48, by, brx, bry, pal.base);
       p.ell(48, by + bry * 0.28, brx * 1.07, bry * 0.72, pal.base);
       // A proud stance puffs the chest out.
@@ -2708,6 +2772,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       p.g = 'body';
       const dome: Body = { hull: [[50, cy + ry * 0.05, rx * 0.99, ry * 1.04]] };
       coatRim(p, ph, dome, cz * 0.9, [Math.PI * 0.95, Math.PI * 2.05]);
+      a.hull = dome.hull;
       p.path(`M${f(50 - rx)} ${f(cy)}Q${f(50 - rx)} ${f(cy - ry * 1.1)} 50 ${f(cy - ry * 1.1)}Q${f(50 + rx)} ${f(cy - ry * 1.1)} ${f(50 + rx)} ${f(cy)}Q${f(50 + rx)} ${f(cy + ry * 1.1)} ${f(50 + rx * 0.55)} ${f(cy + ry * 1.45 + wv)}Q${f(50 + rx * 0.35)} ${f(cy + ry * 1.05)} ${f(50 + rx * 0.1)} ${f(cy + ry * 1.6 - wv)}Q${f(50 - rx * 0.15)} ${f(cy + ry * 1.1)} ${f(50 - rx * 0.45)} ${f(cy + ry * 1.7 + wv)}Q${f(50 - rx * 0.95)} ${f(cy + ry * 1.1)} ${f(50 - rx)} ${f(cy)}Z`, pal.base);
       twoTone(p, ph, dome, [50, cy - ry * 0.05], [-0.45, -0.9], cz * 0.9);
       drawPattern(p, a, ph, st.cue);
