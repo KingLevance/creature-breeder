@@ -6,6 +6,7 @@
 // - A creature that faints is knocked back, squashes and topples onto the ground. Enemies then dissolve in a puff;
 //   your own stay down, dimmed, until revived.
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { mouthPoint } from '../render/creature';
 import { Animated, Easing, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Defs, Ellipse, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
@@ -257,6 +258,14 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const enter = useMemo(() => Animated.subtract(D, travel), [D, travel]);
 
   const A = (uid: number) => (ua.current[uid] ??= newUA());
+  /** Each unit's mouth position in its drawing, worked out once. */
+  const mouths = useRef(new Map<string, [number, number]>());
+  const mouthOf = (u: Unit) => {
+    const key = `${u.uid}:${u.stage}`;
+    let m = mouths.current.get(key);
+    if (!m) { m = mouthPoint(u.ph, u.stage); mouths.current.set(key, m); }
+    return m;
+  };
   /** Squash on landing, then spring back. */
   const land = (a: UA) => Animated.sequence([tm(a.stretch, 0.78, 70), Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 180, useNativeDriver: ND })]).start();
   /** Come down from a leap: squash flat, rebound in a little hop, and settle with a wobble. */
@@ -342,7 +351,6 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       tm(a.down, 1, 320 * T(), Easing.out(Easing.quad)),
     ]));
     addFx({ kind: 'puff', x: p.x, y: p.feet - 6 });
-    shakeField(3);
     // It lies there a moment, then dissolves in a puff. Fallen teammates leave a ghost marker for revive moves.
     await sleep(520 * T());
     sfx('poof');
@@ -459,7 +467,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 ]));
                 addFx({ kind: 'shock', el: e.el, x: pt.x - dir * pt.sz * 0.2, y: pt.feet, w: pt.sz * 1.3 });
                 touchdown(a, pa.sz * 0.1, 12);
-                shakeField(5);
+                if (big) shakeField(3);
                 break;
               }
               case 'slam': {
@@ -482,7 +490,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 await run(Animated.parallel([tm(a.air, 0, 120, Easing.in(Easing.cubic)), tm(a.lean, 26, 120, Easing.in(Easing.quad)), tm(a.stretch, 1.2, 120), tm(a.ox, tx + dir * 12, 120)]));
                 addFx({ kind: 'shock', el: e.el, x: pt.x, y: pt.feet, w: pt.sz * 1.7 });
                 touchdown(a, pa.sz * 0.08, 10);
-                shakeField(big ? 11 : 7);
+                if (big) shakeField(6);
                 break;
               }
               case 'slash':
@@ -604,27 +612,57 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             }
           } else if (e.style === 'ranged') {
             sfx(castSfx(e.el));
-            const mouthX = pa.x + dir * pa.sz * 0.3, mouthY = pa.midY - pa.sz * 0.1;
+            // Shots come out of the creature's actual mouth, wherever its body plan and head put it.
+            const mo = mouthOf(b.units[e.u]);
+            const mouthX = pa.x + dir * (mo[0] - 50) * pa.sz / 100, mouthY = pa.top + mo[1] * pa.sz / 100;
             const t0 = place(targets[0] ?? b.units[e.u]);
             /**
              * Every ranged attack winds up: the caster rears back and draws in, in its cast pose, while sparks
              * stream into an orb of power at its mouth. Rare and legendary moves gather longer and bigger.
              */
-            const gather = async (ms: number, gx = mouthX, gy = mouthY) => {
-              setAct(e.u, { pose: 'cast' });
-              addFx({ kind: 'gather', el: e.el, x: gx, y: gy, dur: Math.round(ms), big });
-              await run(Animated.parallel([tm(a.lean, -12, ms, Easing.out(Easing.quad)), tm(a.stretch, 0.88, ms, Easing.out(Easing.quad)), tm(a.ox, -dir * 5, ms, Easing.out(Easing.quad))]));
+            // Long, four-footed bodies don't rear back and tip like a plank: they plant their feet, drop their
+            // head and chest, and brace, the way a quadruped readies a blast.
+            const skel = b.units[e.u].ph.skel, long = skel === 'quad' || skel === 'multi';
+            /** A tremble that builds over ms: power straining to get out. */
+            const tremble = (ms: number, px: number) => {
+              const steps = Math.max(2, Math.round(ms / 45)), seq: Animated.CompositeAnimation[] = [];
+              for (let i = 0; i < steps; i++) seq.push(tm(a.shake, (i % 2 ? -1 : 1) * px * (0.35 + (0.65 * i) / steps), ms / steps));
+              seq.push(tm(a.shake, 0, 40));
+              return Animated.sequence(seq);
             };
-            /** Release: snap forward with a flash at the mouth, kick back from the shot, and settle with a spring. */
-            const release = (tx: number, ty: number, pose: Pose = 'attack') => {
-              flashPose(e.u, pose, 420);
+            const gather = async (ms: number, gx = mouthX, gy = mouthY) => {
+              addFx({ kind: 'gather', el: e.el, x: gx, y: gy, dur: Math.round(ms), big });
+              if (long) {
+                // Brace: sink low and wide on planted feet, head down and forward, shaking as the power builds.
+                setAct(e.u, { pose: 'guard' });
+                await run(Animated.parallel([tm(a.squash, 0.42, ms, Easing.out(Easing.quad)), tm(a.lean, 6, ms, Easing.out(Easing.quad)), tm(a.ox, -dir * 5, ms, Easing.out(Easing.quad)), tremble(ms, 1.6)]));
+                return;
+              }
+              setAct(e.u, { pose: 'cast' });
+              await run(Animated.parallel([tm(a.lean, -12, ms, Easing.out(Easing.quad)), tm(a.squash, 0.2, ms, Easing.out(Easing.quad)), tm(a.ox, -dir * 5, ms, Easing.out(Easing.quad)), tremble(ms, 1)]));
+            };
+            /**
+             * Release: thrust forward with a flash at the mouth and kick back from the shot. A beam keeps pushing
+             * while it lasts (`hold` ms): the caster is driven back a little, shaking against it, mouth open, then
+             * settles with a spring.
+             */
+            const release = (tx: number, ty: number, pose: Pose = 'attack', hold = 0) => {
+              flashPose(e.u, long ? 'attack' : pose, 420 + hold);
               addFx({ kind: 'muzzle', el: e.el, x: mouthX, y: mouthY, ang: (Math.atan2(ty - mouthY, tx - mouthX) * 180) / Math.PI, big });
+              const thrust = long
+                ? Animated.parallel([tm(a.lean, 11, 70, Easing.out(Easing.quad)), tm(a.squash, 0.22, 70), tm(a.ox, dir * 6, 70), tm(a.stretch, 1.1, 70)])
+                : Animated.parallel([tm(a.lean, 14, 70, Easing.out(Easing.quad)), tm(a.squash, 0, 70), tm(a.stretch, 1.14, 70), tm(a.ox, dir * 6, 70)]);
+              const kick = Animated.parallel([tm(a.lean, long ? 2 : -7, 130, Easing.out(Easing.quad)), tm(a.stretch, 0.97, 130), tm(a.ox, -dir * 7, 130, Easing.out(Easing.quad))]);
+              const push = hold > 0
+                ? [Animated.parallel([tm(a.ox, -dir * 13, hold, Easing.out(Easing.quad)), tm(a.lean, long ? 4 : 6, hold), tm(a.squash, long ? 0.32 : 0.12, hold), tremble(hold, 2.2)])]
+                : [];
               Animated.sequence([
-                Animated.parallel([tm(a.lean, 14, 70, Easing.out(Easing.quad)), tm(a.stretch, 1.14, 70), tm(a.ox, dir * 6, 70)]),
-                Animated.parallel([tm(a.lean, -7, 130, Easing.out(Easing.quad)), tm(a.stretch, 0.95, 130), tm(a.ox, -dir * 7, 130, Easing.out(Easing.quad))]),
+                thrust,
+                ...(hold > 0 ? push : [kick]),
                 Animated.parallel([
                   Animated.spring(a.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND }),
                   Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND }),
+                  Animated.spring(a.squash, { toValue: 0, friction: 4, tension: 140, useNativeDriver: ND }),
                   Animated.spring(a.ox, { toValue: 0, friction: 6, tension: 90, useNativeDriver: ND }),
                 ]),
               ]).start();
@@ -639,7 +677,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               Animated.parallel([Animated.spring(a.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND }), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND }), Animated.spring(a.ox, { toValue: 0, friction: 6, tension: 90, useNativeDriver: ND })]).start();
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'bolt', el: e.el, x: p2.x, y: p2.feet - p2.sz * 0.08 }); }, i * 80));
               addFx({ kind: 'flash', color: ELEMENTS[e.el].glow });
-              shakeField(4);
+              if (big) shakeField(3);
               wait = 140 + targets.length * 80;
             } else if (flair === 'erupt') {
               // Stamp the ground, and it bursts up under the target.
@@ -647,7 +685,6 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               Animated.sequence([tm(a.air, 12, 110, Easing.out(Easing.quad)), tm(a.air, 0, 110, Easing.in(Easing.quad))]).start();
               await sleep(220 * T());
               land(a);
-              shakeField(3);
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'erupt', el: e.el, x: p2.x, y: p2.feet + 2, s: p2.sz * 0.85 }); }, i * 70));
               wait = 180 + targets.length * 70;
             } else if (flair === 'breath') {
@@ -668,8 +705,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               }
               wait = longest * 0.85;
             } else {
-              await gather((big ? 340 : 230) * T());
-              release(t0.x, t0.midY);
+              const beamMove = flair === 'beam' || (flair === 'proj' && isBeam(e.el));
+              await gather((big ? 340 : 230) * T() * (beamMove ? 1.25 : 1));
+              // A beam holds the caster braced against it for as long as it pours out.
+              const beamHold = beamMove ? Math.round((Math.min(380, 160 + Math.abs(t0.x - mouthX) * 0.5) * T() + 160) * 0.8) : 0;
+              release(t0.x, t0.midY, 'attack', beamHold);
               await sleep(40);
               for (const t of targets) {
                 const p2 = place(t);
@@ -714,7 +754,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               // Leap and stamp: the ground heaves under the whole enemy side.
               await run(Animated.sequence([tm(a.air, 20, 140 * T(), Easing.out(Easing.quad)), tm(a.air, 0, 110, Easing.in(Easing.quad))]));
               land(a);
-              shakeField(10);
+              shakeField(big ? 7 : 4);
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'shock', el: e.el, x: p2.x, y: p2.feet, w: p2.sz * 1.5 }); }, i * 60));
               await sleep(140 * T());
             } else if (flair === 'sweep') {
@@ -729,7 +769,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             } else if (flair === 'storm') {
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'bolt', el: e.el, x: p2.x, y: p2.feet - p2.sz * 0.08 }); }, i * 90));
               addFx({ kind: 'flash', color: ELEMENTS[e.el].glow });
-              shakeField(5);
+              if (big) shakeField(3);
               await sleep(160 + targets.length * 90);
             } else {
               targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'burst', el: e.el, x: p2.x, y: p2.midY, big: true }); }, i * 45));
@@ -784,7 +824,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               Animated.sequence([tm(ta.blink, 0.4, 40), tm(ta.blink, 1, 110)]).start();
             }
           }
-          if (e.from >= 0 && (e.mult > 1 || e.n > t.max.hp * 0.3)) shakeField(e.mult > 1 ? 6 : 4);
+          // The screen only shakes for a crushing hit: super effective and a big chunk of health at once.
+          if (e.from >= 0 && e.mult > 1 && e.n > t.max.hp * 0.3) shakeField(3);
           if (launch && t.alive) {
             launch = false;
             const ta = A(e.u);

@@ -177,6 +177,8 @@ class Pen {
   /** Which animated piece is being drawn, and where each piece's joint is. */
   part: Part = 'main';
   pivots: Partial<Record<Part, [number, number]>> = {};
+  /** Where the mouth is, in the drawing's 0-100 units, for attacks to come out of. */
+  mouth: [number, number] | null = null;
   /** Drawing for the live rig: the tail and wings are drawn at rest, and the app moves them. */
   rig = false;
   /** Where the eyes look: -1 back, 0 ahead, 1 forward. */
@@ -1385,6 +1387,8 @@ function drawEars(p: Pen, a: Anchors, ph: Pheno, front: boolean) {
 function drawHead(p: Pen, a: Anchors, ph: Pheno, feat: number, ko = false, pose: Pose = 'idle') {
   const c = p.pal;
   const { hx, hy, hr: r } = a;
+  // Remember where the mouth is: the front of the face, further forward on a snout, beak or long head.
+  p.mouth = p.at(hx + r * (MOUTH_AT[ph.head] ?? 0.65), hy + r * 0.4);
   drawHorns(p, a, ph, feat);
   if (ph.coat === 'fluffy' || ph.coat === 'shaggy' || ph.coat === 'feathered') {
     // Cheek tufts behind the jaw, merging into the head's outline.
@@ -2320,6 +2324,13 @@ const KO_POSE: Record<Skeleton, StancePose> = {
 };
 
 /** Draw a creature. Returns shapes back-to-front. */
+/** How far forward of the head's centre the mouth sits, in head radii, by head shape. */
+const MOUTH_AT: Record<string, number> = { round: 0.62, snout: 0.98, beak: 1.08, blunt: 0.72, long: 1.18, eared: 0.62, frill: 0.62, skull: 0.78 };
+/** Where a creature's mouth is mid-attack, in its drawing's 0-100 units, facing right. */
+export function mouthPoint(ph: Pheno, stage: number): [number, number] {
+  return buildCreature(ph, { stage, phase: 0, pose: 'attack' }).mouth ?? [70, 45];
+}
+
 export function drawCreature(ph: Pheno, o: DrawOpts): Shape[] {
   return buildCreature(ph, o).shapes();
 }
