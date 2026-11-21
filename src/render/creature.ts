@@ -755,6 +755,31 @@ function drawPattern(p: Pen, a: Anchors, ph: Pheno, cue = 1) {
           hi.unshift(f(bx + brx * u) + ' ' + f(yb - bry * 0.46 * Math.pow(Math.sin(Math.PI * t), 0.75)));
         }
         p.path('M' + lo.join('L') + 'L' + hi.join('L') + 'Z', c.light, { line: false });
+      } else if (ph.skel === 'biped') {
+        // An upright body faces right, so its belly is the front and underside of the pear-shaped torso: a band
+        // hugging that outline from the chest down round the bottom, widest at the front of the tummy. (A
+        // centred oval sat on the side of the body, not on the belly.)
+        const parts = [[bx, by, brx, bry], [bx, by + bry * 0.28, brx * 1.07, bry * 0.72]];
+        const ox = bx - brx * 0.1, oy = by + bry * 0.12;
+        const edge = (th: number) => {
+          const dx = Math.cos(th), dy = Math.sin(th);
+          let best = 0;
+          for (const [ex, ey, rx, ry] of parts) {
+            // Where a ray from (ox, oy) leaves this ellipse.
+            const px = (ox - ex) / rx, py = (oy - ey) / ry, qx = dx / rx, qy = dy / ry;
+            const A = qx * qx + qy * qy, B = 2 * (px * qx + py * qy), C = px * px + py * py - 1;
+            const t = (-B + Math.sqrt(Math.max(0, B * B - 4 * A * C))) / (2 * A);
+            best = Math.max(best, t);
+          }
+          return best * 0.985;
+        };
+        const N = 18, a0 = (-62 * Math.PI) / 180, a1 = (112 * Math.PI) / 180, lo: string[] = [], hi: string[] = [];
+        for (let i = 0; i <= N; i++) {
+          const t = i / N, th = a0 + (a1 - a0) * t, d = edge(th), k = 1 - 0.5 * Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.15)), 0.6);
+          lo.push(f(ox + Math.cos(th) * d) + ' ' + f(oy + Math.sin(th) * d));
+          hi.unshift(f(ox + Math.cos(th) * d * k) + ' ' + f(oy + Math.sin(th) * d * k));
+        }
+        p.path('M' + lo.join('L') + 'L' + hi.join('L') + 'Z', c.light, { line: false });
       } else p.ell(bx + brx * 0.1, by + bry * 0.38, brx * 0.68, bry * 0.5, c.light, { line: false });
       break;
     case 'spots':
