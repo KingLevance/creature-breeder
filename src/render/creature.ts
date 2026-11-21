@@ -961,11 +961,23 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         for (const u of [0.25, 0.45]) { const [x, y] = top(u); p.poly([[x - 1.1 * s, y + 1], [x, y + 4.5 * s], [x + 1.1 * s, y + 1]], '#cfefff'); }
         return done();
       }
-      // A fluffy collar needs a neck. On a floater or a swimmer the head is part of the body, and the puffs
-      // landed as loose white blobs on the chest, so those get the standard frost marks instead.
-      if (ph.skel === 'floater' || ph.skel === 'aquatic') return false;
-      ruff('#f4fbff', '#dff3ff');
-      return done();
+      {
+        // A collar of ice: shards of frost jutting back and down from the bottom-back of the head, long and
+        // short in turn, each with a glint. (It used to be a ring of white puffs, which read as a wool collar.)
+        // It needs a neck: on a floater or a swimmer the head is part of the body, so those get the standard marks.
+        if (ph.skel === 'floater' || ph.skel === 'aquatic') return false;
+        const N = 7;
+        for (let i = N - 1; i >= 0; i--) {
+          const deg = 100 + (i * 100) / (N - 1), t = (deg * Math.PI) / 180;
+          const [bx0, by0] = head(deg - 7, -0.8), [bx1, by1] = head(deg + 7, -0.8);
+          const len = (i % 2 ? 4.2 : 6.6) * s + 0.6, out = 0.25;
+          const tx = H.cx + (H.rx + len) * Math.cos(t + out * Math.sin(t)), ty = H.cy + (H.ry + len) * Math.sin(t + out * Math.sin(t));
+          p.poly([[bx0, by0], [tx, ty], [bx1, by1]], i % 2 ? '#cdeeff' : '#eefaff');
+          const mx = (bx0 + bx1) / 2, my = (by0 + by1) / 2;
+          p.line(`M${f(mx + (tx - mx) * 0.15)} ${f(my + (ty - my) * 0.15)}L${f(mx + (tx - mx) * 0.7)} ${f(my + (ty - my) * 0.7)}`, '#ffffff', Math.max(0.5, 0.6 * s), 0.85);
+        }
+        return done();
+      }
     case 'brawn':
       if (v === 1) {
         // A belt with a gold buckle, plus scars.
