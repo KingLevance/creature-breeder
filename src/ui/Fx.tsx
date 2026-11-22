@@ -1,9 +1,11 @@
 // Visual effects for fights: projectiles, beams, impact bursts, support sparkles and dust puffs.
 // Each effect runs its own native-driver animation and removes itself when done.
 import React, { memo, useEffect, useRef } from 'react';
-import { Animated, Easing, Text, View } from 'react-native';
+import { Animated, Easing, View } from 'react-native';
 import Svg, { Circle, Defs, Ellipse, G, Path, Polygon, RadialGradient, Stop } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
+import type { StatusKind } from '../game/data/moves';
+import { Bit, BitShape, ElementRing, MOTIF, Motif, SoftGlow, Spray, bitCore, seeded } from './FxBits';
 
 export type FxSpec =
   | { id: number; kind: 'proj'; el: ElementId; x1: number; y1: number; x2: number; y2: number; dur: number }
@@ -13,7 +15,7 @@ export type FxSpec =
   | { id: number; kind: 'aura'; color: string; x: number; y: number }
   | { id: number; kind: 'puff'; x: number; y: number; color?: string }
   /** A comic hit star with speed lines. */
-  | { id: number; kind: 'impact'; el: ElementId; x: number; y: number; big?: boolean }
+  | { id: number; kind: 'impact'; el: ElementId; x: number; y: number; big?: boolean; /** Which way the blow was travelling: -1 left, 1 right. */ dir?: number }
   /** Claw or blade streaks across a target. */
   | { id: number; kind: 'slash'; el: ElementId; x: number; y: number; dir: number; n: number; s: number }
   /** Jaws snapping shut. */
@@ -39,7 +41,11 @@ export type FxSpec =
   /** A shield bubble forming around a creature. */
   | { id: number; kind: 'shieldUp'; x: number; y: number; s: number }
   /** A stat going up (arrows rising) or down (arrows sinking). */
-  | { id: number; kind: 'stat'; x: number; y: number; s: number; color: string; up: boolean }
+  | { id: number; kind: 'stat'; x: number; y: number; s: number; color: string; up: boolean; k?: StatusKind }
+  /** A ring of power rolling out from the caster across the whole field. */
+  | { id: number; kind: 'nova'; el: ElementId; x: number; y: number; r: number }
+  /** A soft column of light with sparkles rising in it: healing, reviving, blessing. */
+  | { id: number; kind: 'pillar'; color: string; x: number; y: number; s: number; /** Light only, no twinkles (a heal brings its own plus signs). */ plain?: boolean }
   /** Power gathering at a point before a ranged attack: sparks drawn inward into a growing orb. */
   | { id: number; kind: 'gather'; el: ElementId; x: number; y: number; dur: number; big?: boolean }
   /** The flash where a shot leaves, pointing along `ang` (degrees). */
@@ -112,20 +118,22 @@ const Proj = memo(function Proj({ s, done }: { s: Extract<FxSpec, { kind: 'proj'
       </Animated.View>
     );
   };
-  // A glowing particle trail: sparks shed along the path, each lagging a little more, drifting off the line
-  // and fading as it shrinks.
-  const e = ELEMENTS[s.el];
+  // The trail: the element's own bits shed along the path (embers, drops, snow...), each lagging a little
+  // more, drifting off the line, and fading as it shrinks.
+  const e = ELEMENTS[s.el], m = MOTIF[s.el];
   const trail = Array.from({ length: 7 }, (_, i) => {
-    const lag = 0.05 + i * 0.05, side = (i % 2 ? 1 : -1) * (2 + i * 0.8);
+    const lag = 0.05 + i * 0.05, side = (i % 2 ? 1 : -1) * (2 + i * 0.9);
     const tt = t.interpolate({ inputRange: [0, 1], outputRange: [-lag, 1 - lag], extrapolate: 'clamp' });
     const L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
     const x = tt.interpolate({ inputRange: [0, 1], outputRange: [s.x1, s.x2 + nx * side] });
     const y = tt.interpolate({ inputRange: [0, 0.25, 0.5, 0.75, 1], outputRange: [s.y1, s.y1 + dy * 0.25 - arc * 0.75, s.y1 + dy * 0.5 - arc, s.y1 + dy * 0.75 - arc * 0.75, s.y2 + ny * side] });
-    const r = 4.5 - i * 0.45;
+    const r = 5 - i * 0.42, kind = m.bits[i % m.bits.length];
     return (
-      <Animated.View key={'t' + i} pointerEvents="none" style={{ position: 'absolute', left: -r, top: -r, width: r * 2, height: r * 2, borderRadius: r, backgroundColor: i % 2 ? e.glow : e.light,
-        opacity: tt.interpolate({ inputRange: [-0.1, 0, 0.9, 1], outputRange: [0, 0.85 - i * 0.09, 0.6 - i * 0.07, 0] }),
-        transform: [{ translateX: x }, { translateY: y }, { scale: tt.interpolate({ inputRange: [0, 1], outputRange: [1.1, 0.5] }) }] }} />
+      <Animated.View key={'t' + i} pointerEvents="none" style={{ position: 'absolute', left: -r, top: -r, width: r * 2, height: r * 2,
+        opacity: tt.interpolate({ inputRange: [-0.1, 0, 0.9, 1], outputRange: [0, 0.9 - i * 0.09, 0.65 - i * 0.07, 0] }),
+        transform: [{ translateX: x }, { translateY: y }, { rotate: m.orient ? `${ang + 180}deg` : `${i * 47}deg` }, { scale: tt.interpolate({ inputRange: [0, 1], outputRange: [1.1, 0.5] }) }] }}>
+        <BitShape kind={kind} r={r} c={m.cols[i % m.cols.length]} c2={bitCore(s.el, kind)} />
+      </Animated.View>
     );
   });
   // A soft halo around the shot itself.
@@ -142,16 +150,8 @@ const Proj = memo(function Proj({ s, done }: { s: Extract<FxSpec, { kind: 'proj'
 const Gather = memo(function Gather({ s, done }: { s: Extract<FxSpec, { kind: 'gather' }>; done: () => void }) {
   const t = useRun(s.dur, done, Easing.in(Easing.quad));
   const e = ELEMENTS[s.el];
-  const R = s.big ? 46 : 32, n = s.big ? 10 : 7, j = rand(s.id + 11);
-  const sparks = Array.from({ length: n }, (_, i) => {
-    const a = (i / n) * Math.PI * 2 + j() * 0.6, d = R * (0.8 + j() * 0.4), t0 = (i % 3) * 0.12;
-    const tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.7)], outputRange: [0, 1], extrapolate: 'clamp' });
-    return (
-      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - 3, top: s.y - 3, width: 6, height: 6, borderRadius: 3, backgroundColor: i % 2 ? e.glow : e.light,
-        opacity: tt.interpolate({ inputRange: [0, 0.2, 0.85, 1], outputRange: [0, 1, 1, 0] }),
-        transform: [{ translateX: tt.interpolate({ inputRange: [0, 1], outputRange: [Math.cos(a) * d, 0] }) }, { translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [Math.sin(a) * d, 0] }) }, { scale: tt.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.3] }) }] }} />
-    );
-  });
+  const R = s.big ? 46 : 32, n = s.big ? 10 : 7;
+  const sparks = <Spray t={t} el={s.el} x={s.x} y={s.y} n={n} R={R * 1.05} seed={s.id + 11} r={s.big ? 4.2 : 3.4} inward late={0.5} />;
   const O = s.big ? 18 : 12;
   return (
     <>
@@ -201,75 +201,151 @@ const Muzzle = memo(function Muzzle({ s, done }: { s: Extract<FxSpec, { kind: 'm
 });
 
 /**
- * A beam that shoots out from the caster to the target (it grows from the source end rather than appearing
- * all at once), swells, flickers, and thins away. Layered glow, colour and a white-hot core; lightning zigzags.
+ * A beam that shoots out from the caster to the target, holds while its power pours down it (bright pulses
+ * racing from mouth to target, the far end sizzling with the element's own bits), then thins away.
+ * Lightning jumps and re-forks instead of holding straight; light is wide and soft; water is a hard jet.
  */
 const Beam = memo(function Beam({ s, done }: { s: Extract<FxSpec, { kind: 'beam' }>; done: () => void; W: number; H: number }) {
   const t = useRun(s.dur, done);
   const e = ELEMENTS[s.el];
   const dx = s.x2 - s.x1, dy = s.y2 - s.y1, L = Math.max(4, Math.hypot(dx, dy)), ang = (Math.atan2(dy, dx) * 180) / Math.PI;
-  const h = s.el === 'radiant' ? 26 : 18;
-  const grow = t.interpolate({ inputRange: [0, 0.22, 1], outputRange: [0.02, 1, 1], extrapolate: 'clamp' });
+  const h = s.el === 'radiant' ? 26 : s.el === 'tide' ? 20 : s.el === 'spark' ? 20 : 18;
+  // The beam's life, as fractions of its time: reaching out, holding, thinning away.
+  const r0 = Math.min(0.3, 110 / s.dur), f0 = 1 - Math.min(0.32, 150 / s.dur);
+  const grow = t.interpolate({ inputRange: [0, r0], outputRange: [0.02, 1], extrapolate: 'clamp' });
+  // It throbs while it holds, a beat every 70ms or so.
+  const beats = Math.max(2, Math.round(((f0 - r0) * s.dur) / 70));
+  const tIn = [0, r0 * 0.6, r0], thick = [0.3, 1.3, 1];
+  for (let i = 1; i <= beats; i++) { tIn.push(r0 + ((f0 - r0) * i) / beats - 0.0001 * (beats - i)); thick.push(i % 2 ? 0.86 : 1.1); }
+  tIn.push(1); thick.push(0.12);
   const zig = s.el === 'spark';
-  let core = `M0 ${h / 2}`;
-  if (zig) for (let i = 1; i < 8; i++) core += ` L${(L * i) / 8} ${h / 2 + (i % 2 ? -h * 0.32 : h * 0.32)}`;
-  core += ` L${L} ${h / 2}`;
-  return (
-    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: (s.x1 + s.x2) / 2 - L / 2, top: (s.y1 + s.y2) / 2 - h / 2, width: L, height: h,
-      opacity: t.interpolate({ inputRange: [0, 0.05, 0.35, 0.45, 0.55, 0.8, 1], outputRange: [0, 1, 0.85, 1, 0.9, 0.8, 0] }),
-      transform: [
-        { rotate: `${ang}deg` },
-        { translateX: grow.interpolate({ inputRange: [0, 1], outputRange: [-L / 2, 0] }) },
-        { scaleX: grow },
-        { scaleY: t.interpolate({ inputRange: [0, 0.2, 0.32, 0.5, 0.75, 1], outputRange: [0.35, 1.25, 0.9, 1.08, 0.85, 0.15] }) },
-      ] }}>
-      <Svg width={L} height={h}>
-        <Path d={core} stroke={e.base} strokeWidth={h * 0.95} strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.4} />
-        <Path d={core} stroke={e.light} strokeWidth={h * 0.55} strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.85} />
-        <Path d={core} stroke="#ffffff" strokeWidth={h * 0.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
-      </Svg>
-    </Animated.View>
-  );
-});
-
-const Burst = memo(function Burst({ s, done }: { s: Extract<FxSpec, { kind: 'burst' }>; done: () => void }) {
-  const t = useRun(s.big ? 520 : 400, done, Easing.out(Easing.cubic));
-  const e = ELEMENTS[s.el];
-  const R = s.big ? 46 : 32;
-  const ring = (
-    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2, opacity: t.interpolate({ inputRange: [0, 1], outputRange: [0.95, 0] }), transform: [{ scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) }] }}>
-      <Svg width={R * 2} height={R * 2}><Circle cx={R} cy={R} r={R - 4} stroke={e.glow} strokeWidth={4} fill={e.base} fillOpacity={0.25} /></Svg>
-    </Animated.View>
-  );
-  const parts = Array.from({ length: s.big ? 9 : 6 }, (_, i) => {
-    const a = (i / (s.big ? 9 : 6)) * Math.PI * 2 + 0.3;
-    const r = R * (0.9 + (i % 3) * 0.2);
+  // Lightning: three different forks, shown turn about so it crackles.
+  const forks = zig ? [0, 1, 2].map(k => {
+    const j = seeded(s.id * 7 + k * 31);
+    let d = `M0 ${h}`;
+    const n = Math.max(4, Math.round(L / 22));
+    for (let i = 1; i < n; i++) d += ` L${((L * i) / n).toFixed(1)} ${(h + (j() - 0.5) * h * 1.1).toFixed(1)}`;
+    return d + ` L${L} ${h}`;
+  }) : [];
+  const forkOpacity = (k: number) => {
+    const n = Math.max(3, Math.round(s.dur / 55)), ins: number[] = [], outs: number[] = [];
+    for (let i = 0; i < n; i++) { ins.push(i / n, (i + 1) / n - 0.0005); const on = i % 3 === k ? 1 : 0; outs.push(on, on); }
+    return t.interpolate({ inputRange: ins, outputRange: outs, extrapolate: 'clamp' });
+  };
+  // Pulses of light running down the beam while it holds.
+  const pulses = zig ? null : [0, 1, 2].map(k => {
+    const laps = Math.max(1, Math.round(((f0 - r0) * s.dur) / 190)), ins: number[] = [0, r0], xs: number[] = [0, 0], os: number[] = [0, 0];
+    for (let i = 0; i < laps; i++) {
+      const a0 = r0 + ((f0 - r0) * (i + k / 3)) / laps, a1 = Math.min(f0, a0 + (f0 - r0) / laps);
+      if (a0 >= f0 - 0.01) break;
+      ins.push(a0 + 0.0002, (a0 + a1) / 2, a1); xs.push(0, L * 0.5, L); os.push(0, 0.95, 0);
+    }
+    ins.push(1.0001); xs.push(L); os.push(0);
+    const ring = s.el === 'mind' || s.el === 'spirit';
     return (
-      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - 4, top: s.y - 4, width: 8, height: 8, borderRadius: 4, backgroundColor: i % 2 ? e.glow : e.base,
-        opacity: t.interpolate({ inputRange: [0, 0.7, 1], outputRange: [1, 0.8, 0] }),
-        transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, Math.cos(a) * r] }) }, { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [0, Math.sin(a) * r] }) }, { scale: t.interpolate({ inputRange: [0, 1], outputRange: [1.2, 0.3] }) }] }} />
+      <Animated.View key={k} style={{ position: 'absolute', left: -h * 0.6, top: h - (ring ? h * 0.7 : h * 0.26), width: h * 1.2, height: ring ? h * 1.4 : h * 0.52, borderRadius: h,
+        backgroundColor: ring ? 'transparent' : '#ffffff', borderWidth: ring ? 2 : 0, borderColor: e.glow,
+        opacity: t.interpolate({ inputRange: ins, outputRange: os, extrapolate: 'clamp' }), transform: [{ translateX: t.interpolate({ inputRange: ins, outputRange: xs, extrapolate: 'clamp' }) }, { scaleX: ring ? 0.4 : 1 }] }} />
     );
   });
-  return <>{ring}{parts}</>;
-});
-
-const Charge = memo(function Charge({ s, done }: { s: Extract<FxSpec, { kind: 'charge' }>; done: () => void }) {
-  const t = useRun(320, done, Easing.out(Easing.quad));
-  const e = ELEMENTS[s.el];
+  const body = t.interpolate({ inputRange: [0, r0 * 0.3, f0, 1], outputRange: [0, 1, 1, 0] });
+  const flare = t.interpolate({ inputRange: tIn, outputRange: thick.map(v => 0.75 + v * 0.35) });
   return (
-    <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - 40, top: s.y - 40, width: 80, height: 80, opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 0.9, 0] }), transform: [{ scale: t.interpolate({ inputRange: [0, 1], outputRange: [1.4, 0.5] }) }] }}>
-      <Svg width={80} height={80}><Circle cx={40} cy={40} r={34} fill={e.glow} fillOpacity={0.35} stroke={e.base} strokeWidth={3} /></Svg>
-    </Animated.View>
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: (s.x1 + s.x2) / 2 - L / 2, top: (s.y1 + s.y2) / 2 - h, width: L, height: h * 2, opacity: body,
+        transform: [
+          { rotate: `${ang}deg` },
+          { translateX: grow.interpolate({ inputRange: [0, 1], outputRange: [-L / 2, 0] }) },
+          { scaleX: grow },
+          { scaleY: t.interpolate({ inputRange: tIn, outputRange: thick }) },
+        ] }}>
+        {zig ? (
+          forks.map((d, k) => (
+            <Animated.View key={k} style={{ position: 'absolute', left: 0, top: 0, opacity: forkOpacity(k) }}>
+              <Svg width={L} height={h * 2}>
+                <Path d={d} stroke={e.base} strokeWidth={h * 0.62} strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.4} />
+                <Path d={d} stroke={e.light} strokeWidth={h * 0.32} strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.9} />
+                <Path d={d} stroke="#ffffff" strokeWidth={h * 0.13} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              </Svg>
+            </Animated.View>
+          ))
+        ) : (
+          <>
+            <View style={{ position: 'absolute', left: 0, top: h * 0.5, width: L, height: h, borderRadius: h, backgroundColor: e.base, opacity: s.el === 'radiant' ? 0.3 : 0.42 }} />
+            <View style={{ position: 'absolute', left: 0, top: h * 0.72, width: L, height: h * 0.56, borderRadius: h, backgroundColor: e.light, opacity: 0.88 }} />
+            <View style={{ position: 'absolute', left: 0, top: h * 0.89, width: L, height: h * 0.22, borderRadius: h, backgroundColor: '#ffffff' }} />
+            {pulses}
+          </>
+        )}
+      </Animated.View>
+      {/* Where it strikes: a small flare in the beam's own colour, throbbing with it and throwing off the element's
+          bits. Kept well under the size of the creature it hits, and tinted, so it never sits on the target as a
+          white blob for the length of the beam. */}
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x2 - h * 0.9, top: s.y2 - h * 0.9, width: h * 1.8, height: h * 1.8,
+        opacity: t.interpolate({ inputRange: [0, r0, r0 + 0.02, f0, 1], outputRange: [0, 0, 0.8, 0.7, 0] }), transform: [{ scale: flare }] }}>
+        <SoftGlow r={h * 0.9} color={e.base} o={0.7} />
+      </Animated.View>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x2 - h, top: s.y2 - h, width: h * 2, height: h * 2,
+        opacity: t.interpolate({ inputRange: [0, r0, r0 + 0.02, f0, 1], outputRange: [0, 0, 1, 0.95, 0] }),
+        transform: [{ scale: flare }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '80deg'] }) }] }}>
+        <Svg width={h * 2} height={h * 2} viewBox={`${-h} ${-h} ${h * 2} ${h * 2}`}>
+          <Polygon points={STAR(h * 0.56, h * 0.13, 4)} fill={e.light} />
+          <Polygon points={STAR(h * 0.34, h * 0.1, 4)} fill="#ffffff" transform="rotate(45)" opacity={0.9} />
+        </Svg>
+      </Animated.View>
+      <Spray t={t.interpolate({ inputRange: [r0, 1], outputRange: [0, 1], extrapolate: 'clamp' })} el={s.el} x={s.x2} y={s.y2} n={9} R={h * 2.6} seed={s.id + 3} r={3.6} aim={Math.atan2(-dy, -dx)} arc={2.6} late={0.9} />
+      {/* And a glow at the mouth it pours from. */}
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x1 - h * 0.8, top: s.y1 - h * 0.8, width: h * 1.6, height: h * 1.6,
+        opacity: t.interpolate({ inputRange: [0, r0 * 0.5, f0, 1], outputRange: [0, 0.9, 0.75, 0] }), transform: [{ scale: flare }] }}>
+        <SoftGlow r={h * 0.8} color={e.glow === '#FFFFFF' ? e.light : e.glow} o={0.8} />
+      </Animated.View>
+    </>
   );
 });
 
+/** A hit landing: a flash of light, the element's own ring, and its bits thrown out (embers, drops, shards...). */
+const Burst = memo(function Burst({ s, done }: { s: Extract<FxSpec, { kind: 'burst' }>; done: () => void }) {
+  const t = useRun(s.big ? 640 : 500, done, Easing.out(Easing.cubic));
+  const e = ELEMENTS[s.el];
+  const R = s.big ? 46 : 33;
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2,
+        opacity: t.interpolate({ inputRange: [0, 0.06, 0.45], outputRange: [0, 1, 0], extrapolate: 'clamp' }), transform: [{ scale: t.interpolate({ inputRange: [0, 0.45], outputRange: [0.4, 1.15], extrapolate: 'clamp' }) }] }}>
+        <SoftGlow r={R} color={e.glow === '#FFFFFF' ? e.light : e.glow} o={0.75} />
+      </Animated.View>
+      <ElementRing t={t} el={s.el} x={s.x} y={s.y} R={R} />
+      <Spray t={t} el={s.el} x={s.x} y={s.y} n={s.big ? 11 : 7} R={R * 1.2} seed={s.id + 17} r={s.big ? 5.2 : 4.2} />
+    </>
+  );
+});
+
+/** A touch taking hold: the element's own bits drawn in to the spot inside a quick ring (no pale disc). */
+const Charge = memo(function Charge({ s, done }: { s: Extract<FxSpec, { kind: 'charge' }>; done: () => void }) {
+  const t = useRun(320, done, Easing.out(Easing.quad));
+  return (
+    <>
+      <ElementRing t={t} el={s.el} x={s.x} y={s.y} R={30} />
+      <Spray t={t} el={s.el} x={s.x} y={s.y} n={7} R={36} seed={s.id + 23} r={3.8} inward />
+    </>
+  );
+});
+
+/** A blessing settling on a creature: a ring spreading on the ground under it and twinkles rising around it. */
 const Aura = memo(function Aura({ s, done }: { s: Extract<FxSpec, { kind: 'aura' }>; done: () => void }) {
-  const t = useRun(750, done, Easing.out(Easing.quad));
-  const bits = [-18, -8, 2, 12, 20].map((dx, i) => (
-    <Animated.Text key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x + dx - 6, top: s.y, color: s.color, fontSize: 14 + (i % 2) * 4, fontWeight: '900',
-      opacity: t.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] }),
-      transform: [{ translateY: t.interpolate({ inputRange: [0, 1], outputRange: [10, -46 - (i % 3) * 10] }) }] }}>{i % 2 ? '✦' : '+'}</Animated.Text>
-  ));
+  const t = useRun(780, done, Easing.out(Easing.quad));
+  const j = seeded(s.id + 5);
+  const bits = Array.from({ length: 6 }, (_, i) => {
+    const dx = (i - 2.5) * 10 + (j() - 0.5) * 6, r = 4 + j() * 3, t0 = i * 0.06, up = 40 + j() * 22;
+    const tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.7)], outputRange: [0, 1], extrapolate: 'clamp' });
+    return (
+      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x + dx - r, top: s.y + 14 - r, width: r * 2, height: r * 2,
+        opacity: tt.interpolate({ inputRange: [0, 0.15, 0.7, 1], outputRange: [0, 1, 1, 0] }),
+        transform: [{ translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, -up] }) }, { rotate: tt.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${i % 2 ? 90 : -90}deg`] }) }, { scale: tt.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.3, 1.15, 0.7] }) }] }}>
+        <BitShape kind="star" r={r} c={i % 3 ? s.color : '#ffffff'} c2="#ffffff" />
+      </Animated.View>
+    );
+  });
   const ring = (
     <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - 34, top: s.y + 6, width: 68, height: 20, opacity: t.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 0.9, 0] }), transform: [{ scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.3] }) }] }}>
       <Svg width={68} height={20}><Ellipse cx={34} cy={10} rx={31} ry={8} stroke={s.color} strokeWidth={3} fill={s.color} fillOpacity={0.2} /></Svg>
@@ -300,27 +376,43 @@ const STAR = (R: number, r: number, n = 8, jitter?: () => number) =>
     return `${(Math.cos(a) * rr).toFixed(1)},${(Math.sin(a) * rr).toFixed(1)}`;
   }).join(' ');
 
+/**
+ * The flash where a blow connects: a bright four-point flare, with sparks flying on in the direction the blow
+ * was going. A heavy hit gets the full jagged comic star; an ordinary one stays small enough not to hide its target.
+ */
 const Impact = memo(function Impact({ s, done }: { s: Extract<FxSpec, { kind: 'impact' }>; done: () => void }) {
-  const t = useRun(s.big ? 360 : 280, done, Easing.out(Easing.cubic));
+  const t = useRun(s.big ? 340 : 250, done, Easing.out(Easing.cubic));
   const e = ELEMENTS[s.el];
-  const R = s.big ? 40 : 28, j = rand(s.id + 3);
-  const lines = Array.from({ length: 7 }, (_, i) => {
-    const a = (i / 7) * Math.PI * 2 + j() * 0.5;
+  const R = s.big ? 34 : 21, j = rand(s.id + 3);
+  const n = s.big ? 8 : 6, fan = s.dir ? 2.3 : Math.PI * 2, aim = s.dir && s.dir < 0 ? Math.PI : 0;
+  const lines = Array.from({ length: n }, (_, i) => {
+    const a = s.dir ? aim + (i / (n - 1) - 0.5) * fan + (j() - 0.5) * 0.2 : (i / n) * fan + j() * 0.5;
+    const len = (s.big ? 20 : 14) * (0.7 + j() * 0.6), far = R * (1.5 + j() * 0.7);
     return (
-      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - 9, top: s.y - 1.5, width: 18, height: 3, borderRadius: 2, backgroundColor: i % 2 ? '#ffffff' : e.glow,
-        opacity: t.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] }),
-        transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [Math.cos(a) * R * 0.5, Math.cos(a) * R * 1.5] }) }, { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [Math.sin(a) * R * 0.5, Math.sin(a) * R * 1.5] }) }, { rotate: `${(a * 180) / Math.PI}deg` }] }} />
+      <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x - len / 2, top: s.y - 1.5, width: len, height: 3, borderRadius: 2, backgroundColor: i % 2 ? '#ffffff' : e.glow,
+        opacity: t.interpolate({ inputRange: [0, 0.15, 0.7, 1], outputRange: [0, 1, 0.9, 0] }),
+        transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [Math.cos(a) * R * 0.45, Math.cos(a) * far] }) }, { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [Math.sin(a) * R * 0.45, Math.sin(a) * far] }) }, { rotate: `${(a * 180) / Math.PI}deg` }, { scaleX: t.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.4, 1, 0.35] }) }] }} />
     );
   });
   return (
     <>
       <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2,
-        opacity: t.interpolate({ inputRange: [0, 0.15, 0.6, 1], outputRange: [0, 1, 0.9, 0] }),
-        transform: [{ scale: t.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.3, 1.05, 1.2] }) }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '10deg'] }) }] }}>
+        opacity: t.interpolate({ inputRange: [0, 0.12, 0.55, 1], outputRange: [0, 1, 0.9, 0] }),
+        transform: [{ scale: t.interpolate({ inputRange: [0, 0.28, 1], outputRange: [0.3, 1.08, s.big ? 1.18 : 0.8] }) }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: [`${-10 + j() * 8}deg`, `${6 + j() * 8}deg`] }) }] }}>
         <Svg width={R * 2} height={R * 2} viewBox={`${-R} ${-R} ${R * 2} ${R * 2}`}>
-          <Polygon points={STAR(R * 0.98, R * 0.5, 8, j)} fill={e.base} />
-          <Polygon points={STAR(R * 0.68, R * 0.34, 8)} fill="#ffffff" />
-          <Circle r={R * 0.2} fill={e.glow} />
+          {s.big ? (
+            <>
+              <Polygon points={STAR(R * 0.98, R * 0.5, 8, j)} fill={e.base} />
+              <Polygon points={STAR(R * 0.68, R * 0.34, 8)} fill="#ffffff" />
+              <Circle r={R * 0.2} fill={e.glow} />
+            </>
+          ) : (
+            <>
+              <Polygon points={STAR(R * 0.98, R * 0.24, 4)} fill={e.glow} />
+              <Polygon points={STAR(R * 0.62, R * 0.2, 4)} fill="#ffffff" transform="rotate(45)" opacity={0.9} />
+              <Polygon points={STAR(R * 0.74, R * 0.16, 4)} fill="#ffffff" />
+            </>
+          )}
         </Svg>
       </Animated.View>
       {lines}
@@ -375,7 +467,7 @@ const Chomp = memo(function Chomp({ s, done }: { s: Extract<FxSpec, { kind: 'cho
 const Shock = memo(function Shock({ s, done }: { s: Extract<FxSpec, { kind: 'shock' }>; done: () => void }) {
   const t = useRun(620, done, Easing.out(Easing.quad));
   const e = ELEMENTS[s.el];
-  const dust = '#e3d3b4', j = rand(s.id + 11);
+  const dust = '#e3d3b4';
   const W = s.w, Hh = W * 0.24;
   const ring = (k: number, col: string) => (
     <Animated.View key={k} pointerEvents="none" style={{ position: 'absolute', left: s.x - W / 2, top: s.y - Hh / 2, width: W, height: Hh,
@@ -384,15 +476,9 @@ const Shock = memo(function Shock({ s, done }: { s: Extract<FxSpec, { kind: 'sho
       <Svg width={W} height={Hh}><Ellipse cx={W / 2} cy={Hh / 2} rx={W / 2 - 3} ry={Hh / 2 - 2} stroke={col} strokeWidth={4 - k} fill={col} fillOpacity={0.12} /></Svg>
     </Animated.View>
   );
-  const rocks = Array.from({ length: 8 }, (_, i) => {
-    const dx = (i - 3.5) * W * 0.11 + (j() - 0.5) * 8, up = 18 + j() * 30, r = 3 + j() * 3.5;
-    return (
-      <Animated.View key={'r' + i} pointerEvents="none" style={{ position: 'absolute', left: s.x - r, top: s.y - r, width: r * 2, height: r * 2, borderRadius: r * 0.5, backgroundColor: i % 3 === 0 ? e.dark : i % 3 === 1 ? dust : e.base,
-        opacity: t.interpolate({ inputRange: [0, 0.75, 1], outputRange: [1, 1, 0] }),
-        transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, dx * 1.6] }) }, { translateY: t.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, -up, 4] }) }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${(j() - 0.5) * 400}deg`] }) }] }} />
-    );
-  });
-  return <>{ring(0, dust)}{ring(1, e.base)}{rocks}</>;
+  // What is thrown up says what hit: rubble for rock and earth, a crown of water, a gout of flame, a scatter of leaves.
+  const up = <Spray t={t} el={s.el} x={s.x} y={s.y - 2} n={9} R={W * 0.42} seed={s.id + 21} r={Math.max(3.6, W * 0.04)} aim={-Math.PI / 2} arc={2.5} motif={{ ...MOTIF[s.el], grav: Math.max(MOTIF[s.el].grav, 0) + 20, orient: MOTIF[s.el].orient }} />;
+  return <>{ring(0, dust)}{ring(1, e.base)}{up}</>;
 });
 
 const Streak = memo(function Streak({ s, done }: { s: Extract<FxSpec, { kind: 'streak' }>; done: () => void }) {
@@ -570,9 +656,47 @@ function WaveShape({ el, W, H }: { el: ElementId; W: number; H: number }) {
       return (<Svg width={W} height={H}><Path d={`M${W * 0.25} 0 Q${W} ${H * 0.5} ${W * 0.25} ${H} Q${W * 0.7} ${H * 0.5} ${W * 0.25} 0Z`} fill={e.light} stroke={e.base} strokeWidth={2} opacity={0.9} /><Path d={`M0 ${H * 0.3} L${W * 0.35} ${H * 0.3} M0 ${H * 0.7} L${W * 0.35} ${H * 0.7}`} stroke={e.light} strokeWidth={3} strokeLinecap="round" /></Svg>);
   }
 }
+/** Elements with no crest of their own roll in as a low cloud of their bits: a swarm, a miasma, a wall of flame. */
+const CLOUD: ElementId[] = ['swarm', 'venom', 'wyrm', 'ember', 'shade', 'spirit', 'glimmer', 'verdant', 'void'];
 const Wave = memo(function Wave({ s, done }: { s: Extract<FxSpec, { kind: 'wave' }>; done: () => void }) {
   const t = useRun(s.dur, done, Easing.inOut(Easing.quad));
   const W = s.s * 1.1, Hh = s.s * 0.8, dir = s.x2 >= s.x1 ? 1 : -1;
+  if (CLOUD.includes(s.el)) {
+    const m = MOTIF[s.el], j = seeded(s.id + 31), n = 10, e = ELEMENTS[s.el];
+    return (
+      <>
+        {/* The body of it: a low rolling bank in the element's dark tone, taller at its leading edge, so it reads
+            as one thing coming at you; the bits ride on it. */}
+        <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x1 - W / 2, top: s.y - Hh * 0.62, width: W, height: Hh * 0.62,
+          // It thins away before it reaches the end of its run, so it never stops as a block at the edge.
+          opacity: t.interpolate({ inputRange: [0, 0.1, 0.62, 0.9, 1], outputRange: [0, 0.9, 0.9, 0, 0] }),
+          transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, s.x2 - s.x1] }) }, { scaleX: dir }, { scaleY: t.interpolate({ inputRange: [0, 0.2, 0.5, 0.8, 1], outputRange: [0.3, 1, 0.88, 1.05, 0.9] }) }] }}>
+          {/* Both ends taper to the ground and the bottom edge is soft lumps, not a straight cut. */}
+          <Svg width={W} height={Hh * 0.62} viewBox="0 -2 100 58" preserveAspectRatio="none">
+            {/* No two rows roll in as the same shape: each fight row gets one of two outlines. */}
+            <Path d={s.id % 2 ? 'M0 49 Q6 44 12 36 Q20 16 38 21 Q48 5 65 13 Q84 6 90 28 Q94 40 100 49 Q90 56 78 49 Q64 56 52 49 Q38 56 26 49 Q12 56 0 49 Z' : 'M0 49 Q4 40 14 38 Q18 22 32 26 Q40 10 56 16 Q66 2 80 14 Q94 16 94 34 Q98 42 100 49 Q92 55 82 49 Q70 56 58 49 Q44 55 32 49 Q16 56 0 49 Z'} fill={e.dark} opacity={0.82} />
+            <Path d="M14 48 Q16 38 28 38 Q34 27 48 30 Q60 19 73 27 Q85 26 87 40 Q89 45 92 48 Q70 51 50 47 Q30 51 14 48 Z" fill={e.base} opacity={0.75} />
+          </Svg>
+        </Animated.View>
+        {Array.from({ length: n }, (_, i) => {
+          const ox = (j() - 0.5) * W * 0.9, oy = -j() * Hh * 0.95, r = 4 + j() * 4.5, lag = j() * 0.12, kind = m.bits[i % m.bits.length], bob = 3 + j() * 5;
+          const tt = t.interpolate({ inputRange: [lag, 1], outputRange: [0, 1], extrapolate: 'clamp' });
+          return (
+            <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x1 + ox - r, top: s.y + oy - r, width: r * 2, height: r * 2,
+              opacity: tt.interpolate({ inputRange: [0, 0.12, 0.85, 1], outputRange: [0, 1, 1, 0] }),
+              transform: [
+                { translateX: tt.interpolate({ inputRange: [0, 1], outputRange: [0, s.x2 - s.x1] }) },
+                { translateY: tt.interpolate({ inputRange: [0, 0.25, 0.5, 0.75, 1], outputRange: [0, -bob, 0, -bob, 0] }) },
+                { rotate: m.orient ? `${dir > 0 ? 0 : 180}deg` : tt.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${(i % 2 ? 1 : -1) * 160}deg`] }) },
+                { scale: tt.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0.4, 1.1, 1, 0.6] }) },
+              ] }}>
+              <BitShape kind={kind} r={r} c={m.cols[i % m.cols.length]} c2={bitCore(s.el, kind)} />
+            </Animated.View>
+          );
+        })}
+      </>
+    );
+  }
   return (
     <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x1 - W / 2, top: s.y - Hh, width: W, height: Hh,
       opacity: t.interpolate({ inputRange: [0, 0.1, 0.85, 1], outputRange: [0, 1, 1, 0] }),
@@ -643,7 +767,7 @@ const Heal = memo(function Heal({ s, done }: { s: Extract<FxSpec, { kind: 'heal'
           <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x + dx - r, top: s.y + R * 0.3 - r, width: r * 2, height: r * 2,
             opacity: tt.interpolate({ inputRange: [0, 0.15, 0.7, 1], outputRange: [0, 1, 1, 0] }),
             transform: [{ translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, -R * 1.5] }) }, { scale: tt.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.4, 1.1, 0.8] }) }] }}>
-            <Svg width={r * 2} height={r * 2} viewBox="-10 -10 20 20"><Path d="M-3 -9 H3 V-3 H9 V3 H3 V9 H-3 V3 H-9 V-3 H-3Z" fill={i % 2 ? '#ffffff' : s.color} stroke="#1d4a2c" strokeWidth={1.2} /></Svg>
+            <Svg width={r * 2} height={r * 2} viewBox="-10 -10 20 20"><Path d="M-3 -9 H3 V-3 H9 V3 H3 V9 H-3 V3 H-9 V-3 H-3Z" fill={s.color} stroke="#1d4a2c" strokeWidth={1.2} /></Svg>
           </Animated.View>
         );
       })}
@@ -668,11 +792,47 @@ const ShieldUp = memo(function ShieldUp({ s, done }: { s: Extract<FxSpec, { kind
   );
 });
 
+/** What each condition looks like as it lands: which bits, and how they move. */
+const STAT_LOOK: Partial<Record<StatusKind, { bit: Bit; how: 'rise' | 'fall' | 'sweep' | 'out' | 'in' }>> = {
+  atkUp: { bit: 'ember', how: 'rise' }, defUp: { bit: 'shard', how: 'rise' }, haste: { bit: 'ray', how: 'sweep' }, regen: { bit: 'leaf', how: 'rise' },
+  evade: { bit: 'arc', how: 'out' }, dodge: { bit: 'arc', how: 'out' }, counter: { bit: 'spark', how: 'out' }, hidden: { bit: 'smoke', how: 'rise' },
+  link: { bit: 'ringlet', how: 'rise' }, boost: { bit: 'star', how: 'in' },
+  burn: { bit: 'ember', how: 'rise' }, poison: { bit: 'bubble', how: 'rise' }, freeze: { bit: 'shard', how: 'in' }, stun: { bit: 'star', how: 'out' },
+  slow: { bit: 'drop', how: 'fall' }, defDown: { bit: 'chip', how: 'fall' }, wound: { bit: 'spark', how: 'out' },
+};
+/**
+ * A condition landing on a creature: arrows rising (a boost) or sinking (a hex), with bits that say which one:
+ * flames licking up for more attack, plates for defence, speed lines for haste, bubbles for poison, and so on.
+ */
 const Stat = memo(function Stat({ s, done }: { s: Extract<FxSpec, { kind: 'stat' }>; done: () => void }) {
-  const t = useRun(800, done, Easing.out(Easing.quad));
-  const R = s.s * 0.45;
+  const t = useRun(820, done, Easing.out(Easing.quad));
+  const R = s.s * 0.45, look = s.k ? STAT_LOOK[s.k] : undefined, j = seeded(s.id + 9);
+  const motif: Motif | null = look ? { bits: [look.bit], cols: [s.color], grav: 0, spin: look.bit === 'arc' ? 200 : 0, orient: look.bit === 'spark' || look.bit === 'arc', ring: 'none', core: '#ffffff' } : null;
+  let bits: React.ReactNode = null;
+  if (look && motif && (look.how === 'out' || look.how === 'in')) {
+    bits = <Spray t={t} el="plain" motif={motif} x={s.x} y={s.y} n={7} R={R * (look.how === 'in' ? 1.5 : 1.25)} seed={s.id + 2} r={4.2} inward={look.how === 'in'} late={0.3} />;
+  } else if (look) {
+    bits = Array.from({ length: 6 }, (_, i) => {
+      const t0 = i * 0.07, tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.68)], outputRange: [0, 1], extrapolate: 'clamp' });
+      const r = 4 + j() * 2.5, off = (i / 5 - 0.5) * R * 1.7 + (j() - 0.5) * 6;
+      const sweep = look.how === 'sweep', dn = look.how === 'fall';
+      const x0 = sweep ? s.x - R * 1.2 : s.x + off, y0 = sweep ? s.y + off * 0.7 : s.y + (dn ? -R * 0.9 : R * 0.75);
+      return (
+        <Animated.View key={'b' + i} pointerEvents="none" style={{ position: 'absolute', left: x0 - r, top: y0 - r, width: r * 2, height: r * 2,
+          opacity: tt.interpolate({ inputRange: [0, 0.15, 0.7, 1], outputRange: [0, 1, 0.95, 0] }),
+          transform: [
+            { translateX: sweep ? tt.interpolate({ inputRange: [0, 1], outputRange: [0, R * 2.4] }) : tt.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, (i % 2 ? 3 : -3), 0] }) },
+            { translateY: sweep ? 0 : tt.interpolate({ inputRange: [0, 1], outputRange: [0, (dn ? 1 : -1) * R * 1.5] }) },
+            { scale: tt.interpolate({ inputRange: [0, 0.25, 1], outputRange: [0.4, 1.15, 0.75] }) },
+          ] }}>
+          <BitShape kind={look.bit} r={r} c={s.color} c2="#ffffff" />
+        </Animated.View>
+      );
+    });
+  }
   return (
     <>
+      {bits}
       {[-0.55, 0, 0.55].map((dx, i) => {
         const t0 = i * 0.12, tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.65)], outputRange: [0, 1], extrapolate: 'clamp' });
         const w = 12, h = 16;
@@ -681,6 +841,61 @@ const Stat = memo(function Stat({ s, done }: { s: Extract<FxSpec, { kind: 'stat'
             opacity: tt.interpolate({ inputRange: [0, 0.2, 0.75, 1], outputRange: [0, 1, 1, 0] }),
             transform: [{ translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, (s.up ? -1 : 1) * R * 0.9] }) }, { scaleY: s.up ? 1 : -1 }] }}>
             <Svg width={w} height={h} viewBox="-6 -8 12 16"><Path d="M0 -7.5 L5.5 -1 H2 V7.5 H-2 V-1 H-5.5Z" fill={s.color} stroke="#1b1420" strokeWidth={1.1} strokeLinejoin="round" /></Svg>
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+});
+
+/** A ring of power rolling out from the caster over the whole field, shedding the element's bits as it goes. */
+const Nova = memo(function Nova({ s, done }: { s: Extract<FxSpec, { kind: 'nova' }>; done: () => void }) {
+  const t = useRun(560, done, Easing.out(Easing.quad));
+  const e = ELEMENTS[s.el], R = s.r;
+  const ring = (k: number, col: string, w: number, lag: number, o: number) => {
+    const tt = t.interpolate({ inputRange: [lag, 1], outputRange: [0, 1], extrapolate: 'clamp' });
+    return (
+      <Animated.View key={k} pointerEvents="none" style={{ position: 'absolute', left: s.x - R, top: s.y - R, width: R * 2, height: R * 2, borderRadius: R, borderWidth: w, borderColor: col,
+        opacity: tt.interpolate({ inputRange: [0, 0.1, 0.7, 1], outputRange: [0, o, o * 0.7, 0] }),
+        // Flattened, so it reads as a wave rolling out across the ground rather than a hoop standing in the air.
+        transform: [{ scaleY: 0.42 }, { scale: tt.interpolate({ inputRange: [0, 1], outputRange: [0.06, 1] }) }] }} />
+    );
+  };
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - 36, top: s.y - 36, width: 72, height: 72,
+        opacity: t.interpolate({ inputRange: [0, 0.1, 0.5], outputRange: [0, 1, 0], extrapolate: 'clamp' }), transform: [{ scale: t.interpolate({ inputRange: [0, 0.5], outputRange: [0.4, 1.6], extrapolate: 'clamp' }) }] }}>
+        <SoftGlow r={36} color={e.glow === '#FFFFFF' ? e.light : e.glow} o={0.85} />
+      </Animated.View>
+      {ring(0, e.base, 10, 0, 0.45)}
+      {ring(1, e.glow, 4, 0.04, 0.95)}
+      {ring(2, '#ffffff', 1.5, 0.1, 0.8)}
+      <Spray t={t} el={s.el} x={s.x} y={s.y} n={12} R={R * 0.5} seed={s.id + 4} r={4.6} />
+    </>
+  );
+});
+
+/** A soft column of light under a creature with twinkles drifting up it. */
+const Pillar = memo(function Pillar({ s, done }: { s: Extract<FxSpec, { kind: 'pillar' }>; done: () => void }) {
+  const t = useRun(950, done, Easing.out(Easing.quad));
+  const w = s.s * 1.1, h = s.s * 1.7, j = seeded(s.id + 13), gid = `pl${s.id}`;
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: s.x - w / 2, top: s.y - h, width: w, height: h * 1.08,
+        opacity: t.interpolate({ inputRange: [0, 0.2, 0.7, 1], outputRange: [0, 0.75, 0.6, 0] }), transform: [{ scaleX: t.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.35, 1, 1.08] }) }] }}>
+        <Svg width={w} height={h * 1.08}>
+          <Defs><RadialGradient id={gid} cx="50%" cy="60%" rx="50%" ry="55%"><Stop offset="0" stopColor={s.color} stopOpacity={0.6} /><Stop offset="0.6" stopColor={s.color} stopOpacity={0.22} /><Stop offset="1" stopColor={s.color} stopOpacity={0} /></RadialGradient></Defs>
+          <Ellipse cx={w / 2} cy={h * 0.6} rx={w / 2} ry={h * 0.6} fill={`url(#${gid})`} />
+        </Svg>
+      </Animated.View>
+      {s.plain ? null : Array.from({ length: 7 }, (_, i) => {
+        const dx = (j() - 0.5) * w * 0.8, t0 = i * 0.08, r = 3.5 + j() * 3;
+        const tt = t.interpolate({ inputRange: [t0, Math.min(1, t0 + 0.6)], outputRange: [0, 1], extrapolate: 'clamp' });
+        return (
+          <Animated.View key={i} pointerEvents="none" style={{ position: 'absolute', left: s.x + dx - r, top: s.y - r - 4, width: r * 2, height: r * 2,
+            opacity: tt.interpolate({ inputRange: [0, 0.15, 0.7, 1], outputRange: [0, 1, 1, 0] }),
+            transform: [{ translateY: tt.interpolate({ inputRange: [0, 1], outputRange: [0, -h * 0.85] }) }, { scale: tt.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.3, 1.1, 0.6] }) }] }}>
+            <BitShape kind="star" r={r} c={i % 2 ? '#ffffff' : s.color} c2="#ffffff" />
           </Animated.View>
         );
       })}
@@ -735,7 +950,8 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size, part, b
           <Animated.View style={{ position: 'absolute', left, top, width: w, height: h, opacity: t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.6, 0.9, 0.6] }) }}>
             <Svg width={w} height={h}>
               <Ellipse cx={w / 2} cy={h / 2} rx={w / 2 - 1.5} ry={h / 2 - 1.5} fill="#9fe8ff" fillOpacity={0.12} stroke="#bff3ff" strokeWidth={2} />
-              <Ellipse cx={w * 0.34} cy={h * 0.24} rx={w * 0.14} ry={h * 0.06} fill="#ffffff" opacity={0.45} transform={`rotate(-25 ${w * 0.34} ${h * 0.24})`} />
+              {/* A thin glint along the rim, not a pale oval floating over the creature. */}
+              <Path d={`M${w * 0.17} ${h * 0.3} Q${w * 0.24} ${h * 0.13} ${w * 0.42} ${h * 0.075}`} stroke="#ffffff" strokeWidth={2} strokeLinecap="round" fill="none" opacity={0.85} />
             </Svg>
           </Animated.View>
         );
@@ -745,7 +961,19 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size, part, b
         const B = bounds ?? { x0: 20, y0: 30, x1: 80, y1: 90 };
         const k = S / 100, w = (B.x1 - B.x0) * 0.9 * k, h = (B.y1 - B.y0) * 0.85 * k;
         const left = ((flip ? 100 - B.x1 : B.x0) + (B.x1 - B.x0) * 0.05) * k, top = (B.y0 + (B.y1 - B.y0) * 0.1) * k;
-        return <View style={{ position: 'absolute', left, top, width: w, height: h, borderRadius: Math.min(w, h) * 0.25, backgroundColor: 'rgba(170,230,255,0.35)', borderWidth: 1.5, borderColor: '#e6fbff' }} />;
+        // A cut block of ice: flat faces, bevelled corners, a pale top face, two glints.
+        const b = Math.min(w, h) * 0.2;
+        const outline = `M${b} 0 L${w - b * 0.7} 0 L${w} ${b * 0.8} L${w} ${h - b} L${w - b} ${h} L${b * 0.8} ${h} L0 ${h - b * 0.7} L0 ${b}Z`;
+        return (
+          <View style={{ position: 'absolute', left, top, width: w, height: h }}>
+            <Svg width={w} height={h}>
+              <Path d={outline} fill="#aee6ff" fillOpacity={0.38} stroke="#e6fbff" strokeWidth={1.6} strokeLinejoin="round" />
+              <Path d={`M${b} 0 L${w - b * 0.7} 0 L${w - b * 1.5} ${b * 0.9} L${b * 1.7} ${b * 0.9}Z`} fill="#ffffff" fillOpacity={0.35} />
+              <Path d={`M0 ${b} L${b * 1.7} ${b * 0.9} L${b * 1.5} ${h - b * 1.4} L0 ${h - b * 0.7}Z`} fill="#7fc8ee" fillOpacity={0.22} />
+              <Path d={`M${w * 0.62} ${h * 0.22} L${w * 0.8} ${h * 0.22} M${w * 0.7} ${h * 0.34} L${w * 0.8} ${h * 0.34}`} stroke="#ffffff" strokeWidth={1.8} strokeLinecap="round" opacity={0.8} />
+            </Svg>
+          </View>
+        );
       })() : null}
       {has('burn') ? [0, 1].map(i => (
         <Animated.View key={'b' + i} style={{ position: 'absolute', left: S * (0.36 + i * 0.22), top: S * (0.5 + i * 0.08), width: S * 0.12, height: S * 0.18,
@@ -766,7 +994,14 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size, part, b
       }) : null}
       {has('stun') ? (
         <Animated.View style={{ position: 'absolute', left: S * 0.3, top: S * 0.06, width: S * 0.4, height: S * 0.4, transform: [{ scaleY: 0.35 }, { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '720deg'] }) }] }}>
-          {[0, 1, 2].map(i => { const a = (i / 3) * Math.PI * 2; return <Text key={i} style={{ position: 'absolute', left: S * 0.2 + Math.cos(a) * S * 0.18 - 6, top: S * 0.2 + Math.sin(a) * S * 0.18 - 8, fontSize: 13, color: '#ffe066' }}>★</Text>; })}
+          {[0, 1, 2].map(i => {
+            const a = (i / 3) * Math.PI * 2;
+            return (
+              <View key={i} style={{ position: 'absolute', left: S * 0.2 + Math.cos(a) * S * 0.18 - 7, top: S * 0.2 + Math.sin(a) * S * 0.18 - 7 }}>
+                <Svg width={14} height={14} viewBox="-7 -7 14 14"><Polygon points={STAR(6.4, 2.8, 5)} fill="#ffe066" stroke="#8a6a12" strokeWidth={0.9} strokeLinejoin="round" /></Svg>
+              </View>
+            );
+          })}
         </Animated.View>
       ) : null}
     </View>
@@ -801,6 +1036,8 @@ export const FxLayer = memo(function FxLayer({ items, onDone, W, H }: { items: F
           case 'stat': return <Stat key={s.id} s={s} done={done} />;
           case 'gather': return <Gather key={s.id} s={s} done={done} />;
           case 'muzzle': return <Muzzle key={s.id} s={s} done={done} />;
+          case 'nova': return <Nova key={s.id} s={s} done={done} />;
+          case 'pillar': return <Pillar key={s.id} s={s} done={done} />;
         }
       })}
     </View>

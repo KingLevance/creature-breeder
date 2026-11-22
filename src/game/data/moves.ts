@@ -341,6 +341,21 @@ export function moveFlair(mv: MoveDef): Flair {
   return opts[nameHash(n) % opts.length];
 }
 
+/** What a support move does at heart, so each kind can be acted out its own way. Presentation only. */
+export type SupportKind = 'heal' | 'shield' | 'revive' | 'cleanse' | 'rally' | 'guard' | 'swift' | 'ward';
+export function supportKind(mv: MoveDef): SupportKind {
+  if (mv.revive) return 'revive';
+  if (mv.heal || mv.teamHeal || mv.fullHeal) return 'heal';
+  if (mv.shield || mv.teamShield) return 'shield';
+  const k = mv.fx?.find(x => x.on !== 'enemies')?.k;
+  if (k === 'atkUp' || k === 'boost') return 'rally';
+  if (k === 'defUp' || k === 'counter') return 'guard';
+  if (k === 'haste' || k === 'evade' || k === 'dodge' || k === 'hidden') return 'swift';
+  if (k === 'regen') return 'heal';
+  if (mv.cleanse) return 'cleanse';
+  return 'ward';
+}
+
 export const MOVE_LIST: MoveDef[] = list;
 export const MOVES: Record<string, MoveDef> = Object.fromEntries(list.map(x => [x.id, x]));
 

@@ -1,6 +1,6 @@
 // The roster, the creature detail sheet (stats, moves, genes, pedigree) and the team picker.
-import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Modal, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
@@ -8,9 +8,9 @@ import { Creature, MAX_LEVEL, PedNode, STAGE_NAMES, XpResult, buildLabel, slotRa
 import { NAME_MAX, expandRoster, release, releaseMany, releaseProblem, releaseValue, renameCreature, rosterExpandCost, train, trainCost, useScan } from '../game/economy';
 import { FRAME_NAMES, HEIGHT_NAMES, PartKey, PARTS, PART_KEYS, Pheno, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
-import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
+import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, Mark, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
 import { sfx } from './audio';
-import { Backdrop, F, FadeIn, Glow, Icon, Pedestal, haptic } from './look';
+import { Backdrop, F, FadeIn, Glow, Grad, Icon, ND, Pedestal, haptic } from './look';
 import { rng, useGame } from './store';
 
 function PedCard({ n, label, size }: { n?: PedNode; label: string; size: number }) {
@@ -47,6 +47,9 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
   const [confirm, setConfirm] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [trained, setTrained] = useState<{ n: number; r: XpResult; level: number } | null>(null);
+  /** How far the page is scrolled: the creature's name appears in the top strip once the creature itself has gone by. */
+  const scrollY = useRef(new Animated.Value(0)).current;
+  useEffect(() => { scrollY.setValue(0); }, [id, scrollY]);
   const c = save.creatures.find(x => x.id === id);
   const ph = useMemo(() => (c ? express(c.g) : null), [c?.g]);
   if (!c || !ph) return null;
@@ -61,7 +64,8 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: 50 }}>
         <Backdrop tint={ELEMENTS[ph.el1].base} H={900} />
-        <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
+        <Animated.ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }} scrollEventThrottle={16}
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: ND })}>
           <View style={{ alignItems: 'center' }}>
             <FadeIn dy={24}>
               <View style={{ width: W - 28, height: W * 0.58, alignItems: 'center', justifyContent: 'flex-end' }}>
@@ -91,7 +95,7 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
               <Pressable onPress={() => setEditing(c.name)} style={st.row} hitSlop={8}>
                 <Text style={{ color: C.text, fontSize: 30, fontFamily: F.bold, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }}>{c.name}{ph.shiny ? <Text style={{ color: C.gold, fontSize: 22 }}> ✦</Text> : null}</Text>
                 <SexMark sex={c.sex} />
-                <Text style={{ color: C.dim, fontSize: 16 }}>✎</Text>
+                <Icon name="pencil" size={16} color={C.dim} accent={C.bg} />
               </Pressable>
             )}
             <Stars n={starRating(c.g)} size={20} />
@@ -168,14 +172,14 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
           <Card>
             <View style={[st.row, { justifyContent: 'space-between' }]}>
               <Title icon="dna" color="#4fc3a1">Genes</Title>
-              {carriers > 0 && !c.scanned ? <Text style={{ color: C.accent2, fontSize: 12, fontWeight: '700' }}>◆ Carries something rare</Text> : null}
+              {carriers > 0 && !c.scanned ? <View style={[st.row, { gap: 4 }]}><Mark kind="carrier" size={11} /><Text style={{ color: C.accent2, fontSize: 12, fontWeight: '700' }}>Carries something rare</Text></View> : null}
             </View>
             {!c.scanned ? <P dim style={{ marginBottom: 6 }}>You see what shows. Each trait also has a hidden second gene. A scan lens reveals them all.</P> : null}
             <GeneRow label="Body" shown={SKELETON_NAMES[ph.skel]} hid={c.scanned ? SKELETON_NAMES[hidden(c.g.skel, ph.skel) as keyof typeof SKELETON_NAMES] : undefined} scanned={c.scanned} />
             <GeneRow label="Element" shown={ELEMENTS[ph.el1].name} hid={c.scanned ? c.g.el1.filter(e => e !== ph.el1).map(e => ELEMENTS[e].name)[0] : undefined} scanned={c.scanned} />
             <GeneRow label="2nd element" shown={ph.el2 ? ELEMENTS[ph.el2].name : 'None'} hid={c.scanned ? c.g.el2.map(e => (e === 'none' ? 'None' : ELEMENTS[e].name)).filter(n => n !== (ph.el2 ? ELEMENTS[ph.el2].name : 'None'))[0] : undefined} scanned={c.scanned} />
             {PART_KEYS.map(k => { const v = ph[k] ?? PARTS[k][0]; return <GeneRow key={k} label={PART_LABELS[k]} shown={capital(v) + (unseen(k, ph) ? ` · ${unseen(k, ph)}` : '')} hid={c.scanned && c.g[k] ? capital(hidden(c.g[k] as [string, string], v) ?? '') || undefined : undefined} scanned={c.scanned} />; })}
-            <GeneRow label="Shiny" shown={ph.shiny ? '✦ Yes' : 'No'} hid={c.scanned && !ph.shiny && c.g.shiny && (c.g.shiny[0] === 1 || c.g.shiny[1] === 1) ? 'shiny' : undefined} scanned={c.scanned} />
+            <GeneRow label="Shiny" shown={ph.shiny ? 'Yes' : 'No'} hid={c.scanned && !ph.shiny && c.g.shiny && (c.g.shiny[0] === 1 || c.g.shiny[1] === 1) ? 'shiny' : undefined} scanned={c.scanned} />
             <GeneRow label="Markings" shown={`Style ${(ph.mark ?? 0) + 1}`} hid={c.scanned && c.g.mark && c.g.mark[0] !== c.g.mark[1] ? `Style ${Math.max(...c.g.mark) + 1}` : undefined} scanned={c.scanned} />
             <GeneRow label="Stance" shown={stanceName(ph.skel, ph.stance ?? 0)} hid={c.scanned && c.g.stance && c.g.stance[0] !== c.g.stance[1] ? stanceName(ph.skel, Math.max(...c.g.stance)) : undefined} scanned={c.scanned} />
             {/* Proportions blend: a child lands between its two alleles, so a scan shows both. */}
@@ -221,12 +225,21 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             </Card>
           ) : (
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Btn style={{ flex: 1 }} kind="ghost" label={c.fav ? '★ Favorite' : '☆ Favorite'} onPress={() => mutate(s => { const x = s.creatures.find(y => y.id === c.id); if (x) x.fav = !x.fav; })} />
+              <Btn style={{ flex: 1 }} kind="ghost" icon={<Icon name="star" size={15} color={c.fav ? C.gold : '#8e84ad'} />} label={c.fav ? 'Favorite' : 'Add favorite'} onPress={() => mutate(s => { const x = s.creatures.find(y => y.id === c.id); if (x) x.fav = !x.fav; })} />
               <Btn style={{ flex: 1 }} kind="ghost" label="Release" disabled={save.creatures.length <= 1 || !!c.fav || save.tutorial < TUT.DONE} onPress={() => setConfirm(true)} />
             </View>
           )}
           <Btn style={{ marginTop: 10 }} label="Close" onPress={onClose} />
-        </ScrollView>
+        </Animated.ScrollView>
+        {/* The page slides under a clear strip at the top, so nothing it scrolls collides with the close button; once
+            the creature itself has scrolled away, its name shows there instead. */}
+        <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 100, backgroundColor: '#54459a' }} />
+        <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 100, height: 26 }}>
+          <Grad colors={['#54459a', '#54459a00']} />
+        </View>
+        <Animated.View pointerEvents="none" style={{ position: 'absolute', left: 60, right: 60, top: 54, height: 36, alignItems: 'center', justifyContent: 'center', opacity: scrollY.interpolate({ inputRange: [150, 215], outputRange: [0, 1], extrapolate: 'clamp' }) }}>
+          <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 18 }} numberOfLines={1}>{c.name}</Text>
+        </Animated.View>
         {/* Always in reach, wherever the page is scrolled to. */}
         <Pressable onPress={() => { haptic('select'); onClose(); }} hitSlop={10} accessibilityLabel="Close"
           style={({ pressed }) => ({ position: 'absolute', top: 54, right: 14, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,9,30,0.72)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.22)', transform: [{ scale: pressed ? 0.9 : 1 }] })}>
@@ -237,12 +250,21 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
   );
 }
 
+/**
+ * One trait: its name, what shows (with an optional note under it), and on the right what a scan found hiding.
+ * The value and the carried gene each get their own column, so a long one wraps as words instead of squeezing
+ * its neighbour into a stack of single words.
+ */
 function GeneRow({ label, shown, hid, scanned }: { label: string; shown: string; hid?: string; scanned: boolean }) {
+  const [value, note] = shown.split(' · ');
   return (
-    <View style={[st.row, { paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: '#2c2348' }]}>
-      <Text style={{ color: C.dim, fontSize: 12, width: 104 }}>{label}</Text>
-      <Text style={{ color: C.text, fontSize: 13, fontWeight: '700', flex: 1 }}>{shown}</Text>
-      <Text style={{ color: hid ? C.accent2 : C.dim, fontSize: 12 }}>{scanned ? (hid ? `carries ${hid}` : 'pure') : '?'}</Text>
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#2c2348' }}>
+      <Text style={{ color: C.dim, fontSize: 12, width: 92, marginTop: 1 }}>{label}</Text>
+      <View style={{ flex: 1.15 }}>
+        <Text style={{ color: C.text, fontSize: 13, fontFamily: F.semi }}>{value}</Text>
+        {note ? <Text style={{ color: C.dim, fontSize: 11, marginTop: 1 }}>{note}</Text> : null}
+      </View>
+      <Text style={{ color: hid ? C.accent2 : C.dim, fontSize: 12, flex: 1, textAlign: 'right', marginTop: 1 }}>{scanned ? (hid ? `carries ${hid}` : 'pure') : '?'}</Text>
     </View>
   );
 }
@@ -290,7 +312,7 @@ export function RosterScreen() {
           {picking ? (
             <>
               <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13, marginRight: 2 }}>Pick all</Text>
-              {[1, 2, 3].map(n => <Btn key={n} small kind="ghost" label={`${n}★`} onPress={() => pickStars(n)} />)}
+              {[1, 2, 3].map(n => <Btn key={n} small kind="ghost" label={`${n}`} icon={<Icon name="star" size={13} color={C.gold} />} onPress={() => pickStars(n)} />)}
               {picked.length ? <Btn small kind="ghost" label="Clear" onPress={() => { setPicked([]); setSure(false); }} /> : null}
             </>
           ) : (
@@ -306,7 +328,13 @@ export function RosterScreen() {
             ? <CreatureTile key={c.id} c={c} width={tw} selected={picked.includes(c.id)} dimmed={!!blocked(c)} badge={picked.includes(c.id) ? '✓' : c.fav ? '★' : undefined} onPress={blocked(c) ? undefined : () => toggle(c)} />
             : <CreatureTile key={c.id} c={c} width={tw} onPress={() => setOpen(c.id)} badge={c.fav ? '★' : undefined} />)}
         </View>
-        {!picking ? <P dim style={{ marginTop: 10 }}>◆ means it carries a rare hidden gene; ✦ is a shiny, a rare colouring that breeds true. Tap a creature for its stats, moves, genes and pedigree.</P> : null}
+        {!picking ? (
+          <View style={{ marginTop: 10, gap: 3 }}>
+            <View style={[st.row, { gap: 6 }]}><Mark kind="carrier" /><P dim style={{ flex: 1 }}>Carries a rare hidden gene.</P></View>
+            <View style={[st.row, { gap: 6 }]}><Mark kind="shiny" /><P dim style={{ flex: 1 }}>A shiny: a rare colouring that breeds true.</P></View>
+            <P dim>Tap a creature for its stats, moves, genes and pedigree.</P>
+          </View>
+        ) : null}
         {!picking && cost != null ? <Btn style={{ marginTop: 10 }} kind="ghost" label={`Add 10 roster slots (${cost} gold)`} disabled={save.gold < cost} onPress={() => mutate(s => { expandRoster(s); })} /> : null}
         {gone && !picking ? (
           <FadeIn key={gone.count + '_' + gone.essence}>

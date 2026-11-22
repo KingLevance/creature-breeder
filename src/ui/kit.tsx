@@ -161,7 +161,7 @@ type Fidget = 'hop' | 'look' | 'flick' | 'stretch' | 'wiggle';
  * flap, all as smooth native animation; drawn frames only change for walking legs, poses and blinks. Poses blend
  * in and out over a few frames, and now and then an idle creature fidgets.
  */
-export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewProps, 'phase'> & { pose?: Pose; fidget?: boolean; ground?: boolean }) {
+export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewProps, 'phase'> & { pose?: Pose; fidget?: boolean; ground?: boolean; /** Legs at a run rather than a walk. */ run?: boolean }) {
   const { ph, stage, size, flip, shadow, ko } = props;
   const walking = !!props.walking && !ko;
   const detail = useMemo(() => hasIdleDetail(ph, stage), [ph, stage]);
@@ -169,9 +169,9 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
   const [frame, setFrame] = useState(() => Math.floor(Math.random() * 12));
   useEffect(() => {
     if (!walking && !detail) return;
-    const id = setInterval(() => setFrame(f => (f + 1) % (walking ? WALK_FRAMES : IDLE_FRAMES)), walking ? WALK_MS : IDLE_MS);
+    const id = setInterval(() => setFrame(f => (f + 1) % (walking ? WALK_FRAMES : IDLE_FRAMES)), walking ? (props.run ? RUN_MS : WALK_MS) : IDLE_MS);
     return () => clearInterval(id);
-  }, [walking, detail]);
+  }, [walking, detail, props.run]);
   // Blinks.
   const [blink, setBlink] = useState(false);
   useEffect(() => {
@@ -235,17 +235,21 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
   // Native loops: breathing for the body (and the tail swinging a beat behind it), and a separate wing beat.
   const breath = useRef(new Animated.Value(0)).current;
   const beat = useRef(new Animated.Value(0)).current;
+  // A slow shift of weight from side to side, out of step with the breathing, so a creature at rest never
+  // just pumps up and down on the spot.
+  const sway = useRef(new Animated.Value(0)).current;
   const off = useMemo(() => Math.random(), []);
   const [wingSwing, wingMs] = useMemo(() => wingMotion(ph), [ph]);
   const period = useMemo(() => 2400 + Math.random() * 900, []);
   useEffect(() => {
     if (ko) return;
-    const l1 = Animated.loop(Animated.timing(breath, { toValue: 1, duration: walking ? 700 : period, easing: Easing.linear, useNativeDriver: ND }));
+    const l1 = Animated.loop(Animated.timing(breath, { toValue: 1, duration: walking ? (props.run ? 380 : 700) : period, easing: Easing.linear, useNativeDriver: ND }));
     const l2 = Animated.loop(Animated.timing(beat, { toValue: 1, duration: walking ? Math.min(wingMs, 600) : wingMs, easing: Easing.linear, useNativeDriver: ND }));
+    const l3 = Animated.loop(Animated.timing(sway, { toValue: 1, duration: period * 2.3, easing: Easing.linear, useNativeDriver: ND }));
     breath.setValue(0); beat.setValue(0);
-    l1.start(); l2.start();
-    return () => { l1.stop(); l2.stop(); };
-  }, [ko, walking, period, wingMs, breath, beat]);
+    l1.start(); l2.start(); l3.start();
+    return () => { l1.stop(); l2.stop(); l3.stop(); };
+  }, [ko, walking, props.run, period, wingMs, breath, beat, sway]);
   const anim = useMemo(() => {
     const fly = ph.skel === 'floater' || ph.skel === 'aquatic';
     const amp = ko ? 0 : 1;
@@ -256,11 +260,12 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
     const wingFar = deg(wave(beat, wingSwing * 0.8 * amp, 0, 1, off - 0.08));
     const hover = fly ? wave(breath, 1.6 * amp * (size / 100), 0, 1, off + 0.25) : null;
     const lift = Animated.multiply(hop, -size * 0.08);
-    const rot = deg(Animated.multiply(wiggle, 5));
+    // The sway: a degree or so about the feet; things that float drift a little more.
+    const rot = deg(Animated.add(Animated.multiply(wiggle, 5), wave(sway, (fly ? 1.5 : 0.8) * amp * (walking ? 0 : 1), 0, 1, off)));
     // The shadow stays on the ground through a hop, shrinking a little while the body is up.
     const under = hop.interpolate({ inputRange: [0, 1], outputRange: [1, 0.8] });
     return { sy, sx, tail, wing, wingFar, hover, lift, rot, under };
-  }, [ph, ko, breath, beat, flick, hop, wiggle, off, wingSwing, size]);
+  }, [ph, ko, walking, breath, beat, sway, flick, hop, wiggle, off, wingSwing, size]);
 
   const s = size / 100, fy = 40 * s;
   const svg = (shapes: Shape[]) => <Layer shapes={shapes} size={size} />;
@@ -314,7 +319,7 @@ export const CreatureGround = memo(function CreatureGround({ ph, stage, size, fl
   );
 });
 // 12 walk frames a stride is smooth enough for legs, and a quarter fewer re-renders than 16 while a team walks.
-const IDLE_FRAMES = 12, IDLE_MS = 150, WALK_FRAMES = 12, WALK_MS = 55;
+const IDLE_FRAMES = 12, IDLE_MS = 150, WALK_FRAMES = 12, WALK_MS = 55, RUN_MS = 30;
 
 export const EggView = memo(function EggView({ ph, size, wobble = 0 }: { ph: Pheno; size: number; wobble?: number }) {
   const shapes = useMemo(() => drawEgg(ph, wobble), [ph, wobble]);
@@ -342,11 +347,13 @@ export function Btn({ label, onPress, disabled, kind = 'main', small, style, ico
       disabled={disabled}
       onPress={() => { tap(); haptic(); onPress(); }}
       onPressIn={() => spring(1)} onPressOut={() => spring(0)}
-      style={[!disabled && kind !== 'ghost' ? shadow(k.lip, 8, 0.45, 3) : null, style]}>
+      style={[{ borderRadius: r }, !disabled && kind !== 'ghost' ? shadow(k.lip, 8, 0.45, 3) : null, style]}>
       <View style={{ borderRadius: r, backgroundColor: k.lip, paddingBottom: lip }}>
         <Animated.View style={{ borderRadius: r, overflow: 'hidden', transform: [{ translateY: press.interpolate({ inputRange: [0, 1], outputRange: [0, lip - 1] }) }] }}>
           <Grad colors={k.grad} />
-          <View pointerEvents="none" style={{ position: 'absolute', left: 3, right: 3, top: 2, height: '42%', borderRadius: r - 2, backgroundColor: 'rgba(255,255,255,0.18)' }} />
+          {/* The glossy top: a clear highlight on a coloured button, only a faint sheen on a dark one, where a
+              strong band reads as a grey bar across the label. */}
+          <View pointerEvents="none" style={{ position: 'absolute', left: 3, right: 3, top: 2, height: '42%', borderRadius: r - 2, backgroundColor: disabled || kind === 'ghost' ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.18)' }} />
           <View style={[{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, small ? { paddingVertical: 6, paddingHorizontal: 12 } : { paddingVertical: 11, paddingHorizontal: 16 }]}>
             {icon}
             <Text numberOfLines={1} style={{ fontFamily: F.bold, fontSize: small ? 14 : 17, color: k.fg, letterSpacing: 0.3, textShadowColor: k.fg === '#ffffff' ? 'rgba(0,0,0,0.3)' : 'transparent', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 }}>{label}</Text>
@@ -446,25 +453,67 @@ export function readable(hex: string): string {
   return lum > 0.6 ? '#1b1420' : '#ffffff';
 }
 
-export const SexMark = ({ sex }: { sex: 'M' | 'F' }) => <Text style={{ color: sex === 'M' ? C.male : C.female, fontFamily: F.bold, fontSize: 14 }}>{sex === 'M' ? '♂' : '♀'}</Text>;
+/** Male or female, drawn (a text symbol would come out in whatever font the phone falls back to). */
+export const SexMark = memo(function SexMark({ sex, size = 13 }: { sex: 'M' | 'F'; size?: number }) {
+  const col = sex === 'M' ? C.male : C.female;
+  return (
+    <Svg width={size} height={size} viewBox="0 0 16 16">
+      {sex === 'M' ? (
+        <>
+          <Circle cx={6.4} cy={9.6} r={4} stroke={col} strokeWidth={2} fill="none" />
+          <Path d="M9.4 6.6 L13.6 2.4 M9.8 2.4 H13.6 V6.2" stroke={col} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        </>
+      ) : (
+        <>
+          <Circle cx={8} cy={5.8} r={4} stroke={col} strokeWidth={2} fill="none" />
+          <Path d="M8 9.8 V15 M5.2 12.6 H10.8" stroke={col} strokeWidth={2} strokeLinecap="round" fill="none" />
+        </>
+      )}
+    </Svg>
+  );
+});
+
+/** The little marks beside a name: a gold twinkle for a shiny, an orange gem for a creature carrying something rare. */
+export const Mark = memo(function Mark({ kind, size = 12 }: { kind: 'shiny' | 'carrier'; size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 16 16">
+      {kind === 'shiny'
+        ? <Path d="M8 0.8 Q8.8 6.2 15.2 8 Q8.8 9.8 8 15.2 Q7.2 9.8 0.8 8 Q7.2 6.2 8 0.8Z" fill={C.gold} stroke="#a8670f" strokeWidth={0.9} strokeLinejoin="round" />
+        : <Path d="M8 1.6 L14 8 L8 14.4 L2 8Z" fill={C.accent2} stroke="#a3501a" strokeWidth={0.9} strokeLinejoin="round" />}
+    </Svg>
+  );
+});
 
 /** Health colours: green while healthy, yellow once it's down to half, red when it's in danger. */
 export function hpColor(frac: number): string {
   return frac > 0.5 ? '#5ad17a' : frac > 0.2 ? '#f5c542' : '#f0616d';
 }
 
-export function Bar({ frac, color, height = 6, back = '#120d20' }: { frac: number; color: string; height?: number; back?: string }) {
+export function Bar({ frac, color, height = 6, back = '#120d20', trail }: { frac: number; color: string; height?: number; back?: string; /** Show the amount just lost as a pale sliver that drains after a beat. */ trail?: boolean }) {
   const f = Math.max(0, Math.min(1, frac));
   const [w, setW] = useState(0);
-  const grow = useRef(new Animated.Value(0)).current;
+  // A fight's bars start at their value; menu bars sweep up from empty when they appear.
+  const grow = useRef(new Animated.Value(trail ? f : 0)).current;
+  const ghost = useRef(new Animated.Value(f)).current;
+  const last = useRef(f);
   // The fill is always full width and slides in from the left on the native thread (so a screen full of bars
   // changing at once costs the JS thread nothing). Sliding, rather than scaling, keeps the end rounded and
   // lets it reach right to the end on iOS.
-  useEffect(() => { Animated.timing(grow, { toValue: f, duration: 550, easing: Easing.out(Easing.cubic), useNativeDriver: ND }).start(); }, [f, grow]);
+  useEffect(() => {
+    const drop = f < last.current;
+    last.current = f;
+    Animated.timing(grow, { toValue: f, duration: trail && drop ? 160 : 550, easing: Easing.out(Easing.cubic), useNativeDriver: ND }).start();
+    if (!trail) return;
+    // Losing health: the bar drops at once and the lost part lingers, then drains. Gaining: both rise together.
+    if (drop) Animated.sequence([Animated.delay(340), Animated.timing(ghost, { toValue: f, duration: 420, easing: Easing.inOut(Easing.quad), useNativeDriver: ND })]).start();
+    else Animated.timing(ghost, { toValue: f, duration: 300, easing: Easing.out(Easing.cubic), useNativeDriver: ND }).start();
+  }, [f, grow, ghost, trail]);
+  const slide = (v: Animated.Value) => ({ transform: [{ translateX: v.interpolate({ inputRange: [0, 1], outputRange: [-w, 0] }) }] });
   return (
     <View onLayout={e => setW(e.nativeEvent.layout.width)} style={{ height, backgroundColor: back, borderRadius: height / 2, overflow: 'hidden', borderWidth: height >= 6 ? 1 : 0, borderColor: 'rgba(0,0,0,0.35)' }}>
+      {w > 0 && trail ? <Animated.View style={[{ position: 'absolute', left: 0, top: 0, bottom: 0, width: w, borderRadius: height / 2, backgroundColor: '#fff4d6' }, slide(ghost)]} /> : null}
       {w > 0 ? (
-        <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: w, borderRadius: height / 2, overflow: 'hidden', backgroundColor: color, transform: [{ translateX: grow.interpolate({ inputRange: [0, 1], outputRange: [-w, 0] }) }] }}>
+        <Animated.View style={[{ position: 'absolute', left: 0, top: 0, bottom: 0, width: w, borderRadius: height / 2, overflow: 'hidden', backgroundColor: color }, slide(grow)]}>
           <Grad colors={[mixHex(color, '#ffffff', 0.35), color]} />
           {height >= 5 ? <View style={{ position: 'absolute', left: 2, right: 2, top: 1, height: Math.max(1, height * 0.28), borderRadius: height, backgroundColor: 'rgba(255,255,255,0.3)' }} /> : null}
         </Animated.View>
@@ -509,11 +558,13 @@ export const CreatureTile = memo(function CreatureTile({ c, onPress, selected, b
               </Breathing>
             </View>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-            <Text numberOfLines={1} style={{ color: C.text, fontFamily: F.semi, fontSize: 14, flexShrink: 1 }}>{c.name}</Text>
-            <SexMark sex={c.sex} />
-            {ph.shiny ? <Text style={{ color: C.gold, fontSize: 12 }}>✦</Text> : null}
-            {carrier ? <Text style={{ color: C.accent2, fontSize: 11 }}>◆</Text> : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+            {/* The marks after the name are small, and a name that would not fit beside them is set a size down
+                (and shrinks further on the phone) before it is ever cut short. */}
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={{ color: C.text, fontFamily: F.semi, fontSize: c.name.length + 1.6 * (1 + (ph.shiny ? 1 : 0) + (carrier ? 1 : 0)) > 11.5 ? 12 : 14, flexShrink: 1 }}>{c.name}</Text>
+            <SexMark sex={c.sex} size={11} />
+            {ph.shiny ? <Mark kind="shiny" size={11} /> : null}
+            {carrier ? <Mark kind="carrier" size={10} /> : null}
           </View>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <View style={{ backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1 }}>
@@ -522,7 +573,11 @@ export const CreatureTile = memo(function CreatureTile({ c, onPress, selected, b
           </View>
           <Stars n={stars} size={10} />
           <TypeChips ph={ph} small />
-          {badge ? <View style={st.badge}><Text style={{ color: '#3d2400', fontSize: 10, fontFamily: F.bold }}>{badge}</Text></View> : null}
+          {badge ? (
+            <View style={st.badge}>
+              {badge === '✓' ? <Icon name="check" size={11} color="#3d2400" /> : badge === '★' ? <Icon name="star" size={11} color="#3d2400" /> : <Text style={{ color: '#3d2400', fontSize: 10, fontFamily: F.bold }}>{badge}</Text>}
+            </View>
+          ) : null}
         </View>
       </Animated.View>
     </Pressable>

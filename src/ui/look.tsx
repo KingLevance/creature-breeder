@@ -137,7 +137,7 @@ export const pulse = (v: Animated.Value, lo: number, hi: number) => v.interpolat
 // ---------------------------------------------------------------------------------------------------------------
 // Icons, drawn on a 24x24 grid.
 
-export type IconName = 'sword' | 'paw' | 'egg' | 'heart' | 'compass' | 'coin' | 'gem' | 'lock' | 'check' | 'star' | 'skull' | 'tower' | 'bag' | 'scan' | 'dna' | 'bolt' | 'shield' | 'crown' | 'sparkle' | 'chest';
+export type IconName = 'sword' | 'paw' | 'egg' | 'heart' | 'compass' | 'coin' | 'gem' | 'lock' | 'check' | 'star' | 'skull' | 'tower' | 'bag' | 'scan' | 'dna' | 'bolt' | 'shield' | 'crown' | 'sparkle' | 'chest' | 'pencil';
 export const Icon = memo(function Icon({ name, size = 22, color = '#fff', accent }: { name: IconName; size?: number; color?: string; accent?: string }) {
   const a = accent ?? color;
   let body: React.ReactNode;
@@ -202,6 +202,10 @@ export const Icon = memo(function Icon({ name, size = 22, color = '#fff', accent
     case 'shield': body = <Path d="M12 2.5 L20 5.5 V11 C20 16 16.5 19.5 12 21.5 C7.5 19.5 4 16 4 11 V5.5Z" fill={color} />; break;
     case 'crown': body = <Path d="M3 8 L7.5 12 L12 5 L16.5 12 L21 8 L19 19 H5Z" fill={color} />; break;
     case 'sparkle': body = <Path d="M12 2 Q13 11 22 12 Q13 13 12 22 Q11 13 2 12 Q11 11 12 2Z" fill={color} />; break;
+    case 'pencil': body = (<>
+      <Path d="M16.4 3.6 L20.4 7.6 L8.6 19.4 L3.4 20.6 L4.6 15.4Z" fill={color} />
+      <Path d="M14.2 5.8 L18.2 9.8" stroke={a} strokeWidth="1.5" strokeLinecap="round" opacity={0.55} />
+    </>); break;
     case 'chest': body = (<>
       <Path d="M3 10 Q3 4.5 12 4.5 Q21 4.5 21 10Z" fill={color} /><Rect x="3" y="10" width="18" height="10" rx="1.5" fill={color} />
       <Rect x="10.5" y="8.5" width="3" height="4.5" rx="1" fill={a} />

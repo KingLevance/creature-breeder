@@ -1,15 +1,32 @@
 // Rivals, the weekly raid, the endless tower, the essence shop and settings.
-import React, { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Pressable, ScrollView, Text, View } from 'react-native';
 import { ELEMENTS } from '../game/data/elements';
 import { SHOP, buy } from '../game/economy';
 import { RAID_ACTIONS, RAID_TRIES, Run, raidState, rivalName, startArenaRun, startRaidRun, startTowerRun } from '../game/run';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, ElChip, H, P, Title, st } from './kit';
-import { FadeIn } from './look';
+import { F, FadeIn, Icon, IconName, ND, haptic } from './look';
 import { TeamPicker } from './Roster';
 import { rng, useGame } from './store';
 import { versionLabel } from './updates';
+
+/** A setting with a switch: the label says what it is, the switch says whether it is on. */
+function Toggle({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const t = useRef(new Animated.Value(on ? 1 : 0)).current;
+  useEffect(() => { Animated.spring(t, { toValue: on ? 1 : 0, friction: 7, tension: 140, useNativeDriver: ND }).start(); }, [on, t]);
+  return (
+    <Pressable onPress={() => { haptic('select'); onPress(); }} style={[st.row, { justifyContent: 'space-between', paddingVertical: 7 }]}>
+      <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 16 }}>{label}</Text>
+      <View style={[st.row, { gap: 8 }]}>
+        <Text style={{ color: on ? C.good : C.dim, fontFamily: F.med, fontSize: 13 }}>{on ? 'On' : 'Off'}</Text>
+        <View style={{ width: 50, height: 28, borderRadius: 14, backgroundColor: on ? '#3fae62' : 'rgba(10,6,22,0.55)', borderWidth: 1.5, borderColor: on ? '#7de39c' : 'rgba(255,255,255,0.14)', justifyContent: 'center' }}>
+          <Animated.View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#ffffff', marginLeft: 3, transform: [{ translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, 21] }) }] }} />
+        </View>
+      </View>
+    </Pressable>
+  );
+}
 
 export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
   const { save, mutate, reset } = useGame();
@@ -31,7 +48,7 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
 
         <Card style={{ opacity: locked ? 0.5 : 1 }}>
           <Title icon="crown" color="#f6b52e">Rivals</Title>
-          <P dim>Fight another breeder's team of the same size as yours. These rivals are computer-run for now: real player-versus-player needs an online server, which this build doesn't have yet.</P>
+          <P dim>Fight a rival's team the same size as yours. Win to climb the ratings. Rivals are computer-run.</P>
           <View style={[st.row, { justifyContent: 'space-between', marginTop: 6 }]}>
             <Text style={{ color: C.gold, fontWeight: '800' }}>Rating {save.arena.rating}</Text>
             <P dim>{save.arena.wins} wins · {save.arena.losses} losses</P>
@@ -42,7 +59,7 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
         <Card style={{ opacity: locked ? 0.5 : 1 }}>
           <Title icon="skull" color="#b06cff">Raid: {raid.boss.name}</Title>
           <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4 }}><ElChip el={raid.boss.el} small /><ElChip el={raid.boss.el2} small /></View>
-          <P dim>A boss too big to beat in one go. You get {RAID_ACTIONS} actions per attempt and {RAID_TRIES} attempts a day; damage adds up over the week. Local for now, so only your own damage counts.</P>
+          <P dim>A boss too big to beat in one go. You get {RAID_ACTIONS} actions per attempt and {RAID_TRIES} attempts a day; your damage adds up over the week.</P>
           <View style={{ marginTop: 6 }}>
             <Bar frac={nextTier ? save.raid.dmg / nextTier : 1} color={ELEMENTS[raid.boss.el].base} height={8} />
             <P dim>{save.raid.dmg.toLocaleString()} damage this week{nextTier ? ` · next reward at ${nextTier.toLocaleString()}` : ' · all rewards claimed'}</P>
@@ -73,17 +90,28 @@ export function MoreScreen({ onRun }: { onRun: (r: Run) => void }) {
 
         <Title icon="bag" color="#e8a24f">Bag</Title>
         <Card>
-          <P>Gold {save.gold} · Essence {save.essence}</P>
-          <P>Dust {save.dust} · Shards {save.shard} · Cores {save.core} · Scan lenses {save.scans}</P>
-          <P dim style={{ marginTop: 4 }}>Hatched {save.counts.hatched} · Bred {save.counts.bred} · Fights {save.counts.fights}</P>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {([
+              ['coin', '#ffd34d', save.gold, 'Gold'], ['gem', '#c9b8ff', save.essence, 'Essence'], ['sparkle', '#e8d9b0', save.dust, 'Dust'],
+              ['gem', '#9fd8ff', save.shard, 'Shards'], ['bolt', '#7fe8b0', save.core, 'Cores'], ['scan', '#9fe8ff', save.scans, 'Scan lenses'],
+            ] as [IconName, string, number, string][]).map(([icon, color, n, name]) => (
+              <View key={name} style={{ width: '31%', flexGrow: 1, borderRadius: 12, paddingVertical: 7, paddingHorizontal: 9, backgroundColor: 'rgba(10,6,22,0.38)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' }}>
+                <View style={[st.row, { gap: 5 }]}>
+                  <Icon name={icon} size={16} color={color} />
+                  <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }} numberOfLines={1}>{n.toLocaleString('en-US')}</Text>
+                </View>
+                <Text style={{ color: C.dim, fontFamily: F.med, fontSize: 11.5, marginTop: 1 }} numberOfLines={1}>{name}</Text>
+              </View>
+            ))}
+          </View>
+          <P dim style={{ marginTop: 9 }}>Hatched {save.counts.hatched} · Bred {save.counts.bred} · Fights {save.counts.fights}</P>
         </Card>
 
         <Title icon="compass" color="#7a8bb0">Settings</Title>
         <Card>
-          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-            <Btn style={{ flex: 1 }} kind={save.sound ? 'main' : 'ghost'} label={save.sound ? 'Sound on' : 'Sound off'} onPress={() => mutate(s => { s.sound = !s.sound; })} />
-            <Btn style={{ flex: 1 }} kind={save.music ? 'main' : 'ghost'} label={save.music ? 'Music on' : 'Music off'} onPress={() => mutate(s => { s.music = !s.music; })} />
-          </View>
+          <Toggle label="Sound effects" on={save.sound} onPress={() => mutate(s => { s.sound = !s.sound; })} />
+          <Toggle label="Music" on={save.music} onPress={() => mutate(s => { s.music = !s.music; })} />
+          <View style={{ height: 6 }} />
           {wipe ? (
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Btn style={{ flex: 1 }} kind="ghost" label="Keep my save" onPress={() => setWipe(false)} />

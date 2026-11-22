@@ -343,7 +343,9 @@ function shadeHead(p: Pen, parts: number[][], hlx: number, hly: number, hlrx: nu
     hi.unshift(f(x) + ' ' + f(y - depth * Math.pow(Math.sin(Math.PI * t), 0.8)));
   }
   p.path('M' + lo.join('L') + 'L' + hi.join('L') + 'Z', p.pal.out, { line: false, op: 0.2 });
-  p.ell(hlx, hly, hlrx, hlry, '#ffffff', { line: false, op: 0.22, rot: -10 });
+  // (No pale gloss oval on the forehead any more, for the same reason the body lost its own: on a head with
+  // eyes, brows, ears and markings it read as one more shape, not as light.)
+  void hlx; void hly; void hlrx; void hlry;
 }
 /** Just the shadow along the underside of a rounded form, for a part that sits over an already-shaded one. */
 function shadeUnder(p: Pen, cx: number, cy: number, rx: number, ry: number, op = 0.2) {
@@ -526,7 +528,7 @@ function drawWing(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, far: b
   const jx = ph.wings === 'flipper' ? sx0 : a.wx + fox, jy = ph.wings === 'flipper' ? sy0 : a.wy + foy;
   p.pivots[p.part] = p.at(jx, jy);
   // On an upright or floating body the near wing grows from the back edge in front of the body: where it overlaps
-  // the body it has no outline and melts into it; it's outlined only where it stands free. (Flippers are arms.)
+  // the body it has no outline and melts into it; it's outlined only where it stands free. (Flippers are fins.)
   const hull = a.hull;
   if (!far && !a.flatBack && hull && ph.wings !== 'flipper') p.mask = (x, y) => hull.some(([cx, cy, rx, ry]) => ((x - cx) / (rx * 0.97)) ** 2 + ((y - cy) / (ry * 0.97)) ** 2 < 1);
   drawWingShape(p, a, ph, k, p.rig ? 0 : flap, far);
@@ -553,16 +555,24 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
   const c = p.pal;
   const [fox, foy] = wingOffset(a, far), x = a.wx + fox, y = a.wy + foy;
   const up = flap * 7 * k;
+  // A wing is one flat colour (the second element's, on a creature with two). A body-coloured shoulder tier was
+  // tried and read as a patch lying on the wing wherever the two colours contrast, so wings keep the look they had.
   const col = far ? c.accentDark : c.accent;
+  const rimOk = (rim: string) => hexToHsl(rim)[2] - hexToHsl(c.out)[2] > 0.22;
+  const rooted = (shape: (q: number) => string) => { p.path(shape(1), col); };
   switch (ph.wings) {
     case 'feather': {
-      const tipx = x - 24 * k, tipy = y - 16 * k - up;
-      p.path(`M${f(x)} ${f(y)}Q${f(x - 8 * k)} ${f(y - 20 * k - up)} ${f(tipx)} ${f(tipy)}Q${f(x - 20 * k)} ${f(y - 6 * k - up * 0.5)} ${f(x - 22 * k)} ${f(y - 2 * k)}Q${f(x - 15 * k)} ${f(y - 1 * k)} ${f(x - 16 * k)} ${f(y + 4 * k)}Q${f(x - 9 * k)} ${f(y + 2 * k)} ${f(x - 8 * k)} ${f(y + 7 * k)}Q${f(x - 3 * k)} ${f(y + 5 * k)} ${f(x)} ${f(y)}Z`, col);
+      rooted(q => {
+        const K = k * q, U = up * q;
+        return `M${f(x)} ${f(y)}Q${f(x - 8 * K)} ${f(y - 20 * K - U)} ${f(x - 24 * K)} ${f(y - 16 * K - U)}Q${f(x - 20 * K)} ${f(y - 6 * K - U * 0.5)} ${f(x - 22 * K)} ${f(y - 2 * K)}Q${f(x - 15 * K)} ${f(y - 1 * K)} ${f(x - 16 * K)} ${f(y + 4 * K)}Q${f(x - 9 * K)} ${f(y + 2 * K)} ${f(x - 8 * K)} ${f(y + 7 * K)}Q${f(x - 3 * K)} ${f(y + 5 * K)} ${f(x)} ${f(y)}Z`;
+      });
       break;
     }
     case 'bat': {
-      const tx = x - 26 * k, ty = y - 18 * k - up;
-      p.path(`M${f(x)} ${f(y)}L${f(tx)} ${f(ty)}Q${f(x - 20 * k)} ${f(y - 8 * k)} ${f(x - 22 * k)} ${f(y + 1 * k)}Q${f(x - 15 * k)} ${f(y - 3 * k)} ${f(x - 13 * k)} ${f(y + 6 * k)}Q${f(x - 7 * k)} ${f(y)} ${f(x - 3 * k)} ${f(y + 7 * k)}Z`, col);
+      rooted(q => {
+        const K = k * q, U = up * q;
+        return `M${f(x)} ${f(y)}L${f(x - 26 * K)} ${f(y - 18 * K - U)}Q${f(x - 20 * K)} ${f(y - 8 * K)} ${f(x - 22 * K)} ${f(y + 1 * K)}Q${f(x - 15 * K)} ${f(y - 3 * K)} ${f(x - 13 * K)} ${f(y + 6 * K)}Q${f(x - 7 * K)} ${f(y)} ${f(x - 3 * K)} ${f(y + 7 * K)}Z`;
+      });
       p.path(`M${f(x)} ${f(y)}L${f(x - 22 * k)} ${f(y + 1 * k)}M${f(x)} ${f(y)}L${f(x - 13 * k)} ${f(y + 6 * k)}`, 'none', { stroke: c.out, sw: 0.9 });
       break;
     }
@@ -576,11 +586,14 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
       const [sx, sy] = flipperRoot(a, far);
       const lift = up * 0.35;
       const ax = sx - 14 * k, ay = sy + 1 * k - lift, ex = sx - 5.5 * k, ey = sy + 13 * k - lift * 0.6;
-      p.path(`M${f(sx + 1.5 * k)} ${f(sy - 1.5 * k)}Q${f(sx - 5 * k)} ${f(sy - 4.5 * k - lift)} ${f(ax)} ${f(ay)}`
-        + `Q${f(sx - 11 * k)} ${f(sy + 3 * k - lift)} ${f(sx - 11.5 * k)} ${f(sy + 6 * k - lift)}`
-        + `Q${f(sx - 8 * k)} ${f(sy + 7 * k - lift)} ${f(sx - 9 * k)} ${f(sy + 10 * k - lift)}`
-        + `Q${f(sx - 6 * k)} ${f(sy + 10 * k - lift)} ${f(ex)} ${f(ey)}`
-        + `Q${f(sx - 0.5 * k)} ${f(sy + 8 * k)} ${f(sx - 0.5 * k)} ${f(sy + 2.5 * k)}Z`, col);
+      rooted(q => {
+        const K = k * q, Lf = lift * q;
+        return `M${f(sx + 1.5 * K)} ${f(sy - 1.5 * K)}Q${f(sx - 5 * K)} ${f(sy - 4.5 * K - Lf)} ${f(sx - 14 * K)} ${f(sy + 1 * K - Lf)}`
+          + `Q${f(sx - 11 * K)} ${f(sy + 3 * K - Lf)} ${f(sx - 11.5 * K)} ${f(sy + 6 * K - Lf)}`
+          + `Q${f(sx - 8 * K)} ${f(sy + 7 * K - Lf)} ${f(sx - 9 * K)} ${f(sy + 10 * K - Lf)}`
+          + `Q${f(sx - 6 * K)} ${f(sy + 10 * K - Lf)} ${f(sx - 5.5 * K)} ${f(sy + 13 * K - Lf * 0.6)}`
+          + `Q${f(sx - 0.5 * K)} ${f(sy + 8 * K)} ${f(sx - 0.5 * K)} ${f(sy + 2.5 * K)}Z`;
+      });
       const rib = far ? shade(c.accentDark, -0.12) : c.accentDark;
       for (const [rx, ry] of [[ax + 2 * k, ay + 0.6 * k], [sx - 10.5 * k, sy + 5.5 * k - lift], [sx - 8.5 * k, sy + 9.2 * k - lift], [ex + 0.6 * k, ey - 1.6 * k]]) {
         p.line(`M${f(sx - 0.5 * k)} ${f(sy + 0.8 * k)}L${f(rx)} ${f(ry)}`, rib, 0.8 * k + 0.2);
@@ -593,13 +606,15 @@ function drawWingShape(p: Pen, a: Anchors, ph: Pheno, k: number, flap: number, f
       // leading edge and a few soft ribs give it form.
       if (far) {
         const fx = x - 4, fy = y + 1, top = fy - 19 * k - up * 0.4;
-        // Its colour comes from the body, and the hide's own colour rises into its base, so it grows out of the back.
-        const finCol = mix(c.accent, c.base, 0.4);
-        p.path(`M${f(fx + 7 * k)} ${f(fy + 7 * k)}Q${f(fx - 1 * k)} ${f(top)} ${f(fx - 12 * k)} ${f(fy - 15 * k)}Q${f(fx - 7 * k)} ${f(fy - 4 * k)} ${f(fx - 13 * k)} ${f(fy + 7 * k)}Z`, finCol);
-        for (const q of [0.3, 0.5]) {
+        // Two tiers, like the wings: the fin's own colour at the top, the hide's colour rising into its lower half
+        // with a thin shadow above it, so it grows out of the back.
+        const tier = (q: number) => {
           const tq = fy + 7 * k - (fy + 7 * k - top) * q, ex = fx - 12 * k * q;
-          p.path(`M${f(fx + 7 * k)} ${f(fy + 7 * k)}Q${f(fx + 2 * k)} ${f(tq)} ${f(ex - 2 * k)} ${f(fy + 7 * k - 22 * k * q)}Q${f(fx - 9 * k)} ${f(fy + 7 * k - 8 * k * q)} ${f(fx - 13 * k)} ${f(fy + 7 * k)}Z`, c.base, { line: false, op: 0.45 });
-        }
+          return `M${f(fx + 7 * k)} ${f(fy + 7 * k)}Q${f(fx + 2 * k)} ${f(tq)} ${f(ex - 2 * k)} ${f(fy + 7 * k - 22 * k * q)}Q${f(fx - 9 * k)} ${f(fy + 7 * k - 8 * k * q)} ${f(fx - 13 * k)} ${f(fy + 7 * k)}Z`;
+        };
+        p.path(`M${f(fx + 7 * k)} ${f(fy + 7 * k)}Q${f(fx - 1 * k)} ${f(top)} ${f(fx - 12 * k)} ${f(fy - 15 * k)}Q${f(fx - 7 * k)} ${f(fy - 4 * k)} ${f(fx - 13 * k)} ${f(fy + 7 * k)}Z`, c.accent);
+        if (rimOk(shade(c.accent, -0.2))) p.path(tier(0.56), shade(c.accent, -0.2), { line: false });
+        p.path(tier(0.5), c.base, { line: false });
         p.line(`M${f(fx + 4.5 * k)} ${f(fy + 2 * k)}Q${f(fx - 1.5 * k)} ${f(fy - 13 * k)} ${f(fx - 10.5 * k)} ${f(fy - 14 * k)}`, mix(c.accent, '#ffffff', 0.35), Math.max(0.8, 1.3 * k), 0.8);
         for (const [bx, ex, ey] of [[-1, -7, -9], [-4, -9, -5], [-7, -10.5, -1]]) p.line(`M${f(fx + bx * k)} ${f(fy + 3 * k)}L${f(fx + ex * k)} ${f(fy + ey * k)}`, c.accentDark, Math.max(0.5, 0.8 * k), 0.4);
       }
@@ -1928,7 +1943,7 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         p.dot(x, y, h * 0.95, e.base); p.dot(x, y, h * 0.5, INK); p.dot(x - h * 0.35, y - h * 0.35, h * 0.28, '#ffffff');
         return done();
       }
-      // Two orbs that orbit the head.
+      // Two orbs that orbit the head (on a living creature: a still would freeze them as two loose dots).
       for (let i = 0; i < 2; i++) {
         const t = phase * TAU + i * Math.PI, x = H.cx + Math.cos(t) * H.rx * 1.45, y = H.cy - H.ry * 0.85 + Math.sin(t) * H.ry * 0.35;
         p.g = Math.sin(t) < 0 ? 'back' : 'fx';
@@ -1943,7 +1958,7 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         p.ell(...(B(-2.5 * s, 5.5 * s) as [number, number]), 2.6 * s, 0.9 * s, '#ffffff', { line: false, op: 0.35, rot: (ang * 180) / Math.PI });
         return done();
       }
-      // Tiny bugs buzzing around it.
+      // Tiny bugs buzzing around it (on a living creature only: in a still they are specks).
       p.g = 'fx';
       for (let i = 0; i < 3; i++) {
         const t = phase * TAU * 2 + i * 2.1, x = bx + brx * (-0.8 + i * 0.8) + Math.sin(t) * 3, y = by - bry * 1.25 - (i % 2) * 5 + Math.cos(t) * 2;
@@ -1984,12 +1999,16 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         flame(p, x, y + 0.5, (5.6 + Math.sin(phase * TAU * 2) * 0.5) * s, '#7fd0ff', '#e6f8ff');
         return done();
       }
-      // Pale soul orbs circling.
+      // Will-o'-wisps circling it: small sparks with a tail streaming behind along their path, so they read as
+      // things in flight (round glowing orbs looked like spare eyes). On a living creature only.
       for (let i = 0; i < 3; i++) {
-        const t = phase * TAU + (i * TAU) / 3, x = bx + Math.cos(t) * brx * 1.3, y = by - bry * 0.8 + Math.sin(t) * bry * 0.45;
-        p.g = Math.sin(t) < 0 ? 'back' : 'fx';
-        p.dot(x + Math.sin(t) * 3, y - Math.cos(t) * 1.2, 2 * s + 0.2, '#9fdcff', 0.4);
-        p.dot(x, y, 3.6 * s + 0.4, '#9fdcff', 0.45); p.dot(x, y, 2 * s + 0.3, '#ffffff', 0.95);
+        const t = phase * TAU + (i * TAU) / 3;
+        const at = (u: number): [number, number] => [bx + Math.cos(u) * brx * 1.3, by - bry * 0.8 + Math.sin(u) * bry * 0.45];
+        const [x, y] = at(t);
+        // One that would cross the face passes behind the head instead: a glowing spark must never sit on an eye.
+        p.g = Math.sin(t) < 0 || Math.hypot(x - a.hx, y - a.hy) < a.hr * 1.2 ? 'back' : 'fx';
+        for (const [lag, r, op] of [[0.42, 0.7, 0.3], [0.28, 1.0, 0.45], [0.14, 1.4, 0.6]]) { const [tx, ty] = at(t - lag); p.dot(tx, ty, r * s + 0.2, '#9fdcff', op); }
+        p.dot(x, y, 1.9 * s + 0.3, '#bfe9ff', 0.95); p.dot(x, y, 1 * s + 0.2, '#ffffff', 1);
       }
       return done();
     case 'wyrm':
@@ -2059,7 +2078,8 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
         return done();
       }
       {
-        // A crescent moon on the forehead with sparkles.
+        // A crescent moon on the forehead with sparkles. A cluster of eyes already fills the forehead.
+        if (ph.eyes === 'multi') return false;
         p.g = 'face';
         const x = H.cx + H.rx * 0.2, y = H.cy - H.ry * 0.55, r = 3.8 * s + 0.4;
         p.path(`M${f(x)} ${f(y - r)}A${f(r)} ${f(r)} 0 1 0 ${f(x)} ${f(y + r)}A${f(r * 0.72)} ${f(r)} 0 1 1 ${f(x)} ${f(y - r)}Z`, '#ffd166', { stroke: '#b8862b', sw: 0.8 });
@@ -2096,7 +2116,7 @@ function markStyle(p: Pen, a: Anchors, el: ElementId, s0: number, phase: number,
       }
     case 'void':
       if (v === 1) {
-        // Shards of the dark drifting round the body.
+        // Shards of the dark drifting round the body (on a living creature only).
         for (let i = 0; i < 3; i++) {
           const t = phase * TAU * 0.5 + i * 2.1, x = bx + Math.cos(t) * brx * 1.3, y = by - bry * 0.5 + Math.sin(t) * bry * 0.55, r = (3.4 - i * 0.4) * s + 0.5;
           p.g = Math.sin(t) < 0 ? 'back' : 'fx';
@@ -2133,7 +2153,9 @@ function headband(p: Pen, a: Anchors, ph: Pheno, s: number, phase: number) {
   const [hue, sat] = hexToHsl(p.pal.base);
   const reddish = sat > 0.25 && (hue < 30 || hue > 330);
   const red = reddish ? '#f4efe6' : '#d7443e', dark = reddish ? '#d7443e' : '#9c2724';
-  const y1 = cy - ry * 0.7, y2 = cy - ry * 0.7 + ry * 0.26 * Math.max(0.7, s);
+  // A cluster of eyes climbs higher up the face than a pair does, so the band rides higher and thinner above it.
+  const many = ph.eyes === 'multi';
+  const y1 = cy - ry * (many ? 0.86 : 0.7), y2 = y1 + ry * (many ? 0.2 : 0.26) * Math.max(0.7, s);
   const half = (y: number) => rx * Math.sqrt(Math.max(0, 1 - ((y - cy) / ry) ** 2)) + 0.6;
   const t1 = half(y1), t2 = half(y2), bow = ry * 0.08;
   const was = p.g;
@@ -2247,9 +2269,11 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       break;
     }
     case 'mind': {
+      // A gem floating over the head: clean-edged, with no halo round it (a faint pale disc hovering over the
+      // crown read as a stray mark).
       const gy = hy - hr - 6 * s + Math.sin(phase * TAU) * 1.2;
       p.poly([[hx + hr * 0.2, gy - 4.5 * s], [hx + hr * 0.2 + 3.4 * s, gy], [hx + hr * 0.2, gy + 4.5 * s], [hx + hr * 0.2 - 3.4 * s, gy]], e.glow);
-      p.dot(hx + hr * 0.2, gy, 7 * s, e.light, 0.25);
+      p.poly([[hx + hr * 0.2, gy - 4.5 * s], [hx + hr * 0.2 + 3.4 * s, gy], [hx + hr * 0.2, gy]], '#ffffff', { line: false, op: 0.45 });
       break;
     }
     case 'swarm':
@@ -2282,6 +2306,7 @@ function drawCues(p: Pen, a: Anchors, el: ElementId, k: number, phase: number, m
       star(p, backx - 12 * s, backy - 8 * s, 3 * s, e.glow); star(p, hx + hr + 4 * s, hy - hr - 2 * s, 2.4 * s, e.glow); star(p, bx - brx - 3 * s, by + bry * 0.5, 2 * s, '#ffffff');
       break;
     case 'radiant':
+      // A halo with its rays: the two belong together, so they are drawn together or not at all.
       p.ring(hx, hy - hr - 4 * s, hr * 0.7, 2.4 * s + 0.6, e.base, 1.8);
       for (let i = 0; i < 5; i++) { const ang = -Math.PI * (0.15 + i * 0.175); p.path(`M${f(hx + Math.cos(ang) * (hr + 7 * s))} ${f(hy + Math.sin(ang) * (hr + 7 * s))}L${f(hx + Math.cos(ang) * (hr + 12 * s))} ${f(hy + Math.sin(ang) * (hr + 12 * s))}`, 'none', { stroke: e.glow, sw: 1.4, op: 0.8 }); }
       break;
@@ -2423,6 +2448,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   const lw = 1 + 0.28 * gw;
   /** Size of coat details: fur scallops, scales, lumps. */
   const cz = 0.95 * b;
+  /** How low the stance carries the body (its own drop, less whatever `lean` holds back to keep legs under it), and how far the build's leg length lifts it. */
+  let stand = sp.drop, lifted = rise;
   /** A leg from a hip on the leaned body down to the ground, bending at the knee when the body sinks or the foot lifts. */
   // Two-tone on the limbs: a pointed coat darkens them; socks turn the lower legs, feet and hands pale.
   const limbFar = pal.limb === pal.base ? far : shade(pal.limb, -0.1);
@@ -2432,7 +2459,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     const [x1, y1] = p.at(hx0, hy0), col = limbOf(col0);
     p.free(() => {
       // Height changes the leg length, not the knee: a short-legged creature stands on short straight legs.
-      const bend = (Math.max(0, sp.drop + Math.max(0, y1 - hy0 - sp.drop + rise) * 0.6) * 0.9 + lift * 0.9) * knee;
+      const bend = (Math.max(0, stand + Math.max(0, y1 - hy0 - stand + lifted) * 0.6) * 0.9 + lift * 0.9) * knee;
       const mx = kx ?? (x1 + fx) / 2, my = ky ?? (y1 + fy) / 2;
       const cx = mx + bend, cy = my - lift * 0.5 + (ky == null ? 0 : (y1 - hy0) * 0.5), ex = fx, ey = fy - lift;
       p.taper(x1, y1, ex, ey, w0 * lw, w1 * lw, col, cx, cy);
@@ -2446,8 +2473,28 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   };
   const freePaw = (x: number, y: number, w: number, col: string, lift = 0) => p.free(() => paw(x, y - lift, w * (1 + 0.1 * gw), socks ? sockOf(limbOf(col)) : limbOf(col), lift));
   const ft = sp.ft ?? 0;
-  const lean = (cx: number, cy: number) => {
-    const L = sp.lean + tiltL, D = sp.drop + tiltD + bob - rise;
+  /**
+   * Set the body's stance. `belly` is the lowest point of the body before any drop: a legged body is never
+   * lowered so far that its belly reaches the ground and its legs vanish under it (a squat, heavy creature in a
+   * low stance still stands on short legs). A fainted creature does lie on the ground.
+   */
+  const lean = (cx: number, cy: number, belly?: number) => {
+    const L = sp.lean + tiltL;
+    const rest0 = sp.drop - rise; // where the stance and the build's leg length put the body
+    const move = tiltD + bob;     // what a crouch or a stride adds on top
+    let rest = rest0, D = rest0 + move;
+    if (belly != null && !o.ko) {
+      // How far this body can sink and still stand on legs. Only where it rests is held to that (and it is never
+      // lifted above its plain stance to make room), so a stride still bobs and a guard still dips: those may
+      // bend the legs further, down to stubs, but not flat to the ground.
+      // (A squat build stands on stubbier legs than a tall one, so it still sits lower.)
+      const room = Math.max(0, 87.8 - 5.2 * ls * (1 + 0.32 * Math.min(0, ht)) - belly);
+      rest = Math.min(rest0, room);
+      D = Math.min(rest + move, Math.max(rest, room + 2.6 * ls));
+    }
+    // Whatever was held back comes off the stance's crouch first, so the knees bend only as far as the body sank.
+    stand = sp.drop > 0 ? Math.max(0, sp.drop - (rest0 - rest)) : sp.drop;
+    lifted = stand - rest;
     p.tf = L || D || sp.sx ? mkTf(cx, cy, L, sp.sx ?? 0, D) : null;
   };
   /**
@@ -2652,7 +2699,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       const by = 63, brx = 23 * b * (1 + 0.06 * gw + 0.08 * ht), bry = 13.5 * b * (1 + 0.25 * gw - 0.05 * ht);
       const hr = 12 * hs;
       const hx = 48 + brx * 0.82 + sp.hdx, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4 + sp.hdy;
-      lean(46 + brx * (sp.px ?? 0), by);
+      lean(46 + brx * (sp.px ?? 0), by, by + bry * 1.08);
       a = { flatBack: true, back: ellFrame(46, by, brx, bry, -Math.PI / 2 - 0.3), hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       drawCrest(p, ph, ellSpine(46, by, brx, bry, Math.PI + 0.55, 1.5 * Math.PI + 0.65, 6), k * b);
@@ -2691,7 +2738,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       const abx = 34, arx = 17 * b * (1 + 0.1 * ht), ary = 12 * b * (1 + 0.25 * gw);
       const thx = 34 + arx + 9 * b, thr = 11.5 * b * (1 + 0.12 * gw);
       const hx = thx + thr + hr * 0.45 + sp.hdx, hy = by - 6 + breathe * 0.3 + sp.hdy;
-      lean(thx + thr * (sp.px ?? 0), by);
+      lean(thx + thr * (sp.px ?? 0), by, Math.max(by - 2 + ary, by + thr * 0.9));
       a = { flatBack: true, back: ellFrame(abx, by - 2, arx, ary, -Math.PI / 2 - 0.2), hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
       drawWing(p, a, ph, k, flap, true);
       drawCrest(p, ph, ellSpine(abx, by - 2, arx, ary, Math.PI + 0.55, 1.5 * Math.PI + 0.75, 5), k * b * 0.9);
@@ -2862,7 +2909,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   p.tf = null;
   p.g = 'fx';
   if (o.stage >= 3) {
-    // Motes drifting up from the ground glow through the idle cycle.
+    // Motes drifting up from the ground glow through the idle cycle. Only on a living creature, where they rise
+    // from under it: in a still picture they would just be stray dots sitting on the body.
     const e = ELEMENTS[ph.el1];
     p.part = 'ground';
     for (let i = 0; i < (o.stage === 4 ? 5 : 3); i++) {
@@ -2883,6 +2931,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     });
   }
   if (o.stage === 4) {
+    // A legend's circling stars, like the motes: only on a living creature, where they circle it. In a still
+    // picture they land on its cheek, its tail, its leg, and read as stray marks.
     for (let i = 0; i < 5; i++) {
       const ang = phase * TAU + (i * TAU) / 5;
       star(p, 50 + Math.cos(ang) * 40, 54 + Math.sin(ang) * 32, 2.6, pal.glow, 0.9);

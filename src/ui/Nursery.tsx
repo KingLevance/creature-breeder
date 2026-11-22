@@ -1,14 +1,14 @@
 // Incubators, eggs and breeding. Also the hatch reveal: stars first, then the creature.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Defs, Path, RadialGradient, Stop } from 'react-native-svg';
 import { SfxName, sfx } from './audio';
 import { ELEMENTS } from '../game/data/elements';
 import { Creature, Egg, STAGE_NAMES, stageLevels, stageOf, typeLabel } from '../game/creature';
 import { BreedMats, INC_SLOT_COST, INC_UPGRADE, MAT_COST, breedCost, breedProblem, discardEgg, doBreed, eggValue, fillIncubators, forecast, hatchAll, hatchEgg, incubationMs, placeEgg, speedUp, speedUpCost, buyIncubator, upgradeIncubator } from '../game/economy';
 import { SKELETON_NAMES, express, starRating } from '../game/genome';
 import { TUT } from '../game/save';
-import { Bar, Breathing, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, P, SexMark, Stars, Title, TypeChips, mixHex, st } from './kit';
+import { Bar, Breathing, Btn, C, Card, CreatureTile, CreatureView, EggView, H, LiveCreature, Mark, P, SexMark, Stars, Title, TypeChips, mixHex, st } from './kit';
 import { F, FadeIn, Glow, Grad, Icon, IconName, ND, haptic, pulse, shadow, useLoop, usePress } from './look';
 import { CreatureDetail } from './Roster';
 import { fmtTime, rng, useGame, useNow } from './store';
@@ -21,7 +21,6 @@ const CRACKS = [
 ];
 const TAPS = 3;
 
-/** Hatching: tap the egg until it breaks open, then the stars appear one by one, then the creature. */
 /** Several eggs hatching at once: each hatchling pops in on its own card, one after another. */
 function HatchAllReveal({ cs, onClose }: { cs: Creature[]; onClose: () => void }) {
   const { width: W } = useWindowDimensions();
@@ -39,7 +38,8 @@ function HatchAllReveal({ cs, onClose }: { cs: Creature[]; onClose: () => void }
   const cw = (Math.min(W, 520) - 52) / 2;
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: '#000e', justifyContent: 'center', padding: 18 }}>
+      <View style={{ flex: 1, backgroundColor: '#1b1437', justifyContent: 'center', padding: 18 }}>
+        <Grad colors={['#1b1437', '#2f2360', '#1b1437']} />
         <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 28, textAlign: 'center', marginBottom: 12 }}>{cs.length} hatched!</Text>
         <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }} style={{ flexGrow: 0 }}>
           {cs.map((c, i) => {
@@ -53,7 +53,7 @@ function HatchAllReveal({ cs, onClose }: { cs: Creature[]; onClose: () => void }
                   </View>
                   <View style={st.row}>
                     <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 16 }} numberOfLines={1}>{c.name}</Text>
-                    {ph.shiny ? <Text style={{ color: C.gold, fontSize: 14 }}>✦</Text> : null}
+                    {ph.shiny ? <Mark kind="shiny" size={14} /> : null}
                     <SexMark sex={c.sex} />
                   </View>
                   <Stars n={starRating(c.g)} size={13} />
@@ -69,9 +69,39 @@ function HatchAllReveal({ cs, onClose }: { cs: Creature[]; onClose: () => void }
   );
 }
 
+/** Slow-turning rays of light behind a hatchling: the more stars, the brighter. */
+function Rays({ size, color, strength }: { size: number; color: string; strength: number }) {
+  const t = useLoop(22000);
+  const R = size / 2, n = 12;
+  const wedges = Array.from({ length: n }, (_, i) => {
+    const a0 = (i / n) * Math.PI * 2, w = (Math.PI * 2) / n * (i % 2 ? 0.26 : 0.4);
+    return `M${R} ${R} L${(R + Math.cos(a0 - w / 2) * R).toFixed(1)} ${(R + Math.sin(a0 - w / 2) * R).toFixed(1)} L${(R + Math.cos(a0 + w / 2) * R).toFixed(1)} ${(R + Math.sin(a0 + w / 2) * R).toFixed(1)}Z`;
+  }).join('');
+  return (
+    <Animated.View pointerEvents="none" style={{ position: 'absolute', width: size, height: size, opacity: strength, transform: [{ rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }] }}>
+      <Svg width={size} height={size}>
+        <Defs>
+          <RadialGradient id="hatchRays" cx="50%" cy="50%" r="50%">
+            <Stop offset="0" stopColor={color} stopOpacity={0.55} /><Stop offset="0.55" stopColor={color} stopOpacity={0.2} /><Stop offset="1" stopColor={color} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        <Path d={wedges} fill="url(#hatchRays)" />
+      </Svg>
+    </Animated.View>
+  );
+}
+
+const STAR_WORD = ['', 'Humble', 'Promising', 'Strong', 'Excellent', 'Extraordinary'];
+const STAR_PATH = 'M12 1.8 L15.1 8.3 L22.2 9.2 L17 14.1 L18.4 21.2 L12 17.7 L5.6 21.2 L7 14.1 L1.8 9.2 L8.9 8.3Z';
+
+/**
+ * Hatching, on a lit stage in the hatchling's own colour: tap the egg until it breaks, the shell flies apart,
+ * the stars land one by one, and then the creature hops out under turning rays of light.
+ */
 function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
-  const { width: W } = useWindowDimensions();
+  const { width: W, height: H } = useWindowDimensions();
   const ph = useMemo(() => express(c.g), [c.g]);
+  const el = ELEMENTS[ph.el1];
   const stars = starRating(c.g);
   const [taps, setTaps] = useState(0);
   const [phase, setPhase] = useState<'egg' | 'burst' | 'stars' | 'creature'>('egg');
@@ -81,16 +111,25 @@ function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
   const flash = useRef(new Animated.Value(0)).current;
   const eggOut = useRef(new Animated.Value(0)).current;
   const pop = useRef(new Animated.Value(0)).current;
+  const rise = useRef(new Animated.Value(0)).current;
+  const plate = useRef(new Animated.Value(0)).current;
   const starPops = useRef(Array.from({ length: 5 }, () => new Animated.Value(0))).current;
-  const eggSize = W * 0.55;
+  const eggSize = Math.min(W * 0.55, 240);
+  const art = Math.min(W * 0.62, 270);
+  const stageY = H * 0.4; // the middle of the stage, where the egg sits and the hatchling stands
+  // Pieces of shell: where each flies, how it tumbles.
+  const shards = useMemo(() => Array.from({ length: 9 }, (_, i) => {
+    const a = -Math.PI / 2 + (i - 4) * 0.42 + ((i * 37) % 10) * 0.02;
+    return { dx: Math.cos(a) * (90 + ((i * 53) % 60)), dy: Math.sin(a) * (70 + ((i * 31) % 50)), rot: (i % 2 ? 1 : -1) * (160 + i * 30), s: 10 + ((i * 7) % 9) };
+  }), []);
 
   // Idle wobble that grows as the egg cracks, so it looks ready to burst.
   useEffect(() => {
     if (phase !== 'egg') return;
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(wob, { toValue: 1, duration: 140, useNativeDriver: true }),
-      Animated.timing(wob, { toValue: -1, duration: 220, useNativeDriver: true }),
-      Animated.timing(wob, { toValue: 0, duration: 140, useNativeDriver: true }),
+      Animated.timing(wob, { toValue: 1, duration: 140, useNativeDriver: ND }),
+      Animated.timing(wob, { toValue: -1, duration: 220, useNativeDriver: ND }),
+      Animated.timing(wob, { toValue: 0, duration: 140, useNativeDriver: ND }),
       Animated.delay(Math.max(250, 1300 - taps * 400)),
     ]));
     loop.start();
@@ -98,50 +137,69 @@ function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
   }, [phase, taps, wob]);
 
   const onTap = () => {
-    if (phase === 'egg') {
-      const n = taps + 1;
-      setTaps(n);
-      Animated.sequence([
-        Animated.timing(shake, { toValue: 1, duration: 50, useNativeDriver: true }),
-        Animated.timing(shake, { toValue: -1, duration: 60, useNativeDriver: true }),
-        Animated.timing(shake, { toValue: 0.5, duration: 50, useNativeDriver: true }),
-        Animated.timing(shake, { toValue: 0, duration: 50, useNativeDriver: true }),
-      ]).start();
-      if (n < TAPS) { sfx('crack'); return; }
-      sfx('crackBig');
-      setPhase('burst');
-      setTimeout(() => sfx('hatch'), 150);
-      Animated.parallel([
-        Animated.sequence([Animated.timing(flash, { toValue: 1, duration: 160, useNativeDriver: true }), Animated.timing(flash, { toValue: 0, duration: 500, useNativeDriver: true })]),
-        Animated.timing(eggOut, { toValue: 1, duration: 380, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      ]).start(() => {
-        setPhase('stars');
-        // Stars land one at a time, each a little higher in pitch.
-        for (let i = 0; i < stars; i++) setTimeout(() => {
-          setShown(i + 1);
-          sfx(('star' + (i + 1)) as SfxName);
-          Animated.spring(starPops[i], { toValue: 1, friction: 4, tension: 120, useNativeDriver: true }).start();
-        }, 250 + i * 380);
-        setTimeout(() => {
-          setPhase('creature');
-          sfx('reveal');
-          Animated.spring(pop, { toValue: 1, friction: 5, useNativeDriver: true }).start();
-        }, 250 + stars * 380 + 450);
-      });
-    }
+    if (phase !== 'egg') return;
+    const n = taps + 1;
+    setTaps(n);
+    haptic(n < TAPS ? 'select' : 'medium');
+    Animated.sequence([
+      Animated.timing(shake, { toValue: 1, duration: 50, useNativeDriver: ND }),
+      Animated.timing(shake, { toValue: -1, duration: 60, useNativeDriver: ND }),
+      Animated.timing(shake, { toValue: 0.5, duration: 50, useNativeDriver: ND }),
+      Animated.timing(shake, { toValue: 0, duration: 50, useNativeDriver: ND }),
+    ]).start();
+    if (n < TAPS) { sfx('crack'); return; }
+    sfx('crackBig');
+    setPhase('burst');
+    setTimeout(() => sfx('hatch'), 150);
+    Animated.parallel([
+      Animated.sequence([Animated.timing(flash, { toValue: 1, duration: 140, useNativeDriver: ND }), Animated.timing(flash, { toValue: 0, duration: 460, useNativeDriver: ND })]),
+      Animated.timing(eggOut, { toValue: 1, duration: 620, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+    ]).start(() => {
+      setPhase('stars');
+      // Stars land one at a time, each a little higher in pitch.
+      for (let i = 0; i < stars; i++) setTimeout(() => {
+        setShown(i + 1);
+        sfx(('star' + (i + 1)) as SfxName);
+        haptic('select');
+        Animated.spring(starPops[i], { toValue: 1, friction: 4, tension: 120, useNativeDriver: ND }).start();
+      }, 200 + i * 340);
+      setTimeout(() => {
+        setPhase('creature');
+        sfx('reveal');
+        haptic('medium');
+        // Up out of the light with a hop, then the name plate follows.
+        Animated.parallel([
+          Animated.spring(pop, { toValue: 1, friction: 5, tension: 70, useNativeDriver: ND }),
+          Animated.sequence([
+            Animated.timing(rise, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+            Animated.timing(rise, { toValue: 0, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: ND }),
+          ]),
+          Animated.timing(plate, { toValue: 1, duration: 380, delay: 320, easing: Easing.out(Easing.cubic), useNativeDriver: ND }),
+        ]).start();
+      }, 200 + stars * 340 + 380);
+    });
   };
 
+  const out = phase !== 'egg' && phase !== 'burst';
+  const rayColor = ph.shiny ? '#ffe9a8' : stars >= 5 ? '#ffd34d' : el.light;
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable onPress={onTap} style={{ flex: 1, backgroundColor: '#000e', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        {phase === 'egg' || phase === 'burst' ? (
-          <>
+      <Pressable onPress={onTap} style={{ flex: 1, backgroundColor: '#1b1437' }}>
+        {/* The stage: a deep wash of the hatchling's own colour, brightest where it will stand. */}
+        <Grad colors={[mixHex('#1b1437', el.dark, 0.3), mixHex('#2a1f55', el.base, 0.22), '#1b1437']} />
+        <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: stageY - W * 0.75, height: W * 1.5, alignItems: 'center', justifyContent: 'center' }}>
+          <Glow color={el.light} opacity={out ? 0.5 : 0.3 + taps * 0.07} r="50%" />
+          {phase === 'creature' ? <Rays size={W * 1.5} color={rayColor} strength={0.35 + stars * 0.11} /> : null}
+        </View>
+
+        {!out ? (
+          <View style={{ position: 'absolute', left: 0, right: 0, top: stageY - eggSize / 2, alignItems: 'center' }}>
             <Animated.View style={{
-              opacity: eggOut.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
+              opacity: eggOut.interpolate({ inputRange: [0, 0.25, 1], outputRange: [1, 0, 0] }),
               transform: [
                 { translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-10, 10] }) },
                 { rotate: wob.interpolate({ inputRange: [-1, 1], outputRange: [`-${4 + taps * 3}deg`, `${4 + taps * 3}deg`] }) },
-                { scale: eggOut.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }) },
+                { scale: eggOut.interpolate({ inputRange: [0, 0.25], outputRange: [1, 1.25], extrapolate: 'clamp' }) },
               ],
             }}>
               <EggView ph={ph} size={eggSize} />
@@ -150,38 +208,71 @@ function HatchReveal({ c, onClose }: { c: Creature; onClose: () => void }) {
                 {taps >= 2 ? <Path d={CRACKS[Math.min(taps, 3)]} stroke="#fff6c8" strokeWidth={0.6} fill="none" opacity={0.9} /> : null}
               </Svg>
             </Animated.View>
-            <Text style={{ color: C.text, fontSize: 18, fontWeight: '800', marginTop: 16 }}>{taps === 0 ? 'Tap the egg to open it' : taps < TAPS ? 'Keep tapping!' : ''}</Text>
-            <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
-              {Array.from({ length: TAPS }, (_, i) => <View key={i} style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: i < taps ? C.gold : '#3a3256' }} />)}
+            {/* The shell flies apart. */}
+            {phase === 'burst' ? shards.map((sh, i) => (
+              <Animated.View key={i} pointerEvents="none" style={{
+                position: 'absolute', top: eggSize / 2 - sh.s / 2, left: W / 2 - sh.s / 2,
+                opacity: eggOut.interpolate({ inputRange: [0, 0.1, 0.7, 1], outputRange: [0, 1, 1, 0] }),
+                transform: [
+                  { translateX: eggOut.interpolate({ inputRange: [0, 1], outputRange: [0, sh.dx] }) },
+                  { translateY: eggOut.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, sh.dy, sh.dy * 0.7 + 90] }) },
+                  { rotate: eggOut.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${sh.rot}deg`] }) },
+                ],
+              }}>
+                <Svg width={sh.s} height={sh.s} viewBox="0 0 10 10"><Path d="M1 3 L5 0.5 L9 4 L7.5 9 L3 8.5Z" fill={i % 3 ? mixHex(el.light, '#ffffff', 0.55) : el.light} stroke={mixHex(el.dark, '#2a1d33', 0.5)} strokeWidth={0.8} strokeLinejoin="round" /></Svg>
+              </Animated.View>
+            )) : null}
+            <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 19, marginTop: 18, opacity: phase === 'egg' ? 1 : 0 }}>{taps === 0 ? 'Tap the egg to open it' : 'Keep tapping!'}</Text>
+            <View style={{ flexDirection: 'row', gap: 7, marginTop: 9, opacity: phase === 'egg' ? 1 : 0 }}>
+              {Array.from({ length: TAPS }, (_, i) => <View key={i} style={{ width: 11, height: 11, borderRadius: 6, backgroundColor: i < taps ? C.gold : 'rgba(255,255,255,0.16)', borderWidth: 1, borderColor: 'rgba(0,0,0,0.3)' }} />)}
             </View>
-            <Animated.View pointerEvents="none" style={{ position: 'absolute', width: W * 1.4, height: W * 1.4, borderRadius: W, backgroundColor: '#fff8dc', opacity: flash.interpolate({ inputRange: [0, 1], outputRange: [0, 0.85] }), transform: [{ scale: flash.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }} />
-          </>
+          </View>
         ) : (
-          <>
-            <View style={{ flexDirection: 'row', gap: 6, height: 44, alignItems: 'center' }}>
+          <View style={{ position: 'absolute', left: 0, right: 0, top: stageY - art * 0.5 - 62, alignItems: 'center' }}>
+            {/* Its stars, landing one by one. */}
+            <View style={{ flexDirection: 'row', gap: 5, height: 40, alignItems: 'center' }}>
               {Array.from({ length: 5 }, (_, i) => (
-                <Animated.Text key={i} style={{ fontSize: 34, color: i < stars ? C.gold : '#4a416b', opacity: i < stars ? starPops[i] : phase === 'creature' ? 1 : 0.6, transform: [{ scale: i < stars ? starPops[i].interpolate({ inputRange: [0, 1], outputRange: [2.4, 1] }) : 1 }] }}>★</Animated.Text>
+                <Animated.View key={i} style={{ opacity: i < stars ? starPops[i] : 1, transform: [{ scale: i < stars ? starPops[i].interpolate({ inputRange: [0, 1], outputRange: [2.6, 1] }) : 1 }] }}>
+                  <Svg width={34} height={34} viewBox="0 0 24 24">
+                    {i < stars ? (
+                      <>
+                        <Path d={STAR_PATH} fill="#f7b52e" stroke="#a8670f" strokeWidth={1.5} strokeLinejoin="round" />
+                        <Path d="M12 5.5 L13.9 9.8 L18 10.3 L12 12.5 L6 10.3 L10.1 9.8Z" fill="#ffe58a" />
+                      </>
+                    ) : <Path d={STAR_PATH} fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.16)" strokeWidth={1.2} strokeLinejoin="round" />}
+                  </Svg>
+                </Animated.View>
               ))}
             </View>
-            {phase === 'stars' ? <Text style={{ color: C.dim, marginTop: 10 }}>{shown < stars ? '' : ['', 'Humble', 'Promising', 'Strong', 'Excellent', 'Extraordinary'][stars]}</Text> : null}
-            {phase === 'creature' ? (
-              <>
-                <Animated.View style={{ opacity: pop, transform: [{ scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }}>
-                  <LiveCreature ph={ph} stage={stageOf(c)} size={W * 0.6} />
+            <Text style={{ color: stars >= 4 ? C.gold : '#d9ccff', fontFamily: F.semi, fontSize: 15, height: 22, marginTop: 2, opacity: shown >= stars ? 1 : 0 }}>{STAR_WORD[stars]}</Text>
+            <View style={{ width: art, height: art, alignItems: 'center', justifyContent: 'flex-end' }}>
+              {phase === 'creature' ? (
+                <Animated.View style={{ opacity: pop.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 1, 1] }), transform: [{ translateY: rise.interpolate({ inputRange: [0, 1], outputRange: [0, -art * 0.16] }) }, { scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }) }] }}>
+                  <LiveCreature ph={ph} stage={stageOf(c)} size={art} />
                 </Animated.View>
-                <View style={st.row}>
-                  <Text style={{ color: C.text, fontSize: 24, fontWeight: '900' }}>{c.name}</Text>
-                  <SexMark sex={c.sex} />
+              ) : null}
+            </View>
+            <Animated.View style={{ alignItems: 'center', opacity: plate, transform: [{ translateY: plate.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
+              <View style={[st.row, { gap: 6 }]}>
+                <Text style={{ color: C.text, fontFamily: F.bold, fontSize: 28, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }}>{c.name}</Text>
+                <SexMark sex={c.sex} size={16} />
+              </View>
+              {ph.shiny ? (
+                <View style={[st.row, { gap: 6, marginTop: 2 }]}>
+                  <Mark kind="shiny" size={15} /><Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 18 }}>A shiny!</Text><Mark kind="shiny" size={15} />
                 </View>
-                {ph.shiny ? <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 18, marginTop: 2 }}>✦ A shiny! ✦</Text> : null}
-                <View style={{ marginVertical: 6 }}><TypeChips ph={ph} /></View>
-                <P dim>{SKELETON_NAMES[ph.skel]} · {c.origin === 'bred' ? 'Bred' : 'Wild-born'}</P>
-                {c.mom && c.dad ? <P dim>Child of {c.mom.name} and {c.dad.name}</P> : null}
-                <Btn style={{ marginTop: 16, minWidth: 180 }} kind="gold" label="Welcome!" onPress={onClose} />
-              </>
-            ) : null}
-          </>
+              ) : null}
+              <View style={{ marginVertical: 7 }}><TypeChips ph={ph} /></View>
+              <P dim>{SKELETON_NAMES[ph.skel]} · {c.origin === 'bred' ? 'Bred' : 'Wild-born'}</P>
+              {c.mom && c.dad ? <P dim>Child of {c.mom.name} and {c.dad.name}</P> : null}
+              <Btn style={{ marginTop: 16, minWidth: 190 }} kind="gold" label="Welcome!" onPress={onClose} />
+            </Animated.View>
+          </View>
         )}
+        {/* The flash as the shell breaks. */}
+        <Animated.View pointerEvents="none" style={{ position: 'absolute', left: W / 2 - W * 0.7, top: stageY - W * 0.7, width: W * 1.4, height: W * 1.4, opacity: flash, transform: [{ scale: flash.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }] }}>
+          <Glow color="#fff8dc" opacity={0.95} r="50%" />
+        </Animated.View>
       </Pressable>
     </Modal>
   );
@@ -379,7 +470,10 @@ export function BreedScreen() {
     <Pressable onPress={() => { haptic('select'); setPicking(sex); }} style={[{ flex: 1, borderRadius: 18, overflow: 'hidden', borderWidth: 1.5, borderColor: c ? 'rgba(255,255,255,0.1)' : (sex === 'F' ? C.female : C.male) + 'aa' }, shadow(sex === 'F' ? C.female : C.male, 10, c ? 0.2 : 0.45, 0)]}>
       <Grad colors={[mixHex('#4f4189', sex === 'F' ? C.female : C.male, 0.25), '#382c66']} />
       <View style={{ alignItems: 'center', padding: 8 }}>
-      <View style={{ backgroundColor: 'rgba(10,6,22,0.45)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 1 }}><Text style={{ color: sex === 'F' ? C.female : C.male, fontSize: 12, fontFamily: F.semi }}>{label}</Text></View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(10,6,22,0.45)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 1 }}>
+        <Text style={{ color: sex === 'F' ? C.female : C.male, fontSize: 12, fontFamily: F.semi }}>{label}</Text>
+        <SexMark sex={sex} size={11} />
+      </View>
       {c ? (
         <>
           <View style={{ width: 96, height: 92, alignItems: 'center', justifyContent: 'flex-end' }}>
@@ -409,11 +503,11 @@ export function BreedScreen() {
         <Title icon="heart" color="#ff7fae">Breeding</Title>
         <P dim style={{ marginBottom: 8 }}>Each parent passes one of its two genes for every trait. The egg can look like either parent, a mix, or show something both were hiding.</P>
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-          <Slot c={mom} label="Mother ♀" sex="F" />
+          <Slot c={mom} label="Mother" sex="F" />
           <Animated.View style={{ position: 'absolute', left: '50%', marginLeft: -17, zIndex: 2, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2050', borderWidth: 2, borderColor: '#ff7fae', transform: [{ scale: beat.interpolate({ inputRange: [0, 0.12, 0.24, 0.36, 1], outputRange: [1, 1.2, 1, 1.12, 1] }) }] }}>
             <View><Icon name="heart" size={18} color="#ff7fae" /></View>
           </Animated.View>
-          <Slot c={dad} label="Father ♂" sex="M" />
+          <Slot c={dad} label="Father" sex="M" />
         </View>
 
         {fc ? (
@@ -429,10 +523,22 @@ export function BreedScreen() {
               </View>
             ))}
             <Text style={{ color: C.gold, fontSize: 12, fontWeight: '700', marginTop: 6 }}>Body</Text>
-            <P>{fc.skels.map(s => `${SKELETON_NAMES[s.skel]} ${pct(s.p)}`).join(' · ')}</P>
+            {fc.skels.slice(0, 4).map(s => (
+              <View key={s.skel} style={[st.row, { marginVertical: 1 }]}>
+                <Text style={{ color: C.text, fontSize: 12, width: 130 }} numberOfLines={1}>{SKELETON_NAMES[s.skel]}</Text>
+                <View style={{ flex: 1 }}><Bar frac={s.p} color="#6fc3ff" /></View>
+                <Text style={{ color: C.dim, fontSize: 11, width: 34, textAlign: 'right' }}>{pct(s.p)}</Text>
+              </View>
+            ))}
             <Text style={{ color: C.gold, fontSize: 12, fontWeight: '700', marginTop: 6 }}>Stars</Text>
-            <P>{fc.stars.map((p, i) => (p > 0 ? `${i + 1}★ ${pct(p)}` : null)).filter(Boolean).join(' · ')}</P>
-            <P dim>Legendary move slot: {pct(fc.legendary)} · Dual type: {pct(fc.dual)}</P>
+            {fc.stars.map((p, i) => (p > 0 ? (
+              <View key={i} style={[st.row, { marginVertical: 1 }]}>
+                <View style={{ width: 130 }}><Stars n={i + 1} size={12} /></View>
+                <View style={{ flex: 1 }}><Bar frac={p} color="#f7b52e" /></View>
+                <Text style={{ color: C.dim, fontSize: 11, width: 34, textAlign: 'right' }}>{pct(p)}</Text>
+              </View>
+            ) : null))}
+            <P dim style={{ marginTop: 6 }}>Legendary move slot: {pct(fc.legendary)} · Dual type: {pct(fc.dual)}</P>
           </Card>
         ) : null}
 

@@ -1,0 +1,25 @@
+import sys, time, subprocess, os, glob
+from playwright.sync_api import sync_playwright
+dist, out, area, secs = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+os.makedirs(out, exist_ok=True)
+save = open(os.environ.get('SAVE', '/tmp/save.json')).read()
+srv = subprocess.Popen([sys.executable, '-m', 'http.server', '8799', '--bind', '127.0.0.1', '-d', dist], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(1)
+errors = []
+with sync_playwright() as p:
+    b = p.chromium.launch(channel='chrome', headless=True, args=['--no-sandbox'])
+    ctx = b.new_context(viewport={'width': 390, 'height': 844}, record_video_dir=out, record_video_size={'width': 390, 'height': 844})
+    pg = ctx.new_page()
+    pg.on('pageerror', lambda e: errors.append('PAGEERROR ' + str(e)))
+    pg.goto('http://127.0.0.1:8799/index.html'); pg.wait_for_timeout(800)
+    pg.evaluate('s => localStorage.setItem("hatchlore.save.v1", s)', save)
+    pg.reload(); pg.wait_for_timeout(1500)
+    pg.get_by_text('Campaign', exact=True).last.click(); pg.wait_for_timeout(600)
+    pg.get_by_text(area, exact=True).first.click(); pg.wait_for_timeout(700)
+    pg.get_by_text('Choose team').click(); pg.wait_for_timeout(500)
+    pg.get_by_text('Start (', exact=False).click()
+    pg.wait_for_timeout(secs * 1000)
+    ctx.close(); b.close()
+srv.terminate()
+print('ERRORS:', len(errors), errors[:3])
+print(glob.glob(out + '/*.webm'))

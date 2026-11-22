@@ -10,20 +10,22 @@ import { mouthPoint } from '../render/creature';
 import { Animated, Easing, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Defs, Ellipse, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { ELEMENTS, ElementId } from '../game/data/elements';
-import { Flair, MoveDef, StatusKind } from '../game/data/moves';
+import { Flair, MoveDef, MoveStyle, RARITY_COLORS, StatusKind, moveStyle, supportKind } from '../game/data/moves';
 import { Battle, Ev, Unit, act, aiChoose, isBuff, needsPick, nextActor, turnOrder, usable, validTargets } from '../game/battle';
-import { STAGE_NAMES } from '../game/creature';
+import { Creature, STAGE_NAMES, stageOf, xpToNext } from '../game/creature';
 import { express, starRating } from '../game/genome';
-import { FightResult, Loot, Run, finishFight, startBattle, emptyLoot } from '../game/run';
+import { FightResult, Loot, Run, XpLine, finishFight, startBattle, emptyLoot } from '../game/run';
 import { byId } from '../game/save';
 import { castSfx, setMusic, sfx, tap } from './audio';
 import { FxLayer, FxNew, FxSpec, StatusFx, isBeam } from './Fx';
 import { Bar, Btn, C, CreatureView, bodyBoundsCached, hpColor, EggView, LiveCreature, CreatureGround, P, Stars, mixHex, readable, st } from './kit';
-import { F, FadeIn, Glow, Grad, Icon, haptic, shadow } from './look';
+import { F, FadeIn, Glow, Grad, Icon, IconName, haptic, shadow } from './look';
 import type { Pose } from '../render/creature';
 import { rng, useGame } from './store';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+/** A steady number from a name, so a move always plays the same variation for the same kind of creature. */
+const hashOf = (s: string) => { let h = 7; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; };
 const ND = true; // native driver for every transform and opacity animation
 const run = (a: Animated.CompositeAnimation) => new Promise<void>(r => a.start(() => r()));
 
@@ -48,7 +50,7 @@ const STATUS_WORD: Record<StatusKind, string> = {
 const SLOTS = [[0.36, 0.52], [0.36, 0.86], [0.13, 0.36], [0.13, 0.68], [0.13, 1.0]];
 const BOSS_SLOTS = [[0.34, 0.66], [0.1, 0.34], [0.1, 0.68], [0.12, 1.0], [0.4, 1.0]];
 
-interface Float { id: number; uid: number; text: string; color: string; big?: boolean }
+interface Float { id: number; uid: number; text: string; color: string; big?: boolean; /** A smaller line under the number. */ sub?: string; /** Which way it drifts, -1 or 1. */ dx?: number; small?: boolean; /** How far up it starts, when others are already showing over the same creature. */ lift?: number }
 
 /** Per-creature animation values. */
 interface UA {
@@ -77,25 +79,48 @@ const tm = (v: Animated.Value, toValue: number, duration: number, easing?: (t: n
 /** What a creature is doing right now, for its drawing: a pose, running legs, or facing back toward its team. */
 interface Act { pose?: Pose; moving?: boolean; turned?: boolean; /** Still on its feet while it staggers, before it collapses. */ falling?: boolean }
 
+/** One line of floating text with a dark rim, so it reads over any background. */
+function Rimmed({ text, size, color }: { text: string; size: number; color: string }) {
+  const base = { position: 'absolute' as const, left: 0, right: 0, textAlign: 'center' as const, fontFamily: F.bold, fontSize: size, lineHeight: size + 4 };
+  return (
+    <View style={{ height: size + 4 }}>
+      {[[-1.2, 0], [1.2, 0], [0, -1.2], [0, 1.6]].map(([x, y], i) => <Text key={i} style={[base, { color: '#170f2b', transform: [{ translateX: x }, { translateY: y }] }]}>{text}</Text>)}
+      <Text style={[base, { color }]}>{text}</Text>
+    </View>
+  );
+}
+
+/** A damage number or a word over a creature: pops in with a bounce, drifts up and away, and fades. */
 const FloatText = memo(function FloatText({ f, x, y, onDone }: { f: Float; x: number; y: number; onDone: (id: number) => void }) {
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(a, { toValue: 1, duration: 850, easing: Easing.out(Easing.quad), useNativeDriver: ND }).start(() => onDone(f.id));
-  }, [a, f.id, onDone]);
+    Animated.timing(a, { toValue: 1, duration: f.big ? 800 : 680, easing: Easing.linear, useNativeDriver: ND }).start(() => onDone(f.id));
+  }, [a, f.id, f.big, onDone]);
+  const size = f.big ? 25 : f.small ? 12.5 : 18;
+  const rise = f.small ? 9 : 12;
+  // `y` is the line the text sits on (just above the creature's health bar); it pops up from there and keeps drifting.
+  const h = size + 4 + (f.sub ? 12 : 0);
   return (
-    <Animated.Text pointerEvents="none" style={{
-      position: 'absolute', left: x - 60, top: y, width: 120, textAlign: 'center', color: f.color, fontWeight: '900', fontSize: f.big ? 19 : 14,
-      textShadowColor: '#000', textShadowRadius: 3, textShadowOffset: { width: 0, height: 1 },
-      opacity: a.interpolate({ inputRange: [0, 0.7, 1], outputRange: [1, 1, 0] }),
-      transform: [{ translateY: a.interpolate({ inputRange: [0, 1], outputRange: [0, -34] }) }],
-    }}>{f.text}</Animated.Text>
+    <Animated.View pointerEvents="none" style={{
+      position: 'absolute', left: x - 70, top: y - h, width: 140,
+      // Up for a beat to be read, then gone: it sits over the creature it is about, so it must not linger there.
+      opacity: a.interpolate({ inputRange: [0, 0.06, 0.55, 1], outputRange: [0, 1, 1, 0] }),
+      transform: [
+        { translateX: a.interpolate({ inputRange: [0, 1], outputRange: [0, (f.dx ?? 0) * 10] }) },
+        { translateY: a.interpolate({ inputRange: [0, 0.14, 1], outputRange: [10, -rise * 0.45, -rise] }) },
+        { scale: a.interpolate({ inputRange: [0, 0.1, 0.22, 0.34, 1], outputRange: [0.4, f.big ? 1.45 : 1.25, 0.94, 1, 1] }) },
+      ],
+    }}>
+      <Rimmed text={f.text} size={size} color={f.color} />
+      {f.sub ? <View style={{ marginTop: -3 }}><Rimmed text={f.sub} size={11} color={f.color} /></View> : null}
+    </Animated.View>
   );
 });
 
 /** A creature's picture: idles on its own, runs when moving, and shows its current pose. */
-const Sprite = memo(function Sprite({ u, size, walking, ko, pose, turned }: { u: Unit; size: number; walking: boolean; ko: boolean; pose?: Pose; turned?: boolean }) {
+const Sprite = memo(function Sprite({ u, size, walking, ko, pose, turned, run }: { u: Unit; size: number; walking: boolean; ko: boolean; pose?: Pose; turned?: boolean; run?: boolean }) {
   // The ground glow is drawn separately, down on the ground, so it stays put when the creature leaps or leans.
-  return <LiveCreature ph={u.ph} stage={u.stage} size={size} flip={(u.side === 1) !== !!turned} walking={walking && !ko} ko={ko} pose={ko ? 'idle' : pose} shadow={false} ground={false} />;
+  return <LiveCreature ph={u.ph} stage={u.stage} size={size} flip={(u.side === 1) !== !!turned} walking={walking && !ko} run={run} ko={ko} pose={ko ? 'idle' : pose} shadow={false} ground={false} />;
 });
 
 // ---------- scrolling background
@@ -137,6 +162,112 @@ const Backdrop = memo(function Backdrop({ W, H, sky, ground, travel }: { W: numb
           }))}
         </Svg>
       </Animated.View>
+    </View>
+  );
+});
+
+/** The name of the move being used: drops in at the top of the field. Rare and legendary moves get a brighter frame. */
+const MoveBanner = memo(function MoveBanner({ who, move, color, rarity }: { who: string; move: string; color: string; rarity: number }) {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => { Animated.spring(a, { toValue: 1, friction: 7, tension: 150, useNativeDriver: ND }).start(); }, [a]);
+  const ink = readable(color), legend = rarity >= 3, rare = rarity === 2;
+  return (
+    <Animated.View pointerEvents="none" style={{
+      position: 'absolute', top: 6, left: 0, right: 0, alignItems: 'center',
+      opacity: a.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 1, 1] }),
+      transform: [{ translateY: a.interpolate({ inputRange: [0, 1], outputRange: [-16, 0] }) }, { scale: a.interpolate({ inputRange: [0, 1], outputRange: [0.86, 1] }) }],
+    }}>
+      <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: color, borderRadius: 13, paddingHorizontal: legend ? 14 : 12, paddingVertical: legend ? 5 : 4, borderWidth: legend || rare ? 2 : 1.5, borderColor: legend ? '#ffe9a8' : rare ? '#cfe3ff' : 'rgba(0,0,0,0.35)' }, shadow(legend ? '#ffd34d' : '#000', legend ? 10 : 5, legend ? 0.7 : 0.35, legend ? 0 : 2)]}>
+        {legend ? <Icon name="star" size={12} color="#fff3bf" /> : null}
+        <Text style={{ color: ink, fontFamily: F.med, fontSize: 12.5, opacity: 0.85 }} numberOfLines={1}>{who}</Text>
+        <Text style={{ color: ink, fontFamily: F.bold, fontSize: legend ? 15.5 : 14 }} numberOfLines={1}>{move}</Text>
+        {legend ? <Icon name="star" size={12} color="#fff3bf" /> : null}
+      </View>
+    </Animated.View>
+  );
+});
+
+const STYLE_ICON: Record<MoveStyle, IconName> = { melee: 'sword', ranged: 'bolt', area: 'sparkle', support: 'shield' };
+/** The badge says what a move does: a heart for healing and reviving, a shield only for moves that guard. */
+function moveIcon(mv: MoveDef): IconName {
+  if (moveStyle(mv) !== 'support') return STYLE_ICON[moveStyle(mv)];
+  const k = supportKind(mv);
+  return k === 'heal' || k === 'revive' || k === 'cleanse' ? 'heart' : k === 'shield' || k === 'guard' || k === 'ward' ? 'shield' : 'star';
+}
+/** One size for every name on a creature's move list, small enough that its longest name fits. */
+const nameSize = (longest: number) => (longest > 17 ? 12.5 : longest > 15 ? 13 : longest > 13 ? 14 : 15);
+/** A move in a few words: how hard it hits, or what it does instead. */
+function moveBrief(mv: MoveDef): string {
+  if (mv.pow) return `Power ${mv.pow}${(mv.hits ?? 1) > 1 ? ` ×${mv.hits}` : ''}`;
+  if (mv.revive) return 'Revive';
+  if (mv.heal || mv.teamHeal || mv.fullHeal) return 'Heal';
+  if (mv.shield || mv.teamShield) return 'Shield';
+  return mv.target === 'enemy' || mv.target === 'enemies' || mv.target === 'two' ? 'Weaken' : 'Boost';
+}
+const WHO: Record<MoveDef['target'], string> = { enemy: 'one enemy', enemies: 'all enemies', two: 'two enemies', ally: 'one ally', allies: 'the team', self: 'itself', fallen: 'a fallen ally', allFallen: 'all fallen allies' };
+
+/** One move to pick: its element and kind on a badge, its name, and how hard it hits or when it is ready. */
+/** How many pixels a line of the card's small print needs at a given size (Fredoka runs about 0.57 em a letter). */
+const lineFs = (text: string, room: number) => room / (text.length * 0.57);
+/** A card's second line: what it does, its type, and how many turns it rests after use ("CD"). The type is the
+ *  first thing to go if a line cannot fit even at the smallest size: the badge's colour already shows it. */
+function moveLine(mv: MoveDef, width: number): string {
+  const type = mv.id === 'strike' ? 'Typeless' : ELEMENTS[mv.el].name, cd = mv.cd > 0 ? ` · CD ${mv.cd}` : '';
+  const full = `${moveBrief(mv)} · ${type}${cd}`;
+  return lineFs(full, width - 60) >= 9.5 ? full : `${moveBrief(mv)}${cd}`;
+}
+/** One size for the small print on every card of a creature's move list. */
+const subSize = (moves: MoveDef[], width: number) => Math.max(9.5, Math.min(11.5, ...moves.map(m => lineFs(moveLine(m, width), width - 60))));
+const MoveCard = memo(function MoveCard({ mv, ok, cd, on, width, size, sub, onPress }: { mv: MoveDef; ok: boolean; cd: number; on: boolean; width: number; size: number; sub: number; onPress: () => void }) {
+  // The plain Strike has no element: it wears a neutral badge and says so.
+  const strike = mv.id === 'strike', e = strike ? { ...ELEMENTS[mv.el], base: '#8b84a6', light: '#b9b3cf', name: 'Typeless' } : ELEMENTS[mv.el];
+  const ink = readable(e.base);
+  // A rarer move has a frame in its rarity's colour (the same colours as everywhere else in the game).
+  const frame = on ? '#ffffff' : mv.rarity > 0 ? RARITY_COLORS[mv.rarity] : 'rgba(255,255,255,0.12)';
+  return (
+    <Pressable disabled={!ok} onPress={onPress} style={({ pressed }) => [{ width, borderRadius: 15, borderWidth: on ? 2 : 1.5, borderColor: frame, overflow: 'hidden', opacity: ok ? 1 : 0.5, transform: [{ scale: pressed ? 0.96 : 1 }] }, on ? shadow(C.gold, 10, 0.6, 0) : shadow('#000', 4, 0.3, 2)]}>
+      <Grad colors={[mixHex('#3b2f6a', e.base, on ? 0.5 : 0.32), mixHex('#241c44', e.base, on ? 0.2 : 0.08)]} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: on ? 8.5 : 9, paddingHorizontal: on ? 7.5 : 8 }}>
+        <View style={{ width: 34, height: 34, borderRadius: 11, backgroundColor: e.base, borderWidth: 1.5, borderColor: e.light, alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name={moveIcon(mv)} size={19} color={ink} accent={e.base} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: C.text, fontFamily: F.semi, fontSize: size }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{mv.name}</Text>
+          <Text style={{ color: cd > 0 ? '#ffb3a8' : C.dim, fontFamily: F.med, fontSize: sub }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+            {cd > 0 ? `Ready in ${cd}` : !ok ? 'Not usable now' : moveLine(mv, width)}
+          </Text>
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
+/** Your team along the bottom of the fight: a face, a name and a health bar each, so you never lose track of who is hurt. */
+const PartyStrip = memo(function PartyStrip({ units, view, actor, W }: { units: Unit[]; view: UV[]; actor: number | null; W: number }) {
+  const n = Math.max(3, units.length), gap = 6, cw = Math.min(92, (W - 20 - gap * (n - 1)) / n);
+  // Sized so a name's longest word fits the card's width: a word is never split across lines unless it is longer
+  // than the card at the smallest size.
+  const nameFs = Math.max(8.5, Math.min(10.5, ...units.map(u => (cw - 13) / (Math.max(...u.name.split(' ').map(w => w.length)) * 0.6))));
+  return (
+    <View style={{ flexDirection: 'row', gap, justifyContent: 'center', marginBottom: 10 }}>
+      {units.map(u => {
+        const v = view[u.uid];
+        if (!v) return null;
+        const mine = actor === u.uid, frac = v.hp / u.max.hp;
+        return (
+          <View key={u.uid} style={{ width: cw, borderRadius: 13, padding: 5, backgroundColor: mine ? 'rgba(245,197,66,0.14)' : 'rgba(255,255,255,0.05)', borderWidth: 1.5, borderColor: mine ? C.gold : 'rgba(255,255,255,0.08)', opacity: v.alive ? 1 : 0.45 }}>
+            <View style={{ alignItems: 'center', height: 34, justifyContent: 'flex-end' }}>
+              <CreatureView ph={u.ph} stage={u.stage} size={34} shadow={false} ko={!v.alive} />
+            </View>
+            {/* A long name takes a second line (and shrinks a little first on the phone); it is never cut short. */}
+            <View style={{ height: 25, justifyContent: 'center' }}>
+              <Text style={{ color: mine ? C.gold : C.text, fontFamily: F.semi, fontSize: nameFs, lineHeight: 12, textAlign: 'center' }} numberOfLines={2}>{u.name}</Text>
+            </View>
+            <View style={{ marginTop: 2 }}><Bar frac={frac} color={hpColor(frac)} height={5} trail /></View>
+            <Text style={{ color: C.dim, fontFamily: F.med, fontSize: 10, textAlign: 'center', marginTop: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{v.alive ? `${Math.max(0, Math.round(v.hp))} / ${u.max.hp}` : 'Fainted'}</Text>
+          </View>
+        );
+      })}
     </View>
   );
 });
@@ -197,20 +328,51 @@ export function LootView({ title, loot }: { title: string; loot: Loot }) {
   const text = lootLines(loot);
   if (!text && !loot.eggs.length) return null;
   return (
-    <View style={{ marginTop: 8 }}>
-      <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 15 }}>{title}</Text>
-      {text ? <P>{text}</P> : null}
+    <View style={{ marginTop: 10 }}>
+      <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 15, marginBottom: 5 }}>{title}</Text>
+      {text ? <LootChips loot={loot} eggs={0} /> : null}
       {loot.eggs.length ? (
-        <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
-          {loot.eggs.map(e => (
-            <View key={e.id} style={{ alignItems: 'center' }}>
-              <EggView ph={express(e.g)} size={52} />
-              <Stars n={starRating(e.g)} size={10} />
-            </View>
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+          {loot.eggs.map((e, i) => (
+            <FadeIn key={e.id} delay={250 + i * 120} dy={10}>
+              <View style={{ alignItems: 'center' }}>
+                <EggView ph={express(e.g)} size={52} />
+                <Stars n={starRating(e.g)} size={10} />
+              </View>
+            </FadeIn>
           ))}
         </View>
       ) : null}
     </View>
+  );
+}
+
+/** One teammate's share of the experience: its face, what it gained, and how far along its level it now is. */
+function XpRow({ c, x, i }: { c: Creature; x: XpLine; i: number }) {
+  const frac = c.level >= 100 ? 1 : c.xp / Math.max(1, xpToNext(c.level));
+  return (
+    <FadeIn delay={120 + i * 80} dy={8}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 7 }}>
+        <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.07)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+          <CreatureView ph={express(c.g)} stage={stageOf(c)} size={38} shadow={false} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <View style={[st.row, { gap: 6, marginBottom: 3 }]}>
+            <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 15, flexShrink: 1 }} numberOfLines={1}>{c.name}</Text>
+            {x.levels ? (
+              <View style={{ backgroundColor: 'rgba(90,209,122,0.18)', borderColor: C.good, borderWidth: 1, borderRadius: 8, paddingHorizontal: 6 }}>
+                <Text style={{ color: C.good, fontFamily: F.bold, fontSize: 12 }}>Lv {c.level - x.levels} → {c.level}</Text>
+              </View>
+            ) : <Text style={{ color: C.dim, fontFamily: F.med, fontSize: 12 }}>Lv {c.level}</Text>}
+            <View style={{ flex: 1 }} />
+            <Text style={{ color: '#d9ccff', fontFamily: F.semi, fontSize: 13 }}>+{x.xp} XP</Text>
+          </View>
+          <Bar frac={frac} color="#a898ff" height={6} />
+          {x.newStage != null ? <Text style={{ color: C.gold, fontFamily: F.semi, fontSize: 12, marginTop: 2 }}>Grew into {x.newStage === 3 ? 'an' : 'a'} {STAGE_NAMES[x.newStage]}!</Text> : null}
+          {x.learned.map(m => <Text key={m.id} style={{ color: C.accent2, fontFamily: F.med, fontSize: 12, marginTop: 1 }}>Learned {m.name}</Text>)}
+        </View>
+      </View>
+    </FadeIn>
   );
 }
 
@@ -227,7 +389,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const [order, setOrder] = useState<number[]>([]);
   const [actor, setActor] = useState<number | null>(null);
   const [sel, setSel] = useState<MoveDef | null>(null);
-  const [banner, setBanner] = useState<{ text: string; color: string } | null>(null);
+  const [banner, setBanner] = useState<{ who: string; move: string; color: string; rarity: number } | null>(null);
   const [floats, setFloats] = useState<Float[]>([]);
   const [fx, setFx] = useState<FxSpec[]>([]);
   const [result, setResult] = useState<FightResult | null>(null);
@@ -253,7 +415,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const shakeField = useCallback((p: number) => {
     Animated.sequence([p, -p * 0.8, p * 0.55, -p * 0.3, p * 0.12, 0].map(v => tm(quake, v, 42))).start();
   }, [quake]);
+  /** The scenery dims behind a rare or legendary move, so the move itself stands out. */
+  const focus = useRef(new Animated.Value(0)).current;
   const busy = useRef(false);
+  /** Who acted last, so the panel can still say whose turn it is in the beat between turns. */
+  const lastActor = useRef('');
   const D = W * 0.95; // how far the camera travels between chambers
   const enter = useMemo(() => Animated.subtract(D, travel), [D, travel]);
 
@@ -266,8 +432,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     if (!m) { m = mouthPoint(u.ph, u.stage); mouths.current.set(key, m); }
     return m;
   };
-  /** Squash on landing, then spring back. */
-  const land = (a: UA) => Animated.sequence([tm(a.stretch, 0.78, 70), Animated.spring(a.stretch, { toValue: 1, friction: 3, tension: 180, useNativeDriver: ND })]).start();
+  /** Squash low and wide on landing, then spring back. */
+  const land = (a: UA) => Animated.sequence([tm(a.squash, 0.55, 60, Easing.out(Easing.quad)), Animated.spring(a.squash, { toValue: 0, friction: 3.4, tension: 170, useNativeDriver: ND })]).start();
   /** Come down from a leap: squash flat, rebound in a little hop, and settle with a wobble. */
   // Landing squashes low and wide about the feet, then springs back.
   const touchdown = (a: UA, hop: number, lean = 0) => Animated.parallel([
@@ -287,9 +453,23 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     live.current = true;
     return () => { live.current = false; };
   }, []);
+  /** The rings under the creature whose turn it is, and under anything it can target, breathe gently. */
+  const ringPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const l = Animated.loop(Animated.timing(ringPulse, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }));
+    l.start();
+    return () => l.stop();
+  }, [ringPulse]);
 
-  const addFloat = useCallback((uid: number, text: string, color: string, big?: boolean) => {
-    setFloats(fs => [...fs.slice(-14), { id: ++nextId.current, uid, text, color, big }]);
+  /** Where the last text over each creature went up, so the next one stacks above it instead of on top of it. */
+  const floatStack = useRef<Record<number, { at: number; top: number }>>({});
+  const addFloat = useCallback((uid: number, text: string, color: string, o: { big?: boolean; sub?: string; dx?: number; small?: boolean } = {}) => {
+    // Lines that arrive together for one creature take turns over three spots (centre, up to one side, up to the
+    // other) instead of climbing: there is only a short lane between its name and its feet.
+    const now = Date.now(), prev = floatStack.current[uid];
+    const slot = prev && now - prev.at < 420 ? (prev.top + 1) % 3 : 0;
+    floatStack.current[uid] = { at: now, top: slot };
+    setFloats(fs => [...fs.slice(-14), { id: ++nextId.current, uid, text, color, ...o, lift: slot }]);
   }, []);
   const dropFloat = useCallback((id: number) => setFloats(fs => fs.filter(f => f.id !== id)), []);
   const addFx = useCallback((s: FxNew) => setFx(xs => [...xs.slice(-24), { ...(s as FxSpec), id: ++nextId.current }]), []);
@@ -298,6 +478,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
   // ---------- layout
   const b = bRef.current;
+  if (actor != null && b?.units[actor]) lastActor.current = b.units[actor].name;
   const biggest = b ? Math.max(b.units.filter(u => u.side === 0).length, b.units.filter(u => u.side === 1).length) : 5;
   const size = Math.min(W * 0.21, fieldH * 0.25) * (biggest <= 2 ? 1.35 : biggest === 3 ? 1.15 : 1);
   const place = useCallback((u: Unit) => {
@@ -397,14 +578,21 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     let lastStyle = '';
     let lastBig = false;
     let launch = false;
-    for (const e of events) {
+    /** The next damage is a burn or poison taking its toll, not a blow. */
+    let ticking = false;
+    /** The hit before this one was one of several landed by the same sweep. */
+    let wasSpread = false;
+    for (let ei = 0; ei < events.length; ei++) {
+      const e = events[ei];
       if (!live.current) return;
       switch (e.t) {
         case 'move': {
           const u = b.units[e.u];
           moveEl = e.el;
           attackerSide = u.side;
-          setBanner({ text: `${u.name}: ${e.name}`, color: ELEMENTS[e.el].base });
+          setBanner({ who: u.name, move: e.name, color: ELEMENTS[e.el].base, rarity: e.rarity });
+          // Only a legendary move dims the scenery: it should feel like an event, not like every other turn.
+          if (e.rarity >= 3) tm(focus, 0.2, 220, Easing.out(Easing.quad)).start();
           const pa = place(u);
           attackerX = pa.x;
           const a = A(e.u);
@@ -420,9 +608,16 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             melee = e.u;
             meleeAt = { tx, dir };
             followed = false;
+            // Legged bodies run in bounding strides; things that swim or float glide.
+            const legged = u0.ph.skel === 'biped' || u0.ph.skel === 'quad' || u0.ph.skel === 'multi';
             const runTo = async (ms = 300) => {
               setAct(e.u, { moving: true });
-              await run(Animated.parallel([tm(a.ox, tx, ms * T(), Easing.inOut(Easing.quad)), tm(a.oy, ty, ms * T(), Easing.inOut(Easing.quad)), tm(a.lean, 8, 200 * T())]));
+              const d = ms * T(), hopH = pa.sz * 0.06;
+              await run(Animated.parallel([
+                // Push off, carry speed through the middle, and ease up to the target.
+                tm(a.ox, tx, d, Easing.bezier(0.3, 0, 0.35, 1)), tm(a.oy, ty, d, Easing.bezier(0.3, 0, 0.35, 1)), tm(a.lean, 10, d * 0.5, Easing.out(Easing.quad)),
+                ...(legged ? [Animated.sequence([tm(a.air, hopH, d * 0.25, Easing.out(Easing.quad)), tm(a.air, 0, d * 0.25, Easing.in(Easing.quad)), tm(a.air, hopH * 0.8, d * 0.25, Easing.out(Easing.quad)), tm(a.air, 0, d * 0.25, Easing.in(Easing.quad))])] : []),
+              ]));
               setAct(e.u, { moving: false });
             };
             /**
@@ -453,7 +648,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 setAct(e.u, { pose: 'attack' });
                 sfx('swing');
                 addFx({ kind: 'puff', x: pa.x, y: pa.feet - 6 });
-                const hang = 420 * T(), peak = Math.max(Math.min(ty, 0) - fieldH * 0.3, -pa.top - pa.sz * 0.25);
+                // The top of the arc stays under the move's name at the top of the field, even from the back row.
+                const hang = 420 * T(), peak = Math.max(Math.min(ty, 0) - fieldH * 0.3, -Math.max(pa.sz * 0.45, pa.top - 34));
                 // The feet travel along the ground to the target while the body arcs high above them.
                 const high = Math.max(pa.sz * 0.3, ty / 2 - peak);
                 await run(Animated.parallel([
@@ -476,7 +672,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 await crouch(tx, 220);
                 setAct(e.u, { pose: 'cast' });
                 addFx({ kind: 'puff', x: pa.x + tx, y: pa.feet + ty - 6 });
-                const up = Math.max(pa.sz * 0.3, Math.min(pa.sz * 0.8, pa.top + ty + pa.sz * 0.25));
+                const up = Math.max(pa.sz * 0.3, Math.min(pa.sz * 0.8, pa.top + ty - 34));
                 await run(Animated.parallel([
                   tm(a.air, up, 260 * T(), Easing.out(Easing.cubic)),
                   unsquash(70),
@@ -496,7 +692,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               case 'slash':
                 await runTo();
                 await windUp();
-                if (Math.random() < 0.5) {
+                if (hashOf(e.name) % 2 === 0) {
                   await strike(24, 90);
                   addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.midY, dir, n: 3, s: pt.sz * 0.95 });
                 } else {
@@ -577,7 +773,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 break;
               default: {
                 await runTo();
-                const v = Math.random();
+                // Which way a plain attack is thrown depends on the move and the body throwing it, and stays the same each time.
+                const v = (hashOf(e.name + u0.ph.skel) % 100) / 100;
                 if (v < 0.25) {
                   // Headbutt: rear back, then drive in head first.
                   await run(Animated.parallel([tm(a.lean, -20, 150 * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.84, 150 * T()), tm(a.ox, tx - dir * 8, 150 * T())]));
@@ -596,14 +793,17 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                     Animated.parallel([tm(a.air, pa.sz * 0.29, 80, Easing.out(Easing.sin)), tm(a.stretch, 1, 80)]),
                     tm(a.air, 0, 200, Easing.in(Easing.quad)),
                   ]).start(({ finished }) => { if (finished) touchdown(a, 0, 0); });
-                } else if (v < 0.7 && u0.ph.tail !== 'stub') {
-                  // Tail swipe: a quick spin on the spot, the tail sweeping through the target.
+                } else if (v < 0.7 && u0.ph.tail !== 'stub' && e.name !== 'Strike') {
+                  // Tail swipe: sink and coil, then whip round so the tail leads and sweeps through the target,
+                  // and turn back to face it. (The plain Strike keeps to a wound-up blow.)
+                  await crouch(tx + dir * 2, 170);
                   sfx('swing');
-                  for (let i = 0; i < 4; i++) { setAct(e.u, { turned: i % 2 === 0 }); await sleep(55); }
-                  addFx({ kind: 'whirl', el: e.el, x: pa.x + tx + dir * pa.sz * 0.15, y: pa.feet + ty - pa.sz * 0.25, r: pa.sz * 0.5 });
+                  setAct(e.u, { turned: true, pose: 'attack' });
                   addFx({ kind: 'slash', el: e.el, x: pt.x, y: pt.feet - pt.sz * 0.22, dir, n: 1, s: pt.sz * 1.2 });
-                  setAct(e.u, { turned: false, pose: 'attack' });
-                  await run(Animated.parallel([tm(a.ox, tx + dir * 12, 80), tm(a.lean, 10, 80)]));
+                  await run(Animated.parallel([unsquash(70), tm(a.ox, tx + dir * 14, 90, Easing.out(Easing.quad)), tm(a.lean, -14, 90, Easing.out(Easing.quad))]));
+                  await sleep(60);
+                  setAct(e.u, { turned: false });
+                  await run(tm(a.lean, 8, 80, Easing.out(Easing.quad)));
                 } else {
                   await windUp();
                   await strike();
@@ -708,7 +908,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               const beamMove = flair === 'beam' || (flair === 'proj' && isBeam(e.el));
               await gather((big ? 340 : 230) * T() * (beamMove ? 1.25 : 1));
               // A beam holds the caster braced against it for as long as it pours out.
-              const beamHold = beamMove ? Math.round((Math.min(380, 160 + Math.abs(t0.x - mouthX) * 0.5) * T() + 160) * 0.8) : 0;
+              const beamDur = Math.round((big ? 660 : 540) * T());
+              const beamHold = beamMove ? Math.round(beamDur * 0.82) : 0;
               release(t0.x, t0.midY, 'attack', beamHold);
               await sleep(40);
               for (const t of targets) {
@@ -716,9 +917,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                 const x1 = mouthX, y1 = mouthY, x2 = p2.x, y2 = p2.midY;
                 const dur = Math.round(Math.min(380, 160 + Math.abs(x2 - x1) * 0.5) * T());
                 if (flair === 'beam' || (flair === 'proj' && isBeam(e.el))) {
-                  addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: dur + 160 });
-                  // The hit lands as the beam reaches the target.
-                  wait = Math.max(wait, (dur + 160) * 0.26);
+                  addFx({ kind: 'beam', el: e.el, x1, y1, x2, y2, dur: beamDur });
+                  // The hit lands as the beam reaches the target, and the beam keeps pouring into it after.
+                  wait = Math.max(wait, Math.min(150, beamDur * 0.26));
                 } else if (flair === 'volley') {
                   // A spread of smaller shots, one after another.
                   for (let k = 0; k < 4; k++) setTimeout(() => {
@@ -772,33 +973,122 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               if (big) shakeField(3);
               await sleep(160 + targets.length * 90);
             } else {
-              targets.forEach((t, i) => setTimeout(() => { const p2 = place(t); addFx({ kind: 'burst', el: e.el, x: p2.x, y: p2.midY, big: true }); }, i * 45));
-              await sleep(120 * T());
+              // A ring of power rolls out from the caster and breaks over each enemy as it reaches them.
+              const far = Math.max(...targets.map(t => Math.abs(place(t).x - pa.x)), W * 0.4);
+              addFx({ kind: 'nova', el: e.el, x: pa.x, y: pa.feet - pa.sz * 0.12, r: far + pa.sz * 0.4 });
+              targets.forEach(t => {
+                const p2 = place(t);
+                setTimeout(() => addFx({ kind: 'burst', el: e.el, x: p2.x, y: p2.midY, big: true }), 120 + (Math.abs(p2.x - pa.x) / (far + pa.sz * 0.4)) * 300);
+              });
+              await sleep(300 * T());
             }
           } else {
+            // Support moves are acted out by what they do: a healer lifts its light, a guard digs in, a rally is a
+            // roar, a burst of speed is a blur on the spot.
             sfx(e.heal ? 'heal' : castSfx(e.el) === 'magic' ? 'magic' : 'buff');
-            flashPose(e.u, e.heal || !targets.some(t => t.side === b.units[e.u].side) ? 'cast' : 'roar', 500);
-            Animated.sequence([
-              tm(a.air, 12, 120, Easing.out(Easing.quad)),
-              tm(a.air, 0, 160, Easing.in(Easing.quad)),
+            const kind = e.support ?? 'ward';
+            const glow = ELEMENTS[e.el].glow;
+            const settle = () => Animated.parallel([
+              Animated.spring(a.lean, { toValue: 0, friction: 5, tension: 110, useNativeDriver: ND }),
+              Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND }),
+              Animated.spring(a.squash, { toValue: 0, friction: 4, tension: 150, useNativeDriver: ND }),
+              Animated.spring(a.ox, { toValue: 0, friction: 6, tension: 100, useNativeDriver: ND }),
             ]).start();
-            for (const t of targets) {
-              if (!t.alive && !e.heal) continue;
-              const pt = place(t);
-              addFx({ kind: 'aura', color: e.heal ? C.good : ELEMENTS[e.el].glow, x: pt.x, y: pt.feet - pt.sz * 0.55 });
+            const live2 = targets.filter(t => t.alive || e.heal);
+            if (kind === 'heal' || kind === 'cleanse' || kind === 'revive') {
+              // Gather the light low, then lift it up and let it go.
+              flashPose(e.u, 'cast', 620);
+              addFx({ kind: 'gather', el: e.el, x: pa.x, y: pa.midY - pa.sz * 0.35, dur: Math.round(240 * T()) });
+              await run(Animated.parallel([tm(a.squash, 0.4, 200 * T(), Easing.out(Easing.quad)), tm(a.lean, -4, 200 * T())]));
+              Animated.parallel([
+                Animated.sequence([tm(a.air, pa.sz * 0.16, 150, Easing.out(Easing.quad)), tm(a.air, 0, 190, Easing.in(Easing.quad))]),
+                Animated.sequence([tm(a.squash, 0, 70), tm(a.stretch, 0.9, 110, Easing.out(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 140, useNativeDriver: ND })]),
+              ]).start(({ finished }) => { if (finished) settle(); });
+              live2.forEach((t, i) => setTimeout(() => {
+                const pt = place(t);
+                addFx({ kind: 'pillar', color: kind === 'revive' ? '#fff3bf' : kind === 'cleanse' ? '#e6fbff' : C.good, x: pt.x, y: pt.feet, s: pt.sz, plain: kind === 'heal' });
+              }, i * 70));
+              await sleep(300 * T());
+            } else if (kind === 'shield' || kind === 'guard') {
+              // Dig in: drop low and wide with a thump, braced, and the protection rings out from it.
+              flashPose(e.u, 'guard', 650);
+              await run(Animated.parallel([tm(a.air, pa.sz * 0.1, 110 * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.94, 110 * T())]));
+              await run(Animated.parallel([tm(a.air, 0, 90, Easing.in(Easing.quad)), tm(a.stretch, 1, 90)]));
+              land(a);
+              addFx({ kind: 'shock', el: e.el, x: pa.x, y: pa.feet, w: pa.sz * 1.1 });
+              await sleep(240 * T());
+            } else if (kind === 'rally') {
+              // Rear up tall and roar: a ring of nerve rolls out over the team.
+              await run(Animated.parallel([tm(a.squash, 0.45, 170 * T(), Easing.out(Easing.quad)), tm(a.lean, 5, 170 * T())]));
+              flashPose(e.u, 'roar', 600);
+              Animated.sequence([
+                Animated.parallel([tm(a.squash, 0, 70), tm(a.stretch, 0.86, 110, Easing.out(Easing.quad)), tm(a.lean, -10, 110, Easing.out(Easing.quad))]),
+                Animated.delay(140),
+              ]).start(({ finished }) => { if (finished) settle(); });
+              addFx({ kind: 'nova', el: e.el, x: pa.x, y: pa.feet - pa.sz * 0.12, r: pa.sz * 1.5 });
+              await sleep(340 * T());
+            } else if (kind === 'swift') {
+              // A blur on the spot: two quick darts back and forth, leaving streaks.
+              flashPose(e.u, 'happy', 520);
+              addFx({ kind: 'streak', el: e.el, x1: pa.x - dir * pa.sz * 0.7, x2: pa.x + dir * pa.sz * 0.7, y: pa.midY, h: pa.sz * 0.55 });
+              await run(Animated.sequence([
+                Animated.parallel([tm(a.ox, dir * 12, 60, Easing.out(Easing.quad)), tm(a.lean, 12, 60), tm(a.stretch, 1.1, 60)]),
+                Animated.parallel([tm(a.ox, -dir * 10, 80, Easing.inOut(Easing.quad)), tm(a.lean, -8, 80)]),
+                Animated.parallel([tm(a.ox, dir * 7, 70, Easing.inOut(Easing.quad)), tm(a.lean, 6, 70), tm(a.stretch, 1, 70)]),
+              ]));
+              settle();
+              await sleep(200 * T());
+            } else {
+              // A quiet working: power drawn in, a small rise, and it settles on those it is meant for.
+              flashPose(e.u, 'cast', 560);
+              addFx({ kind: 'gather', el: e.el, x: pa.x, y: pa.midY - pa.sz * 0.3, dur: Math.round(260 * T()) });
+              Animated.sequence([tm(a.air, 12, 140, Easing.out(Easing.quad)), tm(a.air, 0, 170, Easing.in(Easing.quad))]).start();
+              await sleep(240 * T());
+              for (const t of live2) { const pt = place(t); addFx({ kind: 'aura', color: glow, x: pt.x, y: pt.feet - pt.sz * 0.55 }); }
+              await sleep(200 * T());
             }
-            await sleep(320 * T());
           }
           break;
         }
         case 'dmg': {
           const t = b.units[e.u];
           const pt = place(t);
+          const a = A(e.u);
+          const away = t.side === 0 ? -1 : 1; // the way a blow pushes this creature: off toward its own side
+          const direct = e.from >= 0 && !ticking;
+          ticking = false;
+          const frac = e.n / Math.max(1, t.max.hp);
+          const heavy = direct && (e.mult > 1 || lastBig || frac > 0.3);
+          // One move striking several creatures lands on them a beat apart, not one long turn each.
+          const nx = events[ei + 1];
+          const more = direct && nx?.t === 'dmg' && nx.from === e.from;
+          const spread = more && nx.u !== e.u;
+          const prevSpread = wasSpread;
+          wasSpread = spread;
+          if (direct) {
+            // The moment of impact: the flash, the sound, and the target crushed back by the blow...
+            // The jagged star is kept for a blow that truly lands hard on one creature; a move that sweeps over
+            // several gives each a smaller flare, so three stars don't bury the field.
+            const star = e.mult >= 1 && (e.mult > 1 || frac > 0.3) && !spread && !(prevSpread);
+            if (lastStyle === 'melee') {
+              addFx({ kind: 'impact', el: moveEl, x: pt.x - away * pt.sz * 0.12, y: pt.midY, big: star, dir: away });
+              addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: heavy });
+            } else {
+              addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: heavy && !spread && !prevSpread });
+              if (lastStyle === 'ranged' || lastStyle === 'area') addFx({ kind: 'impact', el: moveEl, x: pt.x - away * pt.sz * 0.08, y: pt.midY, big: star, dir: away });
+            }
+            sfx(e.mult > 1 || frac > 0.3 ? 'hitBig' : 'hit');
+            if (t.alive) flashPose(e.u, e.shield >= e.n ? 'guard' : 'hurt', 420);
+            Animated.parallel([tm(a.lean, heavy ? -15 : -10, 45, Easing.out(Easing.quad)), tm(a.stretch, heavy ? 0.88 : 0.93, 45, Easing.out(Easing.quad)), tm(a.blink, 0.5, 35)]).start();
+            // ...held for an instant, attacker and target both frozen, so the hit has weight.
+            if (!spread) await sleep((heavy ? 90 : 50) * T());
+          }
+          // Then everything lets go: the number pops, the health drops, and the target is knocked back.
           patch(e.u, v => ({ ...v, hp: Math.max(0, v.hp - (e.n - e.shield)), shield: Math.max(0, v.shield - e.shield) }));
-          addFloat(e.u, `-${e.n}${e.mult > 1 ? '!' : ''}`, e.mult > 1 ? '#ffd34d' : e.mult < 1 ? '#b9b3cc' : '#ff7b7b', e.mult > 1);
-          if (e.mult > 1) addFloat(e.u, e.mult >= 4 ? 'Devastating' : 'Hits hard', '#ffd34d');
-          else if (e.mult < 1) addFloat(e.u, 'Hits weakly', '#b9b3cc');
-          if (e.from >= 0 && lastStyle === 'melee' && melee != null && !followed) {
+          addFloat(e.u, `${e.n}`, e.mult > 1 ? '#ffd34d' : e.mult < 1 ? '#c9c3dc' : direct ? '#ffffff' : '#ff9d7b', {
+            big: e.mult > 1, dx: away, sub: e.mult >= 4 ? 'Devastating!' : e.mult > 1 ? 'Hits hard!' : e.mult < 1 ? 'Hits weakly' : undefined,
+          });
+          if (direct && lastStyle === 'melee' && melee != null && !followed) {
             // Follow-through: the attacker rebounds off the hit and settles, instead of freezing mid-strike.
             followed = true;
             const am = A(melee), mu = melee;
@@ -810,47 +1100,34 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               tm(am.blink, 1, 120),
             ]).start();
           }
-          if (e.from >= 0 && lastStyle === 'melee') {
-            addFx({ kind: 'impact', el: moveEl, x: pt.x - (t.side === 0 ? -1 : 1) * pt.sz * 0.12, y: pt.midY, big: e.mult > 1 || lastBig });
-            addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY });
-            jolt(e.u, t.side === 0 ? -1 : 1, e.mult > 1 || lastBig ? 14 : 8);
-          } else if (e.from >= 0) {
-            addFx({ kind: 'burst', el: moveEl, x: pt.x, y: pt.midY, big: e.mult > 1 });
-            if (lastStyle === 'ranged' || lastStyle === 'area') {
-              // A shot lands with a punch: a burst star on the near side, a knock back, and a flash.
-              addFx({ kind: 'impact', el: moveEl, x: pt.x - (t.side === 0 ? -1 : 1) * pt.sz * 0.08, y: pt.midY, big: e.mult > 1 || lastBig });
-              jolt(e.u, t.side === 0 ? -1 : 1, e.mult > 1 || lastBig ? 11 : 6);
-              const ta = A(e.u);
-              Animated.sequence([tm(ta.blink, 0.4, 40), tm(ta.blink, 1, 110)]).start();
-            }
-          }
           // The screen only shakes for a crushing hit: super effective and a big chunk of health at once.
-          if (e.from >= 0 && e.mult > 1 && e.n > t.max.hp * 0.3) shakeField(3);
+          if (direct && e.mult > 1 && frac > 0.3) shakeField(3);
           if (launch && t.alive) {
             launch = false;
-            const ta = A(e.u);
-            Animated.sequence([tm(ta.air, pt.sz * 0.3, 160, Easing.out(Easing.quad)), tm(ta.air, 0, 200, Easing.in(Easing.quad)), tm(ta.air, pt.sz * 0.06, 90, Easing.out(Easing.quad)), tm(ta.air, 0, 90, Easing.in(Easing.quad))]).start();
+            Animated.sequence([tm(a.air, pt.sz * 0.3, 160, Easing.out(Easing.quad)), tm(a.air, 0, 200, Easing.in(Easing.quad)), tm(a.air, pt.sz * 0.06, 90, Easing.out(Easing.quad)), tm(a.air, 0, 90, Easing.in(Easing.quad))]).start();
           }
           if (e.shield > 0 && t.alive) addFx({ kind: 'shieldUp', x: pt.x, y: pt.midY, s: pt.sz });
-          sfx(e.mult > 1 || e.n > t.max.hp * 0.3 ? 'hitBig' : 'hit');
-          const a = A(e.u);
-          if (t.alive) flashPose(e.u, e.shield >= e.n ? 'guard' : 'hurt', 320);
-          Animated.sequence([
-            Animated.timing(a.lean, { toValue: -10, duration: 60, useNativeDriver: ND }),
-            Animated.spring(a.lean, { toValue: 0, friction: 4, tension: 140, useNativeDriver: ND }),
-          ]).start();
-          Animated.sequence([
-            Animated.timing(a.shake, { toValue: 7, duration: 40, useNativeDriver: ND }), Animated.timing(a.shake, { toValue: -6, duration: 50, useNativeDriver: ND }),
-            Animated.timing(a.shake, { toValue: 3, duration: 40, useNativeDriver: ND }), Animated.timing(a.shake, { toValue: 0, duration: 40, useNativeDriver: ND }),
-          ]).start();
-          Animated.sequence([
-            Animated.timing(a.blink, { toValue: 0.45, duration: 50, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 90, useNativeDriver: ND }),
-          ]).start();
-          await sleep((lastStyle === 'melee' ? 190 : 200) * T());
+          if (direct) {
+            // Knocked back in proportion to the blow (a boss barely budges), then springing back to its spot.
+            const kb = (heavy ? 15 : 8) * Math.min(1.5, 0.75 + frac * 2) * (t.boss ? 0.5 : 1);
+            Animated.parallel([
+              Animated.sequence([tm(a.shake, away * kb, 70, Easing.out(Easing.cubic)), Animated.spring(a.shake, { toValue: 0, friction: 5, tension: 130, useNativeDriver: ND })]),
+              Animated.sequence([tm(a.lean, heavy ? -18 : -12, 60, Easing.out(Easing.quad)), Animated.spring(a.lean, { toValue: 0, friction: 4, tension: 140, useNativeDriver: ND })]),
+              Animated.sequence([tm(a.stretch, 1.05, 80, Easing.out(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 150, useNativeDriver: ND })]),
+              Animated.sequence([tm(a.blink, 0.45, 40), tm(a.blink, 1, 120)]),
+            ]).start();
+          } else {
+            // Burn, poison and the like: a wince, no blow.
+            if (t.alive) flashPose(e.u, 'hurt', 300);
+            Animated.sequence([tm(a.shake, 4, 40), tm(a.shake, -3, 50), tm(a.shake, 0, 40)]).start();
+            Animated.sequence([tm(a.blink, 0.55, 50), tm(a.blink, 1, 100)]).start();
+            sfx('hit');
+          }
+          await sleep((spread ? 70 : more ? 110 : lastStyle === 'melee' ? 150 : 160) * T());
           break;
         }
         case 'miss': {
-          addFloat(e.u, 'Dodged', '#9fe8ff');
+          addFloat(e.u, 'Dodged', '#9fe8ff', { small: true });
           sfx('miss');
           flashPose(e.u, 'guard', 450);
           const a = A(e.u);
@@ -868,7 +1145,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         }
         case 'heal': if (e.n > 0) {
           patch(e.u, v => ({ ...v, hp: v.hp + e.n }));
-          addFloat(e.u, `+${e.n}`, C.good);
+          addFloat(e.u, `+${e.n}`, '#7dffa0');
           const p2 = place(b.units[e.u]);
           addFx({ kind: 'heal', x: p2.x, y: p2.midY, s: p2.sz, color: C.good });
           flashPose(e.u, 'happy', 650);
@@ -876,7 +1153,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         } break;
         case 'shield': if (e.n > 0) {
           patch(e.u, v => ({ ...v, shield: v.shield + e.n }));
-          addFloat(e.u, 'Shield', '#9fe8ff');
+          addFloat(e.u, 'Shield', '#9fe8ff', { small: true });
           sfx('shield');
           const p2 = place(b.units[e.u]);
           addFx({ kind: 'shieldUp', x: p2.x, y: p2.midY, s: p2.sz });
@@ -885,16 +1162,18 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         } break;
         case 'status':
           patch(e.u, v => (v.statuses.includes(e.k) ? v : { ...v, statuses: [...v.statuses, e.k] }));
-          addFloat(e.u, STATUS_WORD[e.k], isBuff(e.k) ? '#9fe8a0' : '#f3a5ff');
+          // No floating word: the badge that appears under the name says which condition it is.
           {
             const p2 = place(b.units[e.u]);
-            addFx({ kind: 'stat', x: p2.x, y: p2.midY, s: p2.sz, color: STATUS_COLOR[e.k], up: isBuff(e.k) });
+            addFx({ kind: 'stat', x: p2.x, y: p2.midY, s: p2.sz, color: STATUS_COLOR[e.k], up: isBuff(e.k), k: e.k });
             if (isBuff(e.k)) flashPose(e.u, 'roar', 450);
           }
           if (!statusSound && !isBuff(e.k) && b.units[e.u].side !== attackerSide) { statusSound = true; sfx('debuff'); }
           await sleep(80 * T());
           break;
-        case 'skip': addFloat(e.u, e.k === 'freeze' ? 'Frozen' : 'Stunned', '#f3a5ff', true); sfx('debuff'); await sleep(380 * T()); break;
+        // A lost turn is announced where turns are announced, in the banner, not as a word over the creature (its
+        // badge already says why).
+        case 'skip': setBanner({ who: b.units[e.u].name, move: "can't move", color: '#8a78b8', rarity: 0 }); sfx('debuff'); await sleep(520 * T()); break;
         case 'faint': {
           patch(e.u, v => ({ ...v, alive: false, hp: 0, shield: 0, statuses: [] }));
           // Played alongside the fight rather than holding it up; several can go down together.
@@ -906,11 +1185,13 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         }
         case 'revive':
           await fainting.current.get(e.u);
-          patch(e.u, v => ({ ...v, alive: true, hp: e.n })); addFloat(e.u, 'Revived!', C.good, true); await reviveAnim(b.units[e.u]); break;
-        case 'text': addFloat(e.u, e.s, '#e7e0ff'); await sleep(130 * T()); break;
+          patch(e.u, v => ({ ...v, alive: true, hp: e.n })); addFloat(e.u, 'Revived!', '#7dffa0'); await reviveAnim(b.units[e.u]); break;
+        case 'text': addFloat(e.u, e.s, '#e7e0ff', { small: true }); await sleep(130 * T()); break;
         case 'tick': {
           const p = place(b.units[e.u]);
-          addFx({ kind: 'burst', el: e.k === 'burn' ? 'ember' : 'venom', x: p.x, y: p.midY });
+          moveEl = e.k === 'burn' ? 'ember' : 'venom';
+          addFx({ kind: 'burst', el: moveEl, x: p.x, y: p.midY });
+          ticking = true;
           break;
         }
       }
@@ -921,6 +1202,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       const m = melee;
       if (bRef.current!.units[m].alive) {
         a.spin.setValue(0);
+        const hs = bRef.current!.units[m].ph.skel, homeLegs = hs === 'biped' || hs === 'quad' || hs === 'multi', homeHop = place(bRef.current!.units[m]).sz * 0.05;
         // Turn with a little squash so the flip reads as a turn, then run home leaning into it.
         setAct(m, { pose: undefined, turned: true, moving: true });
         tm(a.stretch, 1, 90).start();
@@ -929,7 +1211,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         await run(Animated.parallel([
           Animated.timing(a.ox, { toValue: 0, duration: 340 * T(), easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }),
           Animated.timing(a.oy, { toValue: 0, duration: 340 * T(), easing: Easing.inOut(Easing.cubic), useNativeDriver: ND }),
-          tm(a.air, 0, 160 * T(), Easing.in(Easing.quad)),
+          // Down first if it is still in the air, then a bounding stride home for anything with legs.
+          Animated.sequence([
+            tm(a.air, 0, 120 * T(), Easing.in(Easing.quad)),
+            ...(homeLegs ? [tm(a.air, homeHop, 55 * T(), Easing.out(Easing.quad)), tm(a.air, 0, 55 * T(), Easing.in(Easing.quad)), tm(a.air, homeHop * 0.7, 55 * T(), Easing.out(Easing.quad)), tm(a.air, 0, 55 * T(), Easing.in(Easing.quad))] : []),
+          ]),
           Animated.sequence([tm(a.lean, 6, 120 * T(), Easing.out(Easing.quad)), tm(a.lean, 0, 220 * T(), Easing.inOut(Easing.quad))]),
         ]));
         // Arrive: turn back to face the fight and settle.
@@ -937,8 +1223,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         Animated.sequence([tm(a.squash, 0.32, 70), Animated.spring(a.squash, { toValue: 0, friction: 3.5, tension: 150, useNativeDriver: ND })]).start();
       } else setAct(m, null);
     }
+    tm(focus, 0, 300, Easing.inOut(Easing.quad)).start();
     if (live.current) { setView(snap(b)); setOrder(turnOrder(b, 8)); }
-  }, [addFloat, addFx, faintAnim, place, reviveAnim, shakeField, fieldH]);
+  }, [addFloat, addFx, faintAnim, place, reviveAnim, shakeField, fieldH, focus]);
 
   const finish = useCallback(() => {
     const b = bRef.current!;
@@ -984,7 +1271,13 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       await play(events);
       if (uid == null) continue;
       const u = b.units[uid];
-      if (u.side === 0 && !autoRef.current) { setBanner(null); setActor(uid); setSel(null); return; }
+      if (u.side === 0 && !autoRef.current) {
+        setBanner(null); setActor(uid); setSel(null);
+        // A little hop: this one is ready for orders.
+        const ar = A(uid);
+        Animated.sequence([tm(ar.air, 8, 110, Easing.out(Easing.quad)), tm(ar.air, 0, 130, Easing.in(Easing.quad))]).start();
+        return;
+      }
       await sleep((u.side === 0 ? 150 : 300) * T());
       const c = aiChoose(b, uid);
       await play(act(b, uid, c.move, c.target));
@@ -1103,6 +1396,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       <View style={{ width: W, height: fieldH, overflow: 'hidden', backgroundColor: theRun.ground }}>
       <Animated.View style={{ position: 'absolute', left: 0, top: 0, width: W, height: fieldH, transform: [{ translateX: quake }, { translateY: Animated.multiply(quake, 0.4) }] }}>
         <Backdrop W={W} H={fieldH} sky={theRun.sky} ground={theRun.ground} travel={travel} />
+        <Animated.View pointerEvents="none" style={{ position: 'absolute', left: -W * 0.1, top: -fieldH * 0.1, width: W * 1.2, height: fieldH * 1.2, backgroundColor: '#0d0722', opacity: focus }} />
 
         {b && units.map(u => {
           const v = view[u.uid];
@@ -1123,7 +1417,8 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               ],
             }}>
               <Pressable onPress={() => onTapUnit(u.uid)} style={{ width: pos.sz, height: pos.sz }}>
-                {(canPick || isActor) ? <View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: isActor ? C.gold : allyPick ? C.good : C.bad, backgroundColor: isActor ? 'rgba(245,197,66,0.18)' : 'rgba(255,255,255,0.12)' }} /> : null}
+                {(canPick || isActor) ? <Animated.View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: isActor ? C.gold : allyPick ? C.good : C.bad, backgroundColor: isActor ? 'rgba(245,197,66,0.18)' : 'rgba(255,255,255,0.12)',
+                  opacity: ringPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.7, 1, 0.7] }), transform: [{ scale: ringPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.07, 1] }) }] }} /> : null}
                 {/* The shadow lies on the ground on its own, so it stays flat when the creature leans or falls over,
                     and stays down when it leaps, shrinking and fading the higher the creature goes. */}
                 <Animated.View pointerEvents="none" style={{
@@ -1165,7 +1460,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                     { translateY: -pos.sz * 0.42 },
                   ],
                 }}>
-                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} ko={!v.alive && !acts[u.uid]?.falling} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
+                  <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} run={!!acts[u.uid]?.moving} ko={!v.alive && !acts[u.uid]?.falling} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
                   {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} part="body" bounds={bodyBoundsCached(u.ph, u.stage)} flip={u.side === 1} /> : null}
                 </Animated.View>
                 </Animated.View>
@@ -1188,7 +1483,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               ],
             }}>
               <View style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
-                <Bar frac={v.hp / u.max.hp} color={hpColor(v.hp / u.max.hp)} height={5} />
+                <View style={{ borderRadius: 4, borderWidth: 1, borderColor: 'rgba(15,10,30,0.7)' }}><Bar frac={v.hp / u.max.hp} color={hpColor(v.hp / u.max.hp)} height={5} trail /></View>
                 {v.shield > 0 ? <View style={{ marginTop: 1 }}><Bar frac={v.shield / (u.max.hp * 0.6)} color="#9fe8ff" height={3} /></View> : null}
                 <Text style={{ color: u.side === 1 ? '#ffc2c7' : '#fff', fontSize: 8, fontWeight: '700', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 2 }} numberOfLines={1}>{u.ph.shiny ? '✦ ' : ''}Lv{u.level} {u.name}</Text>
                 {v.statuses.length ? (
@@ -1219,18 +1514,21 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
 
         <FxLayer items={fx} onDone={dropFx} W={W} H={fieldH} />
 
-        {b && floats.map((f, i) => {
+        {b && floats.map(f => {
           const u = b.units[f.uid];
           if (!u) return null;
           const pos = place(u);
-          return <FloatText key={f.id} f={f} x={pos.x} y={pos.top + (i % 3) * 12 - 4} onDone={dropFloat} />;
+          // Numbers pop up above the health bar, so the bar can be seen dropping under them.
+          // Text pops up over the creature it is about (its head and shoulders), where there is no doubt whose it
+          // is: the space above a creature's head belongs to whoever stands in the row behind.
+          // The lane: below the creature's own bar, name and condition badges (the top 22 px of its box), above
+          // its feet, where the bar of whoever stands in the row in front begins.
+          const slot = f.lift ?? 0, fh = (f.big ? 29 : f.small ? 16.5 : 22) + (f.sub ? 12 : 0);
+          const fy = Math.max(pos.top + 24 + fh + 12, pos.top + pos.sz * 0.8 - [0, 13, 7][slot]);
+          return <FloatText key={f.id} f={f} x={Math.max(40, Math.min(W - 40, pos.x + [0, 24, -24][slot] + (f.dx ?? 0) * pos.sz * 0.2))} y={fy} onDone={dropFloat} />;
         })}
 
-        {banner && mode === 'fight' ? (
-          <View pointerEvents="none" style={{ position: 'absolute', top: 4, alignSelf: 'center', backgroundColor: banner.color, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 4, borderWidth: 1, borderColor: '#0006' }}>
-            <Text style={{ color: readable(banner.color), fontWeight: '800', fontSize: 13 }}>{banner.text}</Text>
-          </View>
-        ) : null}
+        {banner && mode === 'fight' ? <MoveBanner key={banner.who + banner.move} who={banner.who} move={banner.move} color={banner.color} rarity={banner.rarity} /> : null}
         {mode === 'walk' ? (
           <View pointerEvents="none" style={{ position: 'absolute', top: 6, alignSelf: 'center', backgroundColor: '#0008', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 4 }}>
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>{fightNo <= 1 ? 'Entering...' : fight?.boss ? 'Something big is ahead...' : 'On to the next chamber...'}</Text>
@@ -1240,35 +1538,30 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       </View>
 
       <View style={{ flex: 1, padding: 10 }}>
+        {/* Your team's health sits right under the field, where the eye already is; the moves come below it, in reach of a thumb. */}
+        {b && !result && winH >= 700 ? <PartyStrip units={b.units.filter(u => u.side === 0)} view={view} actor={actor} W={W} /> : null}
+        <View style={{ flex: 1 }}>
         {me && b ? (
           <>
-            <View style={[st.row, { marginBottom: 6 }]}>
-              <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 17, flex: 1 }} numberOfLines={1}>{me.name}'s turn</Text>
-              <Text style={{ color: C.dim, fontSize: 11 }}>{sel ? (needsPick(sel) ? 'Tap a highlighted target' : '') : 'Pick a move'}</Text>
+            <View style={[st.row, { marginBottom: 7 }]}>
+              <Text style={{ color: C.gold, fontFamily: F.bold, fontSize: 18, flex: 1 }} numberOfLines={1}>{me.name}'s turn</Text>
+              <Text style={{ color: sel && needsPick(sel) ? C.gold : C.dim, fontFamily: F.med, fontSize: 12 }}>{sel ? (needsPick(sel) ? 'Tap a highlighted target' : '') : 'Pick a move'}</Text>
             </View>
-            <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-              {me.moves.map(mv => {
-                const ok = usable(b, me, mv);
-                const cd = me.cds[mv.id] ?? 0;
-                const e = ELEMENTS[mv.el];
-                const on = sel?.id === mv.id;
-                return (
-                  <Pressable key={mv.id} disabled={!ok} onPress={() => { sfx('select'); haptic('select'); setSel(mv); }} style={({ pressed }) => [{ width: (W - 26) / 2, borderRadius: 14, borderWidth: on ? 2 : 1, borderColor: on ? C.gold : 'rgba(255,255,255,0.1)', overflow: 'hidden', opacity: ok ? 1 : 0.45, transform: [{ scale: pressed ? 0.96 : 1 }] }, on ? shadow(C.gold, 10, 0.6, 0) : null]}>
-                    <Grad colors={[mixHex('#352a60', e.base, on ? 0.45 : 0.3), '#231b40']} />
-                    <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 5, backgroundColor: e.base }} />
-                    <View style={{ padding: 8, paddingLeft: 12 }}>
-                    <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 15 }} numberOfLines={1}>{mv.name}</Text>
-                    <Text style={{ color: C.dim, fontSize: 10.5 }} numberOfLines={1}>{cd > 0 ? `Ready in ${cd}` : !ok ? 'Not usable' : mv.id === 'strike' ? 'Typeless' : e.name}{mv.cd && cd <= 0 ? ` · cd ${mv.cd}` : ''}</Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
+            <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+              {me.moves.map(mv => (
+                <MoveCard key={mv.id} mv={mv} size={nameSize(Math.max(...me.moves.map(m => m.name.length)))} sub={subSize(me.moves, (W - 26) / 2)} ok={usable(b, me, mv)} cd={me.cds[mv.id] ?? 0} on={sel?.id === mv.id} width={(W - 26) / 2} onPress={() => { sfx('select'); haptic('select'); setSel(mv); }} />
+              ))}
             </ScrollView>
             {sel ? (
-              <View style={[st.row, { marginTop: 6 }]}>
-                <Text style={{ color: C.text, fontSize: 12, flex: 1 }}>{sel.desc}</Text>
-                {!needsPick(sel) ? <Btn small kind="gold" label="Use" onPress={() => fire(sel, targets[0] ?? -1)} /> : null}
-              </View>
+              <FadeIn key={sel.id} dy={6}>
+                <View style={[st.row, { marginTop: 7, borderRadius: 12, paddingVertical: 7, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.06)', borderLeftWidth: 3, borderLeftColor: ELEMENTS[sel.el].base }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: C.text, fontSize: 12.5, lineHeight: 17 }}>{sel.desc}</Text>
+                    <Text style={{ color: C.dim, fontFamily: F.med, fontSize: 11, marginTop: 1 }}>Targets {WHO[sel.target]}{sel.cd ? ` · ${sel.cd}-turn cooldown` : ''}</Text>
+                  </View>
+                  {!needsPick(sel) ? <Btn small kind="gold" label="Use" onPress={() => fire(sel, targets[0] ?? -1)} /> : null}
+                </View>
+              </FadeIn>
             ) : null}
           </>
         ) : save.auto && result && !result.runOver ? (
@@ -1316,9 +1609,11 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 13, marginBottom: 6 }}>Won so far this run{wins ? ` (${wins} fight${wins > 1 ? 's' : ''})` : ''}</Text>
             <LootChips loot={runLoot} />
           </FadeIn>
-        ) : (
-          <P dim style={{ textAlign: 'center', marginTop: 12 }}>{mode === 'walk' || result ? '' : 'Waiting...'}</P>
-        )}
+        ) : mode === 'fight' && !result && b ? (
+          // Someone else is acting: say who, so the panel is never an empty box.
+          <Text style={{ color: C.dim, fontFamily: F.semi, fontSize: 15, textAlign: 'center', marginTop: 14 }} numberOfLines={1}>{lastActor.current ? `${lastActor.current}'s turn` : 'Waiting...'}</Text>
+        ) : null}
+        </View>
       </View>
 
       {result && !(save.auto && !result.runOver) ? (
@@ -1333,18 +1628,9 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             </Text>
             {result.note ? <P style={{ textAlign: 'center', marginTop: 4 }}>{result.note}</P> : null}
             <ScrollView style={{ marginTop: 8 }}>
-              {result.xp.map(x => {
+              {result.xp.map((x, i) => {
                 const c = byId(save, x.cid);
-                if (!c) return null;
-                return (
-                  <View key={x.cid} style={{ marginBottom: 5 }}>
-                    <Text style={{ color: C.text, fontSize: 13 }}>
-                      <Text style={{ fontFamily: F.semi, fontSize: 15 }}>{c.name}</Text>  +{x.xp} XP{x.levels ? <Text style={{ color: C.good, fontFamily: F.semi }}>  Lv {c.level - x.levels} → {c.level}</Text> : null}
-                    </Text>
-                    {x.newStage != null ? <Text style={{ color: C.gold, fontSize: 12, fontWeight: '700' }}>Grew into {x.newStage === 3 ? 'an' : 'a'} {STAGE_NAMES[x.newStage]}!</Text> : null}
-                    {x.learned.map(m => <Text key={m.id} style={{ color: C.accent2, fontSize: 12 }}>Learned {m.name}</Text>)}
-                  </View>
-                );
+                return c ? <XpRow key={x.cid} c={c} x={x} i={i} /> : null;
               })}
               <LootView title="Drops" loot={result.drops} />
               {result.chest ? <LootView title={theRun.kind === 'raid' ? 'Raid rewards' : 'Boss chest'} loot={result.chest} /> : null}

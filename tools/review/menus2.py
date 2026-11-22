@@ -1,0 +1,37 @@
+import sys, time, subprocess, os
+from playwright.sync_api import sync_playwright
+dist, out, port = sys.argv[1], sys.argv[2], sys.argv[3]
+os.makedirs(out, exist_ok=True)
+save = open('/tmp/save2.json').read()
+srv = subprocess.Popen([sys.executable, '-m', 'http.server', port, '--bind', '127.0.0.1', '-d', dist], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(1)
+errors = []
+with sync_playwright() as p:
+    b = p.chromium.launch(channel='chrome', headless=True, args=['--no-sandbox'])
+    pg = b.new_page(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
+    pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' and '404' not in m.text else None)
+    pg.on('pageerror', lambda e: errors.append('PAGEERROR ' + str(e)))
+    pg.goto(f'http://127.0.0.1:{port}/index.html'); pg.wait_for_timeout(800)
+    pg.evaluate('s => localStorage.setItem("hatchlore.save.v1", s)', save)
+    pg.reload(); pg.wait_for_timeout(1800)
+    shot = lambda n: pg.screenshot(path=f'{out}/{n}.png')
+    click = lambda t, exact=True: (pg.get_by_text(t, exact=exact).last.click(), pg.wait_for_timeout(600))
+    click('Creatures'); shot('1_roster')
+    click('Release several'); shot('2_picking')
+    click('1★'); click('2★'); shot('3_picked')
+    pg.get_by_text('Release', exact=True).last.click(); pg.wait_for_timeout(500); shot('4_sure')
+    pg.get_by_text('Release ', exact=False).last.click(); pg.wait_for_timeout(800); shot('5_released')
+    pg.mouse.click(70, 260); pg.wait_for_timeout(900)
+    pg.mouse.wheel(0, 380); pg.wait_for_timeout(500); shot('6_detail_level')
+    pg.get_by_text('+1 level', exact=False).first.click(); pg.wait_for_timeout(700); shot('7_trained')
+    pg.get_by_text('+5 levels', exact=False).first.click(); pg.wait_for_timeout(700); shot('7b_trained5')
+    pg.mouse.wheel(0, 4000); pg.wait_for_timeout(500)
+    pg.get_by_text('Release', exact=True).last.click(); pg.wait_for_timeout(600); shot('8_release_confirm')
+    pg.get_by_text('Keep', exact=True).last.click(); pg.wait_for_timeout(300)
+    pg.get_by_text('Close', exact=True).last.click(); pg.wait_for_timeout(600)
+    click('Nursery'); pg.mouse.wheel(0, 2000); pg.wait_for_timeout(500); shot('9_eggs')
+    pg.get_by_text('Discard selected egg', exact=False).last.click(); pg.wait_for_timeout(600); pg.mouse.wheel(0, 2000); pg.wait_for_timeout(300); shot('10_discard')
+    pg.get_by_text('Discard', exact=True).last.click(); pg.wait_for_timeout(700); shot('11_discarded')
+    b.close()
+srv.terminate()
+print('ERRORS:', len(errors)); [print(' ', e[:200]) for e in errors[:10]]
