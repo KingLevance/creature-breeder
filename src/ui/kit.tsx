@@ -197,7 +197,7 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
       t = setTimeout(() => {
         const pick: Fidget = (['hop', 'look', 'flick', 'stretch', 'wiggle', 'look', 'flick'] as Fidget[])[Math.floor(Math.random() * 7)];
         setFid(pick);
-        if (pick === 'hop') Animated.sequence([0, 1, 0, 0.6, 0].map((v, i) => Animated.timing(hop, { toValue: v, duration: [1, 150, 170, 120, 140][i], easing: v ? Easing.out(Easing.quad) : Easing.in(Easing.quad), useNativeDriver: ND }))).start();
+        if (pick === 'hop') { hop.setValue(0); Animated.timing(hop, { toValue: 1, duration: 760, easing: Easing.linear, useNativeDriver: ND }).start(); }
         if (pick === 'flick') Animated.sequence([1, -0.7, 0.4, 0].map(v => Animated.timing(flick, { toValue: v, duration: 110, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }))).start();
         if (pick === 'wiggle') Animated.sequence([1, -1, 0.6, -0.4, 0].map(v => Animated.timing(wiggle, { toValue: v, duration: 90, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }))).start();
         if (pick === 'look') { setLook(-1); later(700, () => setLook(1)); later(1300, () => setLook(0)); }
@@ -259,12 +259,18 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
     const wing = deg(wave(beat, wingSwing * amp, 0, 1, off));
     const wingFar = deg(wave(beat, wingSwing * 0.8 * amp, 0, 1, off - 0.08));
     const hover = fly ? wave(breath, 1.6 * amp * (size / 100), 0, 1, off + 0.25) : null;
-    const lift = Animated.multiply(hop, -size * 0.08);
-    // The sway: a degree or so about the feet; things that float drift a little more.
-    const rot = deg(Animated.add(Animated.multiply(wiggle, 5), wave(sway, (fly ? 1.5 : 0.8) * amp * (walking ? 0 : 1), 0, 1, off)));
+    // A hop is one timeline: sink and gather, spring up tall and thin, come down, squash on landing, settle.
+    const H = [0, 0.2, 0.42, 0.62, 0.7, 0.84, 1];
+    const lift = hop.interpolate({ inputRange: H, outputRange: [0, 0, -size * 0.1, 0, 0, 0, 0] });
+    const hy = hop.interpolate({ inputRange: H, outputRange: [1, 0.84, 1.1, 1.04, 0.84, 1.04, 1] });
+    const hx = hop.interpolate({ inputRange: H, outputRange: [1, 1.12, 0.93, 0.97, 1.13, 0.98, 1] });
+    const rot = deg(Animated.multiply(wiggle, 5));
+    // The sway is a bend of the body over its planted feet, not a tilt of the whole thing: the top drifts side to
+    // side while the feet stay put. The breath gives it a little forward-and-back too, a beat behind the swell.
+    const bend = deg(Animated.add(wave(sway, (fly ? 2.4 : 3) * amp * (walking ? 0 : 1), 0, 1, off), wave(breath, 1.1 * amp * (walking ? 0 : 1), 0, 1, off - 0.3)));
     // The shadow stays on the ground through a hop, shrinking a little while the body is up.
-    const under = hop.interpolate({ inputRange: [0, 1], outputRange: [1, 0.8] });
-    return { sy, sx, tail, wing, wingFar, hover, lift, rot, under };
+    const under = hop.interpolate({ inputRange: H, outputRange: [1, 1.06, 0.8, 1, 1.08, 1, 1] });
+    return { sy, sx, tail, wing, wingFar, hover, lift, rot, bend, hy, hx, under };
   }, [ph, ko, walking, breath, beat, sway, flick, hop, wiggle, off, wingSwing, size]);
 
   const s = size / 100, fy = 40 * s;
@@ -279,7 +285,7 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
     <Animated.View style={[StyleSheet.absoluteFill, {
       transform: [
         { translateY: anim.hover ? Animated.add(anim.lift, anim.hover) : anim.lift },
-        { translateY: fy }, { rotate: anim.rot }, { scaleY: anim.sy }, { scaleX: anim.sx }, { translateY: -fy },
+        { translateY: fy }, { rotate: anim.rot }, { skewX: anim.bend }, { scaleY: Animated.multiply(anim.sy, anim.hy) }, { scaleX: Animated.multiply(anim.sx, anim.hx) }, { translateY: -fy },
       ],
     }]}>
       {rig.wingFar.length && rig.pivots.wingFar ? <Animated.View style={[StyleSheet.absoluteFill, { transform: about(rig.pivots.wingFar, size, anim.wingFar) }]}>{svg(rig.wingFar)}</Animated.View> : null}

@@ -63,6 +63,12 @@ interface UA {
   /** A spin about the body's middle, in degrees, for rolling attacks. */
   spin: Animated.Value;
   /**
+   * A bend of the body over its planted feet, in degrees of skew, positive = the top thrown to the right of the
+   * screen. Driven by impulses that spring back with a wobble (a blow, the snap of a strike, a landing), so the body
+   * flexes and settles like something alive instead of tipping as one stiff piece.
+   */
+  flex: Animated.Value;
+  /**
    * Height off the ground in px, for leaps and hops. Only the body rises: the shadow, ground glow and target ring
    * stay down on the ground (oy is where on the ground the creature stands).
    */
@@ -72,7 +78,7 @@ const newUA = (): UA => ({
   ox: new Animated.Value(0), oy: new Animated.Value(0), shake: new Animated.Value(0), blink: new Animated.Value(1),
   down: new Animated.Value(0), squash: new Animated.Value(0), fade: new Animated.Value(1),
   lean: new Animated.Value(0), stretch: new Animated.Value(1), behind: new Animated.Value(0), spin: new Animated.Value(0),
-  air: new Animated.Value(0),
+  air: new Animated.Value(0), flex: new Animated.Value(0),
 });
 const tm = (v: Animated.Value, toValue: number, duration: number, easing?: (t: number) => number) =>
   Animated.timing(v, { toValue, duration: Math.max(1, Math.round(duration)), easing, useNativeDriver: ND });
@@ -442,10 +448,14 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     Animated.sequence([Animated.delay(50), tm(a.air, hop, 120, Easing.out(Easing.quad)), tm(a.air, 0, 130, Easing.in(Easing.quad))]),
     Animated.sequence([Animated.delay(60), Animated.spring(a.lean, { toValue: lean, friction: 4, tension: 120, useNativeDriver: ND })]),
   ]).start();
+  /** Throw the top of the body `deg` degrees one way (screen space) and let it wobble back to upright. */
+  const wobble = (a: UA, deg: number, ms = 55, friction = 3.2) =>
+    Animated.sequence([tm(a.flex, deg, ms, Easing.out(Easing.quad)), Animated.spring(a.flex, { toValue: 0, friction, tension: 190, useNativeDriver: ND })]).start();
   /** A quick knock backward, for a creature that takes a hit. */
   const jolt = (uid: number, dir: number, px: number) => {
     const a = A(uid);
     Animated.sequence([tm(a.shake, dir * px, 45, Easing.out(Easing.quad)), Animated.spring(a.shake, { toValue: 0, friction: 4, tension: 160, useNativeDriver: ND })]).start();
+    wobble(a, dir * Math.min(10, px * 0.9));
   };
   const T = () => (fastRef.current ? 0.5 : 1);
 
@@ -632,11 +642,13 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             /** Out of a crouch: the squash lets go as the body snaps tall and thin leaving the ground. */
             const unsquash = (ms = 80) => tm(a.squash, 0, ms, Easing.out(Easing.quad));
             // Wind up: lean back and crouch.
-            const windUp = (ms = 130) => run(Animated.parallel([tm(a.lean, -14, ms * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.88, ms * T()), tm(a.ox, tx - dir * 6, ms * T())]));
+            const windUp = (ms = 130) => run(Animated.parallel([tm(a.lean, -14, ms * T(), Easing.out(Easing.quad)), tm(a.stretch, 0.88, ms * T()), tm(a.ox, tx - dir * 6, ms * T()), tm(a.flex, -dir * 5, ms * T(), Easing.out(Easing.quad))]));
             // Strike: snap forward with the attack pose.
             const strike = (push = 16, ms = 80) => {
               setAct(e.u, { pose: 'attack' });
               sfx('swing');
+              // The top lags the snap, then whips through past the feet and wobbles back: follow-through.
+              Animated.sequence([tm(a.flex, -dir * 6, ms * 0.5, Easing.out(Easing.quad)), tm(a.flex, dir * 9, ms * 0.9, Easing.out(Easing.quad)), Animated.spring(a.flex, { toValue: 0, friction: 3.2, tension: 170, useNativeDriver: ND })]).start();
               return run(Animated.parallel([tm(a.lean, 18, ms, Easing.out(Easing.quad)), tm(a.stretch, 1.14, ms), tm(a.ox, tx + dir * push, ms, Easing.out(Easing.quad))]));
             };
             switch (e.flair as Flair) {
@@ -1115,11 +1127,15 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
               Animated.sequence([tm(a.lean, heavy ? -18 : -12, 60, Easing.out(Easing.quad)), Animated.spring(a.lean, { toValue: 0, friction: 4, tension: 140, useNativeDriver: ND })]),
               Animated.sequence([tm(a.stretch, 1.05, 80, Easing.out(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 4, tension: 150, useNativeDriver: ND })]),
               Animated.sequence([tm(a.blink, 0.45, 40), tm(a.blink, 1, 120)]),
+              // The blow compresses the body and throws its top away from the attacker; it wobbles back upright.
+              Animated.sequence([tm(a.squash, heavy ? 0.32 : 0.2, 50, Easing.out(Easing.quad)), Animated.spring(a.squash, { toValue: 0, friction: 3.6, tension: 200, useNativeDriver: ND })]),
+              Animated.sequence([tm(a.flex, away * (heavy ? 13 : 9) * (t.boss ? 0.5 : 1), 55, Easing.out(Easing.quad)), Animated.spring(a.flex, { toValue: 0, friction: 2.9, tension: 200, useNativeDriver: ND })]),
             ]).start();
           } else {
             // Burn, poison and the like: a wince, no blow.
             if (t.alive) flashPose(e.u, 'hurt', 300);
             Animated.sequence([tm(a.shake, 4, 40), tm(a.shake, -3, 50), tm(a.shake, 0, 40)]).start();
+            wobble(a, 6, 50, 3.4);
             Animated.sequence([tm(a.blink, 0.55, 50), tm(a.blink, 1, 100)]).start();
             sfx('hit');
           }
@@ -1316,7 +1332,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     // the native side holding the old value (a faded-out enemy's opacity 0), which made new enemies invisible.
     for (const u of b.units) {
       const a = A(u.uid);
-      a.ox.setValue(0); a.oy.setValue(0); a.shake.setValue(0); a.blink.setValue(1); a.squash.setValue(0); a.lean.setValue(0); a.stretch.setValue(1); a.spin.setValue(0); a.air.setValue(0);
+      a.ox.setValue(0); a.oy.setValue(0); a.shake.setValue(0); a.blink.setValue(1); a.squash.setValue(0); a.lean.setValue(0); a.stretch.setValue(1); a.spin.setValue(0); a.air.setValue(0); a.flex.setValue(0);
       a.down.setValue(u.alive ? 0 : 1);
       // Enemies start hidden and fade in once the walk is under way. These values are shared by uid with the last
       // fight's (dead, faded) enemies, whose views are still mounted for a moment: showing them now would flash
@@ -1439,7 +1455,10 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
                   transform: [
                     { translateY: Animated.multiply(a.air, -1) },
                     { translateY: pos.sz * 0.42 },
-                    { rotate: a.lean.interpolate({ inputRange: [-90, 90], outputRange: u.side === 0 ? ['-90deg', '90deg'] : ['90deg', '-90deg'] }) },
+                    // A lean is half a tip of the whole body and half a bend of it over the feet, so the body flexes
+                    // into a move instead of tilting like a plank; the bend is capped so the face never smears.
+                    { rotate: a.lean.interpolate({ inputRange: [-90, 90], outputRange: u.side === 0 ? ['-50deg', '50deg'] : ['50deg', '-50deg'] }) },
+                    { skewX: Animated.add(Animated.multiply(a.lean, u.side === 0 ? -0.5 : 0.5), Animated.multiply(a.flex, -1)).interpolate({ inputRange: [-18, 18], outputRange: ['-18deg', '18deg'], extrapolate: 'clamp' }) },
                     { scaleX: a.stretch },
                     { scaleY: a.stretch.interpolate({ inputRange: [0.5, 1, 1.5], outputRange: [1.4, 1, 0.8] }) },
                     { translateY: -pos.sz * 0.42 },
