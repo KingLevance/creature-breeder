@@ -80,6 +80,46 @@ const newUA = (): UA => ({
   lean: new Animated.Value(0), stretch: new Animated.Value(1), behind: new Animated.Value(0), spin: new Animated.Value(0),
   air: new Animated.Value(0), flex: new Animated.Value(0),
 });
+/** All the animated transforms one creature on the field needs, built once (see `nodesOf` in the fight screen). */
+function buildNodes(a: UA, side: number, sz: number, enter: Animated.AnimatedNode, travel: Animated.Value) {
+  const fallDir = side === 0 ? -1 : 1;
+  const tx = side === 1 ? Animated.add(Animated.add(enter as Animated.Value, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind));
+  const airK = a.air.interpolate({ inputRange: [0, sz], outputRange: [1, 0.55], extrapolate: 'clamp' });
+  return {
+    place: [{ translateX: tx }, { translateY: a.oy }],
+    hud: [{ translateX: tx }, { translateY: Animated.subtract(a.oy, a.air) }],
+    shadowOp: Animated.multiply(a.fade, a.air.interpolate({ inputRange: [0, sz], outputRange: [1, 0.4], extrapolate: 'clamp' })),
+    shadow: [
+      { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * sz * 0.03] }) },
+      { scaleX: Animated.multiply(a.down.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }), airK) },
+      { scaleY: airK },
+    ],
+    body: [
+      { translateY: Animated.multiply(a.air, -1) },
+      { translateY: sz * 0.42 },
+      // A lean is half a tip of the whole body and half a bend of it over the feet, so the body flexes into a move
+      // instead of tilting like a plank; the bend is capped so the face never smears.
+      { rotate: a.lean.interpolate({ inputRange: [-90, 90], outputRange: side === 0 ? ['-50deg', '50deg'] : ['50deg', '-50deg'] }) },
+      { skewX: Animated.add(Animated.multiply(a.lean, side === 0 ? -0.5 : 0.5), Animated.multiply(a.flex, -1)).interpolate({ inputRange: [-18, 18], outputRange: ['-18deg', '18deg'], extrapolate: 'clamp' }) },
+      { scaleX: a.stretch },
+      { scaleY: a.stretch.interpolate({ inputRange: [0.5, 1, 1.5], outputRange: [1.4, 1, 0.8] }) },
+      { translateY: -sz * 0.42 },
+    ],
+    bodyOp: Animated.multiply(a.fade, a.blink),
+    inner: [
+      { rotate: a.spin.interpolate({ inputRange: [0, 360], outputRange: side === 0 ? ['0deg', '360deg'] : ['0deg', '-360deg'] }) },
+      // Lying down is in the drawing itself; this only settles it a touch lower, tipped a few degrees.
+      { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * sz * 0.03] }) },
+      { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, sz * 0.03] }) },
+      { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 7}deg`] }) },
+      // A crouch squashes low and wide about the feet, so they stay planted on the ground.
+      { translateY: sz * 0.42 },
+      { scaleX: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) },
+      { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
+      { translateY: -sz * 0.42 },
+    ],
+  };
+}
 const tm = (v: Animated.Value, toValue: number, duration: number, easing?: (t: number) => number) =>
   Animated.timing(v, { toValue, duration: Math.max(1, Math.round(duration)), easing, useNativeDriver: ND });
 /** What a creature is doing right now, for its drawing: a pose, running legs, or facing back toward its team. */
@@ -428,6 +468,15 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   const lastActor = useRef('');
   const D = W * 0.95; // how far the camera travels between chambers
   const enter = useMemo(() => Animated.subtract(D, travel), [D, travel]);
+  // Every animated transform on the field is built once per creature and kept. Building them inline made each
+  // re-render of the fight (and there is one for every effect, number and pose change) throw away and rebuild a few
+  // dozen animated nodes per creature and re-attach them to the native views: that was the stutter.
+  const nodes = useMemo(() => new WeakMap<UA, { side: number; sz: number; n: ReturnType<typeof buildNodes> }>(), [enter, travel]);
+  const nodesOf = (a: UA, side: number, sz: number) => {
+    let r = nodes.get(a);
+    if (!r || r.side !== side || r.sz !== sz) { r = { side, sz, n: buildNodes(a, side, sz, enter, travel) }; nodes.set(a, r); }
+    return r.n;
+  };
 
   const A = (uid: number) => (ua.current[uid] ??= newUA());
   /** Each unit's mouth position in its drawing, worked out once. */
@@ -465,6 +514,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
   }, []);
   /** The rings under the creature whose turn it is, and under anything it can target, breathe gently. */
   const ringPulse = useRef(new Animated.Value(0)).current;
+  const ringStyle = useMemo(() => ({ opacity: ringPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.7, 1, 0.7] }), transform: [{ scale: ringPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.07, 1] }) }] }), [ringPulse]);
   useEffect(() => {
     const l = Animated.loop(Animated.timing(ringPulse, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.sin), useNativeDriver: ND }));
     l.start();
@@ -1422,62 +1472,29 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           const canPick = targets.includes(u.uid);
           const isActor = actor === u.uid;
           const walking = mode === 'walk' && v.alive && u.side === 0;
-          const fallDir = u.side === 0 ? -1 : 1;
+          const N = nodesOf(a, u.side, pos.sz);
           // Your team's views stay mounted from chamber to chamber; only the new enemies mount, keeping the walk smooth.
           return (
             <Animated.View key={u.side === 0 ? `p_${u.uid}_${u.cid}` : `${fightNo}_${u.uid}`} style={{
-              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz,
-              transform: [
-                { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind)) },
-                { translateY: a.oy },
-              ],
+              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, height: pos.sz, transform: N.place,
             }}>
               <Pressable onPress={() => onTapUnit(u.uid)} style={{ width: pos.sz, height: pos.sz }}>
                 {(canPick || isActor) ? <Animated.View pointerEvents="none" style={{ position: 'absolute', left: pos.sz * 0.1, right: pos.sz * 0.1, bottom: -2, height: pos.sz * 0.28, borderRadius: pos.sz, borderWidth: 2.5, borderColor: isActor ? C.gold : allyPick ? C.good : C.bad, backgroundColor: isActor ? 'rgba(245,197,66,0.18)' : 'rgba(255,255,255,0.12)',
-                  opacity: ringPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.7, 1, 0.7] }), transform: [{ scale: ringPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.07, 1] }) }] }} /> : null}
+                  ...ringStyle }} /> : null}
                 {/* The shadow lies on the ground on its own, so it stays flat when the creature leans or falls over,
                     and stays down when it leaps, shrinking and fading the higher the creature goes. */}
                 <Animated.View pointerEvents="none" style={{
                   position: 'absolute', left: pos.sz * 0.26, top: pos.sz * 0.88, width: pos.sz * 0.48, height: pos.sz * 0.08, borderRadius: pos.sz,
-                  backgroundColor: 'rgba(0,0,0,0.2)',
-                  opacity: Animated.multiply(a.fade, a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.4], extrapolate: 'clamp' })),
-                  transform: [
-                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.03] }) },
-                    { scaleX: Animated.multiply(a.down.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }), a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.55], extrapolate: 'clamp' })) },
-                    { scaleY: a.air.interpolate({ inputRange: [0, pos.sz], outputRange: [1, 0.55], extrapolate: 'clamp' }) },
-                  ],
+                  backgroundColor: 'rgba(0,0,0,0.2)', opacity: N.shadowOp, transform: N.shadow,
                 }} />
                 <CreatureGround ph={u.ph} stage={u.stage} size={pos.sz} flip={u.side === 1} air={a.air} opacity={a.fade} />
                 {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} part="ground" /> : null}
                 <Animated.View style={{
-                  width: pos.sz, height: pos.sz,
                   // Lean, stretch and breathing all pivot at the feet.
-                  transform: [
-                    { translateY: Animated.multiply(a.air, -1) },
-                    { translateY: pos.sz * 0.42 },
-                    // A lean is half a tip of the whole body and half a bend of it over the feet, so the body flexes
-                    // into a move instead of tilting like a plank; the bend is capped so the face never smears.
-                    { rotate: a.lean.interpolate({ inputRange: [-90, 90], outputRange: u.side === 0 ? ['-50deg', '50deg'] : ['50deg', '-50deg'] }) },
-                    { skewX: Animated.add(Animated.multiply(a.lean, u.side === 0 ? -0.5 : 0.5), Animated.multiply(a.flex, -1)).interpolate({ inputRange: [-18, 18], outputRange: ['-18deg', '18deg'], extrapolate: 'clamp' }) },
-                    { scaleX: a.stretch },
-                    { scaleY: a.stretch.interpolate({ inputRange: [0.5, 1, 1.5], outputRange: [1.4, 1, 0.8] }) },
-                    { translateY: -pos.sz * 0.42 },
-                  ],
+                  width: pos.sz, height: pos.sz, transform: N.body,
                 }}>
                 <Animated.View style={{
-                  width: pos.sz, height: pos.sz, opacity: Animated.multiply(a.fade, a.blink),
-                  transform: [
-                    { rotate: a.spin.interpolate({ inputRange: [0, 360], outputRange: u.side === 0 ? ['0deg', '360deg'] : ['0deg', '-360deg'] }) },
-                    // Lying down is in the drawing itself; this only settles it a touch lower, tipped a few degrees.
-                    { translateX: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, fallDir * pos.sz * 0.03] }) },
-                    { translateY: a.down.interpolate({ inputRange: [0, 1], outputRange: [0, pos.sz * 0.03] }) },
-                    { rotate: a.down.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${fallDir * 7}deg`] }) },
-                    // A crouch squashes low and wide about the feet, so they stay planted on the ground.
-                    { translateY: pos.sz * 0.42 },
-                    { scaleX: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) },
-                    { scaleY: a.squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
-                    { translateY: -pos.sz * 0.42 },
-                  ],
+                  width: pos.sz, height: pos.sz, opacity: N.bodyOp, transform: N.inner,
                 }}>
                   <Sprite u={u} size={pos.sz} walking={walking || !!acts[u.uid]?.moving} run={!!acts[u.uid]?.moving} ko={!v.alive && !acts[u.uid]?.falling} pose={acts[u.uid]?.pose ?? (v.statuses.includes('stun') || v.statuses.includes('freeze') ? 'dizzy' : undefined)} turned={acts[u.uid]?.turned} />
                   {v.alive ? <StatusFx statuses={v.statuses} shield={v.shield > 0} size={pos.sz} part="body" bounds={bodyBoundsCached(u.ph, u.stage)} flip={u.side === 1} /> : null}
@@ -1493,13 +1510,10 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
           if (!v || !v.alive || !(mode === 'fight' || u.side === 0)) return null;
           const pos = place(u);
           const a = A(u.uid);
+          const N2 = nodesOf;
           return (
             <Animated.View key={u.side === 0 ? `hudp_${u.uid}_${u.cid}` : `hud${fightNo}_${u.uid}`} pointerEvents="none" style={{
-              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz,
-              transform: [
-                { translateX: u.side === 1 ? Animated.add(Animated.add(enter, a.ox), a.shake) : Animated.add(Animated.add(a.ox, a.shake), Animated.multiply(travel, a.behind)) },
-                { translateY: Animated.subtract(a.oy, a.air) },
-              ],
+              position: 'absolute', left: pos.left, top: pos.top, width: pos.sz, transform: N2(a, u.side, pos.sz).hud,
             }}>
               <View style={{ position: 'absolute', top: -9, left: pos.sz * 0.08, right: pos.sz * 0.08 }}>
                 <View style={{ borderRadius: 4, borderWidth: 1, borderColor: 'rgba(15,10,30,0.7)' }}><Bar frac={v.hp / u.max.hp} color={hpColor(v.hp / u.max.hp)} height={5} trail /></View>

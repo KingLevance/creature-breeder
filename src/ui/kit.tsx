@@ -270,7 +270,13 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
     const bend = deg(Animated.add(wave(sway, (fly ? 2.4 : 3) * amp * (walking ? 0 : 1), 0, 1, off), wave(breath, 1.1 * amp * (walking ? 0 : 1), 0, 1, off - 0.3)));
     // The shadow stays on the ground through a hop, shrinking a little while the body is up.
     const under = hop.interpolate({ inputRange: H, outputRange: [1, 1.06, 0.8, 1, 1.08, 1, 1] });
-    return { sy, sx, tail, wing, wingFar, hover, lift, rot, bend, hy, hx, under };
+    // Built here once, not in render: a walking creature re-renders every frame, and new animated nodes each time
+    // would have to be re-attached to the native view on every one of them.
+    const body = [
+      { translateY: hover ? Animated.add(lift, hover) : lift },
+      { translateY: 40 * (size / 100) }, { rotate: rot }, { skewX: bend }, { scaleY: Animated.multiply(sy, hy) }, { scaleX: Animated.multiply(sx, hx) }, { translateY: -40 * (size / 100) },
+    ];
+    return { tail, wing, wingFar, under, body };
   }, [ph, ko, walking, breath, beat, sway, flick, hop, wiggle, off, wingSwing, size]);
 
   const s = size / 100, fy = 40 * s;
@@ -282,12 +288,7 @@ export const LiveCreature = memo(function LiveCreature(props: Omit<CreatureViewP
       {props.ground !== false && rig.ground.length ? (
         <Animated.View style={[StyleSheet.absoluteFill, { transform: [{ translateY: gy }, { scale: anim.under }, { translateY: -gy }] }]}>{svg(rig.ground)}</Animated.View>
       ) : null}
-    <Animated.View style={[StyleSheet.absoluteFill, {
-      transform: [
-        { translateY: anim.hover ? Animated.add(anim.lift, anim.hover) : anim.lift },
-        { translateY: fy }, { rotate: anim.rot }, { skewX: anim.bend }, { scaleY: Animated.multiply(anim.sy, anim.hy) }, { scaleX: Animated.multiply(anim.sx, anim.hx) }, { translateY: -fy },
-      ],
-    }]}>
+    <Animated.View style={[StyleSheet.absoluteFill, { transform: anim.body }]}>
       {rig.wingFar.length && rig.pivots.wingFar ? <Animated.View style={[StyleSheet.absoluteFill, { transform: about(rig.pivots.wingFar, size, anim.wingFar) }]}>{svg(rig.wingFar)}</Animated.View> : null}
       {rig.tail.length && rig.pivots.tail ? <Animated.View style={[StyleSheet.absoluteFill, { transform: about(rig.pivots.tail, size, anim.tail) }]}>{svg(rig.tail)}</Animated.View> : null}
       {svg(rig.main)}
@@ -325,7 +326,7 @@ export const CreatureGround = memo(function CreatureGround({ ph, stage, size, fl
   );
 });
 // 12 walk frames a stride is smooth enough for legs, and a quarter fewer re-renders than 16 while a team walks.
-const IDLE_FRAMES = 12, IDLE_MS = 150, WALK_FRAMES = 12, WALK_MS = 55, RUN_MS = 30;
+const IDLE_FRAMES = 12, IDLE_MS = 150, WALK_FRAMES = 12, WALK_MS = 55, RUN_MS = 42;
 
 export const EggView = memo(function EggView({ ph, size, wobble = 0 }: { ph: Pheno; size: number; wobble?: number }) {
   const shapes = useMemo(() => drawEgg(ph, wobble), [ph, wobble]);
@@ -495,7 +496,7 @@ export function hpColor(frac: number): string {
   return frac > 0.5 ? '#5ad17a' : frac > 0.2 ? '#f5c542' : '#f0616d';
 }
 
-export function Bar({ frac, color, height = 6, back = '#120d20', trail }: { frac: number; color: string; height?: number; back?: string; /** Show the amount just lost as a pale sliver that drains after a beat. */ trail?: boolean }) {
+export const Bar = memo(function Bar({ frac, color, height = 6, back = '#120d20', trail }: { frac: number; color: string; height?: number; back?: string; /** Show the amount just lost as a pale sliver that drains after a beat. */ trail?: boolean }) {
   const f = Math.max(0, Math.min(1, frac));
   const [w, setW] = useState(0);
   // A fight's bars start at their value; menu bars sweep up from empty when they appear.
@@ -526,7 +527,7 @@ export function Bar({ frac, color, height = 6, back = '#120d20', trail }: { frac
       ) : null}
     </View>
   );
-}
+});
 
 /** A creature that breathes gently: cheap enough for a whole grid of them. */
 export const Breathing = memo(function Breathing({ children, size }: { children: React.ReactNode; size: number }) {

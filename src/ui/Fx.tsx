@@ -1006,13 +1006,19 @@ export const StatusFx = memo(function StatusFx({ statuses, shield, size, part, b
       ) : null}
     </View>
   );
-});
+}, (a, b) => a.shield === b.shield && a.size === b.size && a.part === b.part && a.bounds === b.bounds && a.flip === b.flip && a.statuses.join() === b.statuses.join());
 
 export const FxLayer = memo(function FxLayer({ items, onDone, W, H }: { items: FxSpec[]; onDone: (id: number) => void; W: number; H: number }) {
+  // One done callback per effect, kept for its whole life, so an effect that is already playing is not re-rendered
+  // (and its particles' animated nodes rebuilt and re-attached) every time another effect starts or ends.
+  const dones = useRef(new Map<number, () => void>()).current;
+  const live = new Set(items.map(s => s.id));
+  for (const id of dones.keys()) if (!live.has(id)) dones.delete(id);
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H }}>
       {items.map(s => {
-        const done = () => onDone(s.id);
+        let done = dones.get(s.id);
+        if (!done) { const id = s.id; done = () => onDone(id); dones.set(id, done); }
         switch (s.kind) {
           case 'proj': return <Proj key={s.id} s={s} done={done} />;
           case 'beam': return <Beam key={s.id} s={s} done={done} W={W} H={H} />;
