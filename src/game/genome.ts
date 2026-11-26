@@ -120,6 +120,15 @@ export interface Genome {
   girth: Pair<number>;
   /** and how tall it stands, squat and short-legged (-2) to long-legged and lanky (+2). */
   height: Pair<number>;
+  /** Silhouette genes, -2..2 per allele and averaged like the proportions above (older saves get theirs filled in): */
+  /** where the body carries its weight, pear-shaped with heavy hindquarters (-2) to top-heavy and broad up front (+2), */
+  torso: Pair<number>;
+  /** the neck, head sunk into the shoulders (-2) to a long neck holding the head high (+2), */
+  neck: Pair<number>;
+  /** the head's size against the body, small (-2) to big (+2), */
+  headSize: Pair<number>;
+  /** and the body's length, compact and round (-2) to long (+2). */
+  bodyLen: Pair<number>;
 }
 
 /** What actually shows. */
@@ -155,6 +164,11 @@ export interface Pheno {
   /** Proportions, -1..1: thin to thick, and short to tall. Optional for older snapshots. */
   girth?: number;
   height?: number;
+  /** Silhouette, -1..1 each: pear to top-heavy, no neck to long, small head to big, compact body to long. */
+  torso?: number;
+  neck?: number;
+  headSize?: number;
+  bodyLen?: number;
 }
 
 function dom<T>(order: readonly T[], pair: Pair<T>): T {
@@ -188,6 +202,10 @@ export function express(g: Genome): Pheno {
     stance: g.stance ? Math.min(g.stance[0], g.stance[1]) : 0,
     girth: g.girth ? avg(g.girth) / 2 : 0,
     height: g.height ? avg(g.height) / 2 : 0,
+    torso: g.torso ? avg(g.torso) / 2 : 0,
+    neck: g.neck ? avg(g.neck) / 2 : 0,
+    headSize: g.headSize ? avg(g.headSize) / 2 : 0,
+    bodyLen: g.bodyLen ? avg(g.bodyLen) / 2 : 0,
   };
 }
 
@@ -232,6 +250,22 @@ export const rollHue = (rng: Rng) => rint(rng, -2, 2);
 export const rollShape = (rng: Rng) => rint(rng, -2, 2);
 export const FRAME_NAMES = ['Slender', 'Lean', 'Average', 'Stocky', 'Bulky'];
 export const HEIGHT_NAMES = ['Squat', 'Short', 'Average', 'Tall', 'Lanky'];
+export const TORSO_NAMES = ['Pear-shaped', 'Heavy-hipped', 'Even', 'Broad-chested', 'Top-heavy'];
+export const NECK_NAMES = ['No neck', 'Short neck', 'Average', 'Long neck', 'Very long neck'];
+export const HEADSIZE_NAMES = ['Tiny head', 'Small head', 'Average', 'Big head', 'Huge head'];
+export const BODYLEN_NAMES = ['Compact', 'Short', 'Average', 'Long', 'Very long'];
+export const SHAPE_GENES = ['torso', 'neck', 'headSize', 'bodyLen'] as const;
+/**
+ * Give a genome any silhouette genes it lacks, from its own stream. Used for older saves and for every new wild
+ * genome, so rolling them never shifts the random numbers anything else is rolled from.
+ */
+export function fillShapes(g: Genome, key: string) {
+  let h = 2166136261; const k = key + '#silhouette';
+  for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 16777619);
+  const r = mulberry32(h >>> 0);
+  for (const s of SHAPE_GENES) if (!g[s]) g[s] = [rollShape(r), rollShape(r)];
+  return g;
+}
 /** A name for a proportion allele (-2..2) or an expressed value (-1..1, pass it times 2). */
 export const shapeName = (names: string[], v: number) => names[Math.max(0, Math.min(4, Math.round(v) + 2))];
 
@@ -281,7 +315,7 @@ export function wildGenome(rng: Rng, o: WildOpts): Genome {
     return het(a, () => rollPart(rng, k, hiddenEl));
   };
   const potPair = (): Pair<number> => [rollPot(rng, q), rollPot(rng, q)];
-  return {
+  const g = {
     skel: het(skel, () => pick(rng, SKELETONS), 0.3),
     el1: [el, hiddenEl],
     el2: [second, second2],
@@ -300,7 +334,9 @@ export function wildGenome(rng: Rng, o: WildOpts): Genome {
     height: [rollShape(rng), rollShape(rng)],
     ...lateParts(k => part(k)),
     shiny: [rng() < SHINY_ALLELE ? 1 : 0, rng() < SHINY_ALLELE ? 1 : 0],
-  };
+  } as Genome;
+  // The silhouette genes come from the genome's own stream, so adding them changed no wild creature's other genes.
+  return fillShapes(g, JSON.stringify(g));
 }
 /** The later looks genes as an object, rolled in a fixed order. */
 const lateParts = (roll: (k: PartKey) => Pair<string>) => Object.fromEntries(LATE_PARTS.map(k => [k, roll(k)])) as Pick<Genome, 'iris' | 'mood' | 'ears' | 'crest' | 'feet' | 'coat' | 'twotone'>;
@@ -316,6 +352,7 @@ export function fillGenome(g: Genome, key: string) {
   const r2 = seed(key + '#shape');
   if (!g.girth) g.girth = [rollShape(r2), rollShape(r2)];
   if (!g.height) g.height = [rollShape(r2), rollShape(r2)];
+  fillShapes(g, key);
   // The later looks genes: one stream each, so adding another later never changes these. They follow the
   // creature's element, and its hidden element for the second allele, like a wild one's.
   for (const k of LATE_PARTS) {
@@ -352,13 +389,14 @@ function mutateAllele(rng: Rng, g: Genome, key: keyof Genome, idx: 0 | 1) {
     case 'stance': g.stance[idx] = rint(rng, 0, 3); break;
     case 'girth': g.girth[idx] = clamp(g.girth[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
     case 'height': g.height[idx] = clamp(g.height[idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
+    case 'torso': case 'neck': case 'headSize': case 'bodyLen': g[key][idx] = clamp(g[key][idx] + (rng() < 0.5 ? 1 : -1), -2, 2); break;
     case 'shiny': g.shiny[idx] = 1; break;
     case 'bias': break;
     default: (g[key] as Pair<string>)[idx] = pick(rng, PARTS[key as PartKey] as readonly string[]);
   }
 }
 
-const GENE_KEYS: (keyof Genome)[] = ['skel', 'el1', 'el2', 'head', 'eyes', 'horns', 'wings', 'tail', 'pattern', 'tone', 'build', 'hp', 'atk', 'def', 'spd', 'growth', 'slots', 'leg', 'mark', 'hue', 'stance', 'girth', 'height', ...LATE_PARTS, 'shiny'];
+const GENE_KEYS: (keyof Genome)[] = ['skel', 'el1', 'el2', 'head', 'eyes', 'horns', 'wings', 'tail', 'pattern', 'tone', 'build', 'hp', 'atk', 'def', 'spd', 'growth', 'slots', 'leg', 'mark', 'hue', 'stance', 'girth', 'height', ...LATE_PARTS, 'shiny', ...SHAPE_GENES];
 
 /** Each parent passes one random allele per gene slot. Returns the child genome and how many genes mutated. */
 export function breed(rng: Rng, mom: Genome, dad: Genome, o: BreedOpts = {}): { g: Genome; mutations: number } {
@@ -385,6 +423,10 @@ export function breed(rng: Rng, mom: Genome, dad: Genome, o: BreedOpts = {}): { 
     height: pair(mom.height ?? [0, 0], dad.height ?? [0, 0]),
     ...lateParts(k => pair(mom[k] ?? [PARTS[k][0], PARTS[k][0]], dad[k] ?? [PARTS[k][0], PARTS[k][0]])),
     shiny: pair(mom.shiny ?? [0, 0], dad.shiny ?? [0, 0]),
+    torso: pair(mom.torso ?? [0, 0], dad.torso ?? [0, 0]),
+    neck: pair(mom.neck ?? [0, 0], dad.neck ?? [0, 0]),
+    headSize: pair(mom.headSize ?? [0, 0], dad.headSize ?? [0, 0]),
+    bodyLen: pair(mom.bodyLen ?? [0, 0], dad.bodyLen ?? [0, 0]),
     bias: [0, 1, 2, 3, 4].map(i => [biasFrom(mom, o.momMoves, i), biasFrom(dad, o.dadMoves, i)] as Pair<string | null>),
   };
   let mutations = 0;
@@ -461,6 +503,7 @@ export function starterGenome(el: ElementId, skel: Skeleton, parts: Partial<Reco
     stance: [0, 0],
     girth: [0, 0],
     height: [0, 0],
+    torso: [0, 0], neck: [0, 0], headSize: [0, 0], bodyLen: [0, 0],
     ...lateParts(k => same(parts[k] ?? STARTER_LOOKS[k] ?? PARTS[k][0])),
     shiny: [0, 0],
   };

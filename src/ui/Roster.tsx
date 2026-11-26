@@ -6,7 +6,7 @@ import { ELEMENTS } from '../game/data/elements';
 import { MOVES, RARITY_COLORS, RARITY_NAMES, strikeFor } from '../game/data/moves';
 import { Creature, MAX_LEVEL, PedNode, STAGE_NAMES, XpResult, buildLabel, slotRarities, stageLevels, stageOf, statsFor, typeLabel, xpToNext } from '../game/creature';
 import { NAME_MAX, expandRoster, release, releaseMany, releaseProblem, releaseValue, renameCreature, rosterExpandCost, train, trainCost, useScan } from '../game/economy';
-import { FRAME_NAMES, HEIGHT_NAMES, PartKey, PARTS, PART_KEYS, Pheno, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
+import { BODYLEN_NAMES, FRAME_NAMES, HEADSIZE_NAMES, HEIGHT_NAMES, NECK_NAMES, TORSO_NAMES, PartKey, PARTS, PART_KEYS, Pheno, PART_LABELS, SKELETON_NAMES, shapeName, stanceName, STAT_KEYS, STAT_LABELS, express, rareCarrierCount, starRating } from '../game/genome';
 import { TUT } from '../game/save';
 import { Bar, Btn, C, Card, CreatureTile, CreatureView, H, LiveCreature, Mark, MoveRow, P, SexMark, Stars, Title, TypeChips, st } from './kit';
 import { sfx } from './audio';
@@ -185,6 +185,10 @@ export function CreatureDetail({ id, onClose }: { id: string | null; onClose: ()
             {/* Proportions blend: a child lands between its two alleles, so a scan shows both. */}
             <GeneRow label="Frame" shown={shapeName(FRAME_NAMES, (ph.girth ?? 0) * 2) + ((ph.girth ?? 0) >= 0.25 ? ' · tough, slow' : (ph.girth ?? 0) <= -0.25 ? ' · quick, frail' : '')} hid={c.scanned && c.g.girth && c.g.girth[0] !== c.g.girth[1] ? `${shapeName(FRAME_NAMES, c.g.girth[0])} & ${shapeName(FRAME_NAMES, c.g.girth[1])}` : undefined} scanned={c.scanned} />
             <GeneRow label="Height" shown={shapeName(HEIGHT_NAMES, (ph.height ?? 0) * 2) + ((ph.height ?? 0) >= 0.25 ? ' · reach, slower' : (ph.height ?? 0) <= -0.25 ? ' · nimble' : '')} hid={c.scanned && c.g.height && c.g.height[0] !== c.g.height[1] ? `${shapeName(HEIGHT_NAMES, c.g.height[0])} & ${shapeName(HEIGHT_NAMES, c.g.height[1])}` : undefined} scanned={c.scanned} />
+            <GeneRow label="Build" shown={shapeName(TORSO_NAMES, (ph.torso ?? 0) * 2)} hid={c.scanned && c.g.torso && c.g.torso[0] !== c.g.torso[1] ? `${shapeName(TORSO_NAMES, c.g.torso[0])} & ${shapeName(TORSO_NAMES, c.g.torso[1])}` : undefined} scanned={c.scanned} />
+            <GeneRow label="Neck" shown={shapeName(NECK_NAMES, (ph.neck ?? 0) * 2)} hid={c.scanned && c.g.neck && c.g.neck[0] !== c.g.neck[1] ? `${shapeName(NECK_NAMES, c.g.neck[0])} & ${shapeName(NECK_NAMES, c.g.neck[1])}` : undefined} scanned={c.scanned} />
+            <GeneRow label="Head size" shown={shapeName(HEADSIZE_NAMES, (ph.headSize ?? 0) * 2)} hid={c.scanned && c.g.headSize && c.g.headSize[0] !== c.g.headSize[1] ? `${shapeName(HEADSIZE_NAMES, c.g.headSize[0])} & ${shapeName(HEADSIZE_NAMES, c.g.headSize[1])}` : undefined} scanned={c.scanned} />
+            <GeneRow label="Length" shown={shapeName(BODYLEN_NAMES, (ph.bodyLen ?? 0) * 2)} hid={c.scanned && c.g.bodyLen && c.g.bodyLen[0] !== c.g.bodyLen[1] ? `${shapeName(BODYLEN_NAMES, c.g.bodyLen[0])} & ${shapeName(BODYLEN_NAMES, c.g.bodyLen[1])}` : undefined} scanned={c.scanned} />
             {c.scanned ? (
               <>
                 <GeneRow label="Legendary slot" shown={ph.leg ? 'Yes' : 'No'} hid={!ph.leg && (c.g.leg[0] === 1 || c.g.leg[1] === 1) ? 'Yes (carried)' : undefined} scanned />

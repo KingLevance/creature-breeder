@@ -50,7 +50,7 @@ ok(AREAS.length === 20, '20 areas');
   ok(f.types.length === 2 && Math.abs(f.stars.reduce((x, y) => x + y, 0) - 1) < 1e-9, 'forecast gives odds');
   let muts = 0;
   for (let i = 0; i < 2000; i++) muts += breed(rng, a, b).mutations;
-  ok(muts > 300 && muts < 1200, `mutations happen at a low rate (${(muts / 2000).toFixed(2)} per egg)`);
+  ok(muts > 300 && muts < 1500, `mutations happen at a low rate (${(muts / 2000).toFixed(2)} per egg)`);
 }
 
 // --- Stats and stages

@@ -2427,7 +2427,9 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
   const sw = o.walking ? Math.sin(phase * TAU) : 0;
   // While walking, each foot lifts as it swings forward, and the body rises as the feet pass under it.
   const cw = o.walking ? Math.cos(phase * TAU) : 0;
-  const b = st.body, hs = st.head, ls = st.limb, k = st.feat;
+  // Silhouette genes (-1..1): where the weight sits (pear .. top-heavy), neck length, head size, body length.
+  const tq = ph.torso ?? 0, nk = ph.neck ?? 0, bl = ph.bodyLen ?? 0;
+  const b = st.body, hs = st.head * (1 + 0.2 * (ph.headSize ?? 0)), ls = st.limb, k = st.feat;
   const liftA = Math.max(0, cw) * 4.5 * ls, liftB = Math.max(0, -cw) * 4.5 * ls;
   const bob = o.walking ? -1.8 * (1 - Math.abs(sw)) : 0;
   // On the live rig the app does the breathing, smoothly; drawn frames stay still.
@@ -2645,11 +2647,11 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
 
   switch (ph.skel) {
     case 'biped': {
-      const by = 64 - 3 * (b - 0.8), brx = 14.5 * b * (1 + 0.24 * gw - 0.04 * ht), bry = 18 * b * (1 + 0.12 * ht + 0.04 * gw);
+      const by = 64 - 3 * (b - 0.8), brx = 14.5 * b * (1 + 0.24 * gw - 0.04 * ht - 0.05 * bl), bry = 18 * b * (1 + 0.12 * ht + 0.04 * gw + 0.12 * bl);
       const hr = 12.5 * hs;
       const hip = by + bry * 0.5;
       lean(48, hip);
-      a = { back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.9), hx: 53 + sp.hdx, hy: by - bry - hr * 0.5 + breathe * 0.4 + sp.hdy, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 48 - brx * 0.45, wy: by - bry * 0.5, backx: 40, backy: by - bry * 0.72 };
+      a = { back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.9), hx: 53 + sp.hdx + Math.max(0, nk) * 2, hy: by - bry - hr * 0.5 + breathe * 0.4 + sp.hdy - nk * (nk > 0 ? 9 : 4), hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.8, ty: by + bry * 0.55, tdir: 0.35, wx: 48 - brx * 0.45, wy: by - bry * 0.5, backx: 40, backy: by - bry * 0.72 };
       drawWing(p, a, ph, k, flap, true);
       drawCrest(p, ph, ellSpine(48, by, brx, bry, Math.PI - 0.1, 1.5 * Math.PI - 0.3, 5), k * b);
       p.g = 'back';
@@ -2667,12 +2669,18 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       drawTail(p, a, ph, k, breathe);
       leg(45, hip, 44 + sw * 6 - ft, 87.6, 10 * ls, 6 * ls, pal.base, undefined, undefined, 1, liftA);
       freePaw(44 + sw * 6 - ft, 89.2, 6.2 * ls, pal.base, liftA);
-      // A pear-shaped torso: the belly is wider than the chest.
-      const torso: Body = { hull: [[48, by, brx, bry], [48, by + bry * 0.28, brx * 1.07, bry * 0.72], ...(ph.stance === 2 && !o.ko ? [[48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62]] : [])] };
+      // A pear-shaped torso: the belly is wider than the chest. The torso gene moves the weight: a heavy-hipped body
+      // has a broader belly, a top-heavy one broad shoulders over a slimmer belly.
+      const belly: [number, number, number, number] = [48, by + bry * (0.28 - 0.04 * tq), brx * (1.07 - 0.3 * tq), bry * (0.72 - 0.12 * tq)];
+      const shoulders: [number, number, number, number][] = tq > 0.05 ? [[48, by - bry * 0.36, brx * (1 + 0.42 * tq), bry * 0.56]] : [];
+      // A long neck rises from the shoulders to the head.
+      if (nk > 0.05) p.taper(48 + brx * 0.15, by - bry * 0.6, a.hx - hr * 0.15, a.hy + hr * 0.55, 9.5 * b * (1 + 0.2 * gw), 7.5 * b * (1 + 0.2 * gw), pal.base);
+      const torso: Body = { hull: [[48, by, brx, bry], belly, ...shoulders, ...(ph.stance === 2 && !o.ko ? [[48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62] as [number, number, number, number]] : [])] };
       coatRim(p, ph, torso, cz);
       a.hull = torso.hull;
       p.ell(48, by, brx, bry, pal.base);
-      p.ell(48, by + bry * 0.28, brx * 1.07, bry * 0.72, pal.base);
+      p.ell(...belly, pal.base);
+      for (const sh of shoulders) p.ell(...sh, pal.base);
       // A proud stance puffs the chest out.
       if (ph.stance === 2 && !o.ko) p.ell(48 + brx * 0.35, by - bry * 0.22, brx * 0.78, bry * 0.62, pal.base);
       twoTone(p, ph, torso, [48 - brx * 0.12, by], [-0.9, -0.44], cz);
@@ -2696,9 +2704,15 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       break;
     }
     case 'quad': {
-      const by = 63, brx = 23 * b * (1 + 0.06 * gw + 0.08 * ht), bry = 13.5 * b * (1 + 0.25 * gw - 0.05 * ht);
+      const by = 63, brx = 23 * b * (1 + 0.06 * gw + 0.08 * ht + 0.26 * bl), bry = 13.5 * b * (1 + 0.25 * gw - 0.05 * ht - 0.08 * bl);
       const hr = 12 * hs;
-      const hx = 48 + brx * 0.82 + sp.hdx, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4 + sp.hdy;
+      // The neck gene carries the head up and forward on a long neck, or low into the shoulders.
+      const hx = 48 + brx * 0.82 + sp.hdx + nk * 5, hy = by - bry * 0.75 - hr * 0.4 + breathe * 0.4 + sp.hdy - nk * (nk > 0 ? 11 : 5);
+      // Chest and rump: the torso gene shifts the bulk forward (a humped, bull-like front) or back (heavy haunches).
+      const chest: [number, number, number, number] = [46 + brx * 0.52, by + bry * (0.08 - 0.16 * tq), brx * 0.52 * (1 + 0.2 * tq), bry * (1 + 0.42 * tq)];
+      const rump: [number, number, number, number] = [46 - brx * 0.58, by - bry * (0.04 + 0.22 * Math.max(0, -tq)), brx * 0.46 * (1 - 0.24 * tq), bry * 0.98 * (1 - 0.36 * tq)];
+      // A top-heavy build carries a hump over the shoulders.
+      const hump: [number, number, number, number][] = tq > 0.05 ? [[46 + brx * 0.3, by - bry * 0.5, brx * 0.42, bry * 0.62 * tq]] : [];
       lean(46 + brx * (sp.px ?? 0), by, by + bry * 1.08);
       a = { flatBack: true, back: ellFrame(46, by, brx, bry, -Math.PI / 2 - 0.3), hx, hy, hr, bx: 46, by, brx, bry, tx: 46 - brx * 0.92, ty: by - bry * 0.2, tdir: 0.5, wx: 44, wy: by - bry * 0.7, backx: 40, backy: by - bry * 0.95 };
       drawWing(p, a, ph, k, flap, true);
@@ -2720,13 +2734,14 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       // The hind leg is thick at the haunch and bends back at the hock.
       leg(rx - 1, hip - 1, rx - 1 - sw * 6 - ft, 87.8, 11.5 * ls, 5.6 * ls, pal.base, rx - 1 - 4 * ls - sw * 3, 80, -1, liftB);
       freePaw(rx - 1 - sw * 6 - ft, 89.3, 5.8 * ls, pal.base, liftB);
-      const trunk: Body = { hull: [[46, by, brx, bry], [46 + brx * 0.52, by + bry * 0.08, brx * 0.52, bry * 1.0], [46 - brx * 0.58, by - bry * 0.04, brx * 0.46, bry * 0.98]] };
+      const trunk: Body = { hull: [[46, by, brx, bry], chest, rump, ...hump] };
       coatRim(p, ph, trunk, cz);
-      p.taper(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 13 * b, 9 * b, pal.base);
+      p.taper(46 + brx * 0.6, by - bry * 0.3, hx - hr * 0.3, hy + hr * 0.5, 13 * b * (1 - 0.12 * Math.max(0, nk)), 9 * b * (1 - 0.1 * Math.max(0, nk)), pal.base);
       p.ell(46, by, brx, bry, pal.base);
       // A deeper chest and a rounded rump break up the plain oval.
-      p.ell(46 + brx * 0.52, by + bry * 0.08, brx * 0.52, bry * 1.0, pal.base);
-      p.ell(46 - brx * 0.58, by - bry * 0.04, brx * 0.46, bry * 0.98, pal.base);
+      p.ell(...chest, pal.base);
+      p.ell(...rump, pal.base);
+      for (const h of hump) p.ell(...h, pal.base);
       twoTone(p, ph, trunk, [46, by - bry * 0.12], [0, -1], cz);
       drawPattern(p, a, ph, st.cue);
       coatSkin(p, ph, trunk, cz);
@@ -2735,9 +2750,10 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     }
     case 'multi': {
       const by = 66, hr = 10.5 * hs;
-      const abx = 34, arx = 17 * b * (1 + 0.1 * ht), ary = 12 * b * (1 + 0.25 * gw);
-      const thx = 34 + arx + 9 * b, thr = 11.5 * b * (1 + 0.12 * gw);
-      const hx = thx + thr + hr * 0.45 + sp.hdx, hy = by - 6 + breathe * 0.3 + sp.hdy;
+      // The torso gene trades a big abdomen for a big thorax; body length stretches the abdomen.
+      const arx = 17 * b * (1 + 0.1 * ht + 0.36 * bl - 0.2 * tq), ary = 12 * b * (1 + 0.25 * gw - 0.28 * tq), abx = 34 + 4 * Math.max(0, -bl) - 3 * Math.max(0, bl);
+      const thx = abx + arx + 9 * b, thr = 11.5 * b * (1 + 0.12 * gw + 0.34 * tq);
+      const hx = thx + thr + hr * 0.45 + sp.hdx + nk * 4, hy = by - 6 + breathe * 0.3 + sp.hdy - nk * (nk > 0 ? 7 : 3);
       lean(thx + thr * (sp.px ?? 0), by, Math.max(by - 2 + ary, by + thr * 0.9));
       a = { flatBack: true, back: ellFrame(abx, by - 2, arx, ary, -Math.PI / 2 - 0.2), hx, hy, hr, bx: abx, by: by - 2, brx: arx, bry: ary, tx: abx - arx * 0.9, ty: by - 4, tdir: 0.7, wx: thx - 2, wy: by - thr * 0.8, backx: abx, backy: by - 2 - ary * 0.95 };
       drawWing(p, a, ph, k, flap, true);
@@ -2758,6 +2774,8 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       shadeForm(p, abx, by - 2, arx, ary);
       coatRim(p, ph, thor, cz * 0.8);
       p.ell(thx, by - 1, thr, thr * 0.9, shade(pal.base, -0.04));
+      // A long neck joins the thorax to the head.
+      if (nk > 0.05) p.taper(thx + thr * 0.55, by - 2, hx - hr * 0.4, hy + hr * 0.3, 6.5 * b, 5.5 * b, shade(pal.base, -0.04));
       if (ph.twotone === 'dorsal') twoTone(p, ph, thor, [thx, by - 2 - ary * 0.1], [0, -1], cz * 0.8);
       coatSkin(p, ph, thor, cz * 0.8);
       shadeForm(p, thx, by - 1, thr, thr * 0.9);
@@ -2772,7 +2790,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     case 'serpent': {
       const hr = 11.5 * hs, w = 12.5 * b * (1 + 0.28 * gw);
       const wv = o.walking ? Math.sin(phase * TAU) * 3 : breathe;
-      const hx = 68 + sp.hdx + reach * (sp.hdx > 5 ? 1 : 4) - raise * 2, hy = 40 - 7 * ht + breathe * 0.5 + sp.hdy - raise * 5 + reach * 2;
+      const hx = 68 + sp.hdx + reach * (sp.hdx > 5 ? 1 : 4) - raise * 2 + nk * 2, hy = 40 - 7 * ht - 6 * nk + breathe * 0.5 + sp.hdy - raise * 5 + reach * 2;
       p.tf = null;
       a = { back: [24.5, 79.25 + wv * 0.125 - w * 0.3, 0], hx, hy, hr, bx: 55, by: 76, brx: w * 0.75, bry: w * 0.8, tx: 15, ty: 85 - wv, tdir: 0.5, wx: 57, wy: 60, backx: 56, backy: 62 };
       drawWing(p, a, ph, k, flap, true);
@@ -2832,7 +2850,9 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       break;
     }
     case 'aquatic': {
-      const by = 58 - 4 * ht + breathe, brx = 25 * b * (1 + 0.12 * ht), bry = 15 * b * (1 + 0.25 * gw);
+      const by = 58 - 4 * ht + breathe, brx = 25 * b * (1 + 0.12 * ht + 0.28 * bl), bry = 15 * b * (1 + 0.25 * gw - 0.1 * bl);
+      // The torso gene makes a fish deep-chested behind the head, or heavy toward the tail.
+      const bulge: [number, number, number, number] = [48 + Math.sign(tq) * brx * 0.24, by + bry * 0.06, brx * 0.74, bry * (1 + 0.3 * Math.abs(tq))];
       const hr = 12 * hs;
       lean(48, by);
       a = { flatBack: true, back: ellFrame(48, by, brx, bry, -Math.PI / 2 - 0.35), hx: 50 + brx * 0.5, hy: by - bry * 0.12, hr, bx: 48, by, brx, bry, tx: 48 - brx * 0.9, ty: by, tdir: 0.05, wx: 46, wy: by - bry * 0.75, backx: 44, backy: by - bry * 0.95 };
@@ -2847,9 +2867,10 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
       if (ph.el2 && (ph.tail === 'stub' || ph.tail === 'fan')) tailTip(p, a.tx - 9 * b, by - 9 * b + fl, ph.el2, 0.8 * k);
       if (ph.tail !== 'stub' && ph.tail !== 'fan') drawTailShape(p, { ...a, tx: a.tx + 2, ty: by + bry * 0.5 }, ph, k * 0.75, breathe);
       p.part = 'main';
-      const fish: Body = { hull: [[48, by, brx, bry]] };
+      const fish: Body = { hull: [[48, by, brx, bry], ...(Math.abs(tq) > 0.05 ? [bulge] : [])] };
       coatRim(p, ph, fish, cz);
       p.ell(48, by, brx, bry, pal.base);
+      if (Math.abs(tq) > 0.05) p.ell(...bulge, pal.base);
       twoTone(p, ph, fish, [48, by - bry * 0.08], [0, -1], cz);
       drawPattern(p, a, ph, st.cue);
       coatSkin(p, ph, fish, cz);
@@ -2873,7 +2894,7 @@ function buildCreature(ph: Pheno, o: DrawOpts): Pen {
     }
     default: {
       // floater: rx is its width, ry its height, from the proportion genes.
-      const r = 17 * b, rx = r * (1 + 0.2 * gw - 0.04 * ht), ry = r * (1 + 0.16 * ht);
+      const r = 17 * b, rx = r * (1 + 0.2 * gw - 0.04 * ht + 0.12 * tq - 0.06 * bl), ry = r * (1 + 0.16 * ht + 0.16 * bl - 0.06 * tq);
       const cy = 52 - (ry - r) * 0.9 + breathe * 1.4;
       const hr = 13 * hs;
       lean(50, cy + ry);
