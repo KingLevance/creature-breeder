@@ -562,41 +562,39 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
     // 1. Knocked back by the blow, flashing.
     setAct(u.uid, { pose: 'hurt', falling: true });
     await run(Animated.parallel([
-      Animated.timing(a.ox, { toValue: push * 16, duration: 150 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
-      tm(a.lean, back * 16, 150 * T(), Easing.out(Easing.quad)),
-      Animated.sequence([
-        Animated.timing(a.blink, { toValue: 0.25, duration: 60, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND }),
-        Animated.timing(a.blink, { toValue: 0.25, duration: 60, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND }),
-      ]),
+      Animated.timing(a.ox, { toValue: push * 16, duration: 110 * T(), easing: Easing.out(Easing.quad), useNativeDriver: ND }),
+      tm(a.lean, back * 16, 110 * T(), Easing.out(Easing.quad)),
+      Animated.sequence([Animated.timing(a.blink, { toValue: 0.3, duration: 50, useNativeDriver: ND }), Animated.timing(a.blink, { toValue: 1, duration: 60, useNativeDriver: ND })]),
     ]));
     // 2. Stagger: dazed, it sways and stumbles a step, sagging as its strength goes.
     setAct(u.uid, { pose: 'dizzy', falling: true });
     await run(Animated.parallel([
       Animated.sequence([
-        tm(a.lean, -back * 9, 170 * T(), Easing.inOut(Easing.sin)),
-        tm(a.lean, back * 7, 150 * T(), Easing.inOut(Easing.sin)),
-        tm(a.lean, -back * 3, 120 * T(), Easing.inOut(Easing.sin)),
+        tm(a.lean, -back * 8, 130 * T(), Easing.inOut(Easing.sin)),
+        tm(a.lean, back * 4, 100 * T(), Easing.inOut(Easing.sin)),
       ]),
-      tm(a.ox, push * 24, 440 * T(), Easing.out(Easing.quad)),
-      tm(a.stretch, 1.05, 440 * T(), Easing.in(Easing.quad)), // sagging: a little wider and shorter
+      tm(a.ox, push * 22, 230 * T(), Easing.out(Easing.quad)),
+      tm(a.stretch, 1.05, 230 * T(), Easing.in(Easing.quad)), // sagging: a little wider and shorter
     ]));
     // 3. The legs give way: it drops into its lying-down pose, flops against the ground with a little bounce,
     // and a puff of dust comes up.
     setAct(u.uid, { pose: undefined, falling: false });
     const p = place(u);
+    // Flattened by the impact (wide and short, pivoting at the feet), then springing back into shape, with a small
+    // bounce. Neither is waited for: a spring takes a long time to come fully to rest, and the rest of the faint
+    // should not sit waiting on its last tiny wobble.
+    Animated.sequence([tm(a.stretch, 1.3, 70 * T(), Easing.in(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 4.5, tension: 160, useNativeDriver: ND })]).start();
+    Animated.sequence([Animated.delay(60 * T()), tm(a.air, p.sz * 0.05, 80, Easing.out(Easing.quad)), tm(a.air, 0, 90, Easing.in(Easing.quad))]).start();
     await run(Animated.parallel([
-      // Flattened by the impact (wide and short, pivoting at the feet), then springing back into shape.
-      Animated.sequence([tm(a.stretch, 1.3, 90 * T(), Easing.in(Easing.quad)), Animated.spring(a.stretch, { toValue: 1, friction: 4.5, tension: 140, useNativeDriver: ND })]),
-      Animated.sequence([Animated.delay(80 * T()), tm(a.air, p.sz * 0.06, 110, Easing.out(Easing.quad)), tm(a.air, 0, 120, Easing.in(Easing.quad))]),
-      tm(a.lean, 0, 200 * T(), Easing.out(Easing.quad)),
-      tm(a.down, 1, 320 * T(), Easing.out(Easing.quad)),
+      tm(a.lean, 0, 160 * T(), Easing.out(Easing.quad)),
+      tm(a.down, 1, 230 * T(), Easing.out(Easing.quad)),
     ]));
     addFx({ kind: 'puff', x: p.x, y: p.feet - 6 });
     // It lies there a moment, then dissolves in a puff. Fallen teammates leave a ghost marker for revive moves.
-    await sleep(520 * T());
+    await sleep(220 * T());
     sfx('poof');
     addFx({ kind: 'puff', x: p.x, y: p.feet - p.sz * 0.3, color: ELEMENTS[u.ph.el1].light });
-    Animated.timing(a.fade, { toValue: 0, duration: 420, useNativeDriver: ND }).start();
+    Animated.timing(a.fade, { toValue: 0, duration: 300, useNativeDriver: ND }).start();
     if (u.side === 0) setLeftBehind(l => (l.includes(u.uid) ? l : [...l, u.uid]));
   }, [addFx, place, setAct, shakeField]);
 
@@ -1189,7 +1187,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
             Animated.sequence([tm(a.blink, 0.55, 50), tm(a.blink, 1, 100)]).start();
             sfx('hit');
           }
-          await sleep((spread ? 70 : more ? 110 : lastStyle === 'melee' ? 150 : 160) * T());
+          await sleep((spread ? 60 : more ? 90 : lastStyle === 'melee' ? 100 : 120) * T());
           break;
         }
         case 'miss': {
@@ -1329,7 +1327,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
       if (b.over != null || (theRun.actionLimit > 0 && b.actions[0] >= theRun.actionLimit)) {
         // Let the last creatures finish going down before the results.
         await Promise.all([...fainting.current.values()]);
-        await sleep(400);
+        await sleep(180);
         if (live.current) finish();
         return;
       }
@@ -1344,7 +1342,7 @@ export function BattleScreen({ run: theRun, onExit }: { run: Run; onExit: () => 
         Animated.sequence([tm(ar.air, 8, 110, Easing.out(Easing.quad)), tm(ar.air, 0, 130, Easing.in(Easing.quad))]).start();
         return;
       }
-      await sleep((u.side === 0 ? 150 : 300) * T());
+      await sleep((u.side === 0 ? 110 : 190) * T());
       const c = aiChoose(b, uid);
       await play(act(b, uid, c.move, c.target));
     }
